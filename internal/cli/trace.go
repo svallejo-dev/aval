@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -30,6 +32,7 @@ type traceFlags struct {
 
 // traceData is the data payload of `aval trace --json`.
 type traceData struct {
+	Root string `json:"root"` // absolute path of the repository root
 	trace.Matrix
 	Findings []specFinding `json:"findings"` // spec rule violations, by path and line
 }
@@ -92,34 +95,68 @@ func collectTrace(ctx context.Context, f traceFlags) (traceData, error) {
 	if err != nil {
 		return traceData{}, fmt.Errorf("scan tests: %w", err)
 	}
-	var report *gotest.Report
+	var rt *trace.Runtime
 	if f.runTests {
-		r, err := gotest.Run(ctx, root, gotest.Options{})
-		if err != nil {
-			err = fmt.Errorf("run tests: %w", err)
-			if errors.Is(err, exec.ErrNotFound) {
-				return traceData{}, &ExitError{Code: ExitTool, Err: err}
-			}
+		if rt, err = runTests(ctx, root); err != nil {
 			return traceData{}, err
 		}
-		report = &r
 	}
 
-	data := traceData{Matrix: trace.Build(repo, decls, report), Findings: []specFinding{}}
+	data := traceData{Root: root, Matrix: trace.Build(repo, decls, rt), Findings: []specFinding{}}
 	for _, fd := range repo.Check(openspec.CheckOptions{}) {
 		data.Findings = append(data.Findings, specFinding(fd))
 	}
 	return data, nil
 }
 
-// repoRoot returns dir, or when it is empty the nearest directory from the
-// working directory up that contains openspec/.
+// runTests runs go test ./... in root. Its module path, read from root's
+// go.mod, tells which package each declaration is; without a go.mod no
+// declaration matches, and go test reports the setup failure.
+func runTests(ctx context.Context, root string) (*trace.Runtime, error) {
+	r, err := gotest.Run(ctx, root, gotest.Options{})
+	if err != nil {
+		err = fmt.Errorf("run tests: %w", err)
+		if errors.Is(err, exec.ErrNotFound) {
+			return nil, &ExitError{Code: ExitTool, Err: err}
+		}
+		return nil, err
+	}
+	gomod, err := fs.ReadFile(os.DirFS(root), "go.mod")
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("read go.mod: %w", err)
+	}
+	return &trace.Runtime{Report: r, Module: modulePath(gomod)}, nil
+}
+
+// modulePath returns the path of the module directive of a go.mod, quoted
+// or not, or "" when there is none.
+func modulePath(gomod []byte) string {
+	for line := range strings.Lines(string(gomod)) {
+		f := strings.Fields(line)
+		if len(f) < 2 || f[0] != "module" {
+			continue
+		}
+		if p, err := strconv.Unquote(f[1]); err == nil {
+			return p
+		}
+		return f[1]
+	}
+	return ""
+}
+
+// repoRoot returns the absolute path of dir or, when dir is empty, of the
+// nearest directory from the working directory up that holds an OpenSpec
+// tree.
 func repoRoot(dir string) (string, error) {
 	if dir != "" {
-		if !hasOpenSpec(dir) {
-			return "", fmt.Errorf("%s has no %s/ directory", dir, openspec.Dir)
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return "", fmt.Errorf("resolve --dir: %w", err)
 		}
-		return dir, nil
+		if !isRoot(abs) {
+			return "", fmt.Errorf("%s has no %s/specs/ or %s/changes/ directory", dir, openspec.Dir, openspec.Dir)
+		}
+		return abs, nil
 	}
 	wd, err := os.Getwd()
 	if err != nil {
@@ -128,33 +165,45 @@ func repoRoot(dir string) (string, error) {
 	return findRoot(wd)
 }
 
-// findRoot walks up from start to the first directory that contains openspec/.
+// findRoot walks up from start to the first directory that holds an
+// OpenSpec tree.
 func findRoot(start string) (string, error) {
 	for dir := start; ; {
-		if hasOpenSpec(dir) {
+		if isRoot(dir) {
 			return dir, nil
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "", fmt.Errorf("no %s/ directory in %s or above it: run aval inside a repository or pass --dir", openspec.Dir, start)
+			return "", fmt.Errorf("no %s/specs/ or %s/changes/ directory in %s or above it: run aval inside a repository or pass --dir", openspec.Dir, openspec.Dir, start)
 		}
 		dir = parent
 	}
 }
 
-func hasOpenSpec(dir string) bool {
-	fi, err := os.Stat(filepath.Join(dir, openspec.Dir))
-	return err == nil && fi.IsDir()
+// isRoot reports whether dir holds an OpenSpec tree: openspec/specs/ or
+// openspec/changes/. A Go package named openspec is not one.
+func isRoot(dir string) bool {
+	for _, sub := range []string{"specs", "changes"} {
+		if fi, err := os.Stat(filepath.Join(dir, openspec.Dir, sub)); err == nil && fi.IsDir() {
+			return true
+		}
+	}
+	return false
 }
 
 // traceResult renders d as a table of obligations followed by the sections
 // that explain a failure, and records why the trace failed, if it did.
 func traceResult(d traceData) ui.Result {
-	lines := []ui.Line{{{Text: "Obligations", Tone: ui.ToneTitle}}}
+	lines := []ui.Line{
+		{{Text: "Root ", Tone: ui.ToneMuted}, {Text: d.Root}},
+		{},
+		{{Text: "Obligations", Tone: ui.ToneTitle}},
+	}
 	lines = append(lines, ui.Table(obligationHeader(d.RanTests), obligationRows(d.Matrix))...)
 	lines = section(lines, "Spec findings", findingRows(d.Findings))
 	lines = section(lines, "Orphans", orphanRows(d.Orphans))
 	lines = section(lines, "Test warnings", warningRows(d.Warnings))
+	lines = section(lines, "Build failures", buildFailureRows(d.BuildFailures))
 	lines = section(lines, "Blocking", blockingRows(d.Rows))
 
 	r := ui.Result{Command: "trace", Data: d, Lines: lines}
@@ -162,13 +211,21 @@ func traceResult(d traceData) ui.Result {
 		r.Issues = []envelope.Issue{{Code: errorCode(ExitFailed), Message: "trace failed: " + strings.Join(reasons, ", ")}}
 		return r
 	}
-	r.Lines = append(r.Lines, ui.Line{}, ui.Line{{Text: "✓ " + plural(len(d.Rows), "obligation") + " traced", Tone: ui.ToneSuccess}})
+	counts := make(map[trace.Status]int)
+	for _, row := range d.Rows {
+		counts[row.Status]++
+	}
+	summary := "✓ " + plural(counts[trace.Traced], "obligation") + " traced"
+	if n := counts[trace.Untested]; n > 0 {
+		summary += fmt.Sprintf(", %d untested", n)
+	}
+	r.Lines = append(r.Lines, ui.Line{}, ui.Line{{Text: summary, Tone: ui.ToneSuccess}})
 	return r
 }
 
 // traceFailures says why d fails the trace: spec errors, orphans of any kind,
-// open questions and obligations whose tests failed or did not build.
-// Warnings never fail it.
+// open questions, obligations with a test that failed or did not build, and
+// packages that did not build or set up. Warnings never fail it.
 func traceFailures(d traceData) []string {
 	var errs, failing int
 	for _, f := range d.Findings {
@@ -177,7 +234,7 @@ func traceFailures(d traceData) []string {
 		}
 	}
 	for _, r := range d.Rows {
-		if r.Runtime == evidence.Fail || r.Runtime == evidence.BuildFail {
+		if failed(r.Runtime) || slices.ContainsFunc(r.Tests, func(t trace.Test) bool { return failed(t.Runtime) }) {
 			failing++
 		}
 	}
@@ -196,6 +253,7 @@ func traceFailures(d traceData) []string {
 		{orphans[trace.OrphanRuntime], "undeclared runtime binding"},
 		{len(d.Blocking), "open question"},
 		{failing, "failing obligation"},
+		{len(d.BuildFailures), "package build failure"},
 	} {
 		if c.n > 0 {
 			reasons = append(reasons, plural(c.n, c.noun))
@@ -204,11 +262,13 @@ func traceFailures(d traceData) []string {
 	return reasons
 }
 
+func failed(s evidence.Status) bool { return s == evidence.Fail || s == evidence.BuildFail }
+
 func obligationHeader(ranTests bool) []string {
 	if ranTests {
-		return []string{"ID", "KIND", "STATUS", "RUN", "SPEC", "TESTS"}
+		return []string{"ID", "KIND", "STATUS", "RUN", "TITLE", "SPEC", "TESTS"}
 	}
-	return []string{"ID", "KIND", "STATUS", "SPEC", "TESTS"}
+	return []string{"ID", "KIND", "STATUS", "TITLE", "SPEC", "TESTS"}
 }
 
 func obligationRows(m trace.Matrix) [][]ui.Span {
@@ -218,7 +278,11 @@ func obligationRows(m trace.Matrix) [][]ui.Span {
 		if m.RanTests {
 			row = append(row, ui.Span{Text: string(r.Runtime), Tone: runtimeTone(r.Runtime)})
 		}
-		rows = append(rows, append(row, ui.Span{Text: place(r.Path, r.Line)}, ui.Span{Text: testsCell(r.Tests)}))
+		title := r.Title
+		if r.Characterization {
+			title += " (characterization)"
+		}
+		rows = append(rows, append(row, ui.Span{Text: title}, ui.Span{Text: place(r.Path, r.Line)}, ui.Span{Text: testsCell(r.Tests)}))
 	}
 	return rows
 }
@@ -254,6 +318,23 @@ func warningRows(warnings []trace.Warning) [][]ui.Span {
 	rows := make([][]ui.Span, 0, len(warnings))
 	for _, w := range warnings {
 		rows = append(rows, []ui.Span{{Text: string(w.Kind), Tone: ui.ToneWarning}, {Text: w.Package}, {Text: w.Test}, {Text: w.Detail}})
+	}
+	return rows
+}
+
+// buildFailureRows shows each package that did not build with the first line
+// of its explanation.
+func buildFailureRows(failures []trace.BuildFailure) [][]ui.Span {
+	rows := make([][]ui.Span, 0, len(failures))
+	for _, f := range failures {
+		why := f.FailedBuild
+		for line := range strings.Lines(f.Output) {
+			if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
+				why = line
+				break
+			}
+		}
+		rows = append(rows, []ui.Span{{Text: string(evidence.BuildFail), Tone: ui.ToneError}, {Text: f.Package}, {Text: why}})
 	}
 	return rows
 }

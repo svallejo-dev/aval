@@ -1,0 +1,49 @@
+# A package whose tests do not compile makes the obligations it declares
+# build_fail, even when another package's test of the same ID passes, and
+# fails the trace.
+
+[!exec:go] skip 'needs the go command'
+
+cd repo
+! exec aval trace --run-tests --plain
+stdout '^ORD-F01 +F +traced +build_fail +Refund is idempotent +openspec/specs/refunds/spec.md:5 +a/a_test.go:6 build_fail, b/b_test.go:6 pass$'
+stdout '^Build failures$'
+stdout '^build_fail +example.com/shop/a +a/a_test.go:\d+:\d+: undefined: missing$'
+! stdout '✓'
+stderr '^aval: trace failed: 1 failing obligation, 1 package build failure$'
+
+! exec aval trace --run-tests --json
+stdout '"runtime": "build_fail"'
+stdout '"package": "example.com/shop/a"'
+
+-- repo/go.mod --
+module example.com/shop
+
+go 1.22
+-- repo/openspec/specs/refunds/spec.md --
+# refunds Specification
+
+## Requirements
+
+### Requirement: ORD-F01 Refund is idempotent
+The system SHALL process a refund at most once per key.
+
+#### Scenario: Duplicate key
+- **WHEN** a refund arrives with a processed key
+- **THEN** the first result is returned
+-- repo/a/a_test.go --
+package a
+
+import "testing"
+
+func TestA(t *testing.T) {
+	t.Run("ORD-F01 in a", func(t *testing.T) { missing() })
+}
+-- repo/b/b_test.go --
+package b
+
+import "testing"
+
+func TestB(t *testing.T) {
+	t.Run("ORD-F01 in b", func(t *testing.T) {})
+}

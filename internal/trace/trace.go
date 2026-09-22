@@ -57,13 +57,32 @@ const (
 	OrphanRuntime OrphanKind = "undeclared_runtime"
 )
 
+// Runtime is what running the tests of the repository produced.
+type Runtime struct {
+	Report gotest.Report
+	// Module is the module path of the repository root's go.mod. A
+	// declaration in directory dir only matches tests of package
+	// Module/dir, or Module itself at the root.
+	Module string
+}
+
 // Matrix is the traceability matrix. Every list is sorted and never nil.
 type Matrix struct {
 	Rows     []Row     `json:"rows"`     // one per obligation, by ID
 	Orphans  []Orphan  `json:"orphans"`  // by kind, ID and place
 	Warnings []Warning `json:"warnings"` // test names that look bound and are not
 	Blocking []string  `json:"blocking"` // IDs of the open questions
-	RanTests bool      `json:"ranTests"` // the runtime fields are set
+	// BuildFailures are the packages, or the patterns, that did not build or
+	// set up when the tests ran: their tests never ran.
+	BuildFailures []BuildFailure `json:"buildFailures"`
+	RanTests      bool           `json:"ranTests"` // the runtime fields are set
+}
+
+// BuildFailure is a package of the test run that did not build.
+type BuildFailure struct {
+	Package     string `json:"package"`     // import path, or a pattern such as "./..."
+	FailedBuild string `json:"failedBuild"` // what did not build: it, a dependency, or the pattern
+	Output      string `json:"output"`      // the compiler's or the go command's explanation
 }
 
 // Row is one obligation.
@@ -80,8 +99,9 @@ type Row struct {
 	Characterization bool   `json:"characterization"`
 	Status           Status `json:"status"`
 	Tests            []Test `json:"tests"` // by file and line
-	// Runtime is the worst outcome of every test bound to the ID at run time
-	// (gotest.Report.Status); empty when the tests did not run.
+	// Runtime is the worst outcome of the ID at run time: of each
+	// declaration and of any other test bound to the ID, build_fail ranking
+	// worst. Empty when the tests did not run.
 	Runtime evidence.Status `json:"runtime,omitempty"`
 }
 
@@ -117,14 +137,14 @@ type Warning struct {
 }
 
 // Build traces the obligations of repo to decls, the declarations of a
-// testsource.Scan of the repository root. runtime is the report of running
-// the tests, or nil when they did not run.
+// testsource.Scan of the repository root. rt is what running the tests
+// produced, or nil when they did not run.
 //
 // The obligations are the requirements with a valid ID of the main specs and
 // of the ADDED deltas of active changes. A duplicate ID gets the row of its
 // first definition; openspec.Repo.Check reports the others.
-func Build(repo *openspec.Repo, decls []testsource.Declaration, runtime *gotest.Report) Matrix {
-	m := Matrix{Rows: []Row{}, Orphans: []Orphan{}, Warnings: []Warning{}, Blocking: []string{}, RanTests: runtime != nil}
+func Build(repo *openspec.Repo, decls []testsource.Declaration, rt *Runtime) Matrix {
+	m := Matrix{Rows: []Row{}, Orphans: []Orphan{}, Warnings: []Warning{}, Blocking: []string{}, BuildFailures: []BuildFailure{}, RanTests: rt != nil}
 
 	declared := make(map[obligation.ID][]testsource.Declaration)
 	for _, d := range decls {
@@ -136,7 +156,7 @@ func Build(repo *openspec.Repo, decls []testsource.Declaration, runtime *gotest.
 			continue
 		}
 		defined[def.req.ID] = true
-		row := newRow(def, declared[def.req.ID], runtime)
+		row := newRow(def, declared[def.req.ID], rt)
 		m.Rows = append(m.Rows, row)
 		switch row.Status {
 		case Unverified:
@@ -150,17 +170,21 @@ func Build(repo *openspec.Repo, decls []testsource.Declaration, runtime *gotest.
 			m.Orphans = append(m.Orphans, Orphan{Kind: OrphanTest, ID: d.ID.String(), Path: d.File, Line: d.Line, Test: d.Test})
 		}
 	}
-	if runtime != nil {
-		for id, owners := range runtime.Obligations() {
-			if len(declared[id]) > 0 {
-				continue
-			}
+	if rt != nil {
+		for id, owners := range rt.Report.Obligations() {
 			for _, t := range owners {
-				m.Orphans = append(m.Orphans, Orphan{Kind: OrphanRuntime, ID: id.String(), Package: t.Package, Test: t.Name})
+				if !slices.ContainsFunc(declared[id], func(d testsource.Declaration) bool { return rt.declares(d, t.Package, t.Name) }) {
+					m.Orphans = append(m.Orphans, Orphan{Kind: OrphanRuntime, ID: id.String(), Package: t.Package, Test: t.Name})
+				}
 			}
 		}
-		for _, w := range runtime.Warnings {
+		for _, w := range rt.Report.Warnings {
 			m.Warnings = append(m.Warnings, Warning(w))
+		}
+		for _, p := range rt.Report.Packages {
+			if p.Status == evidence.BuildFail {
+				m.BuildFailures = append(m.BuildFailures, BuildFailure{Package: p.Name, FailedBuild: p.FailedBuild, Output: p.Output})
+			}
 		}
 	}
 
@@ -173,6 +197,7 @@ func Build(repo *openspec.Repo, decls []testsource.Declaration, runtime *gotest.
 	slices.SortFunc(m.Warnings, func(a, b Warning) int {
 		return cmp.Or(cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Package, b.Package), cmp.Compare(a.Test, b.Test), cmp.Compare(a.Detail, b.Detail))
 	})
+	slices.SortFunc(m.BuildFailures, func(a, b BuildFailure) int { return cmp.Compare(a.Package, b.Package) })
 	return m
 }
 
@@ -206,7 +231,7 @@ func definitions(repo *openspec.Repo) []definition {
 	return defs
 }
 
-func newRow(def definition, decls []testsource.Declaration, runtime *gotest.Report) Row {
+func newRow(def definition, decls []testsource.Declaration, rt *Runtime) Row {
 	q := def.req
 	row := Row{
 		ID:               q.ID.String(),
@@ -219,22 +244,20 @@ func newRow(def definition, decls []testsource.Declaration, runtime *gotest.Repo
 		Characterization: q.Characterization,
 		Tests:            make([]Test, 0, len(decls)),
 	}
-	var pkgs []string
+	if rt != nil {
+		row.Runtime = rt.Report.Status(q.ID) // the ID's tests, declared or not; not_run without any
+	}
 	for _, d := range decls {
 		t := Test{File: d.File, Line: d.Line, Test: d.Test, Name: d.Name, Kind: d.Kind, Skips: d.Skips}
-		if runtime != nil {
-			own := packagesOf(d, runtime)
-			t.Runtime = declarationStatus(d, own, runtime)
-			pkgs = append(pkgs, own...)
+		if rt != nil {
+			t.Runtime = rt.status(d)
+			row.Runtime = worst(row.Runtime, t.Runtime)
 		}
 		row.Tests = append(row.Tests, t)
 	}
 	slices.SortFunc(row.Tests, func(a, b Test) int {
 		return cmp.Or(cmp.Compare(a.File, b.File), cmp.Compare(a.Line, b.Line))
 	})
-	if runtime != nil {
-		row.Runtime = runtime.Status(q.ID, pkgs...)
-	}
 
 	switch {
 	case row.Policy == Block:
@@ -260,38 +283,71 @@ func policyOf(k obligation.Kind) Policy {
 	return Block
 }
 
-// declarationStatus is the worst outcome of the tests d ran as: those of
-// packages pkgs bound to d.ID whose owner is d's subtest, and the subtests
-// that inherit from them. It is NotRun when none ran, or BuildFail when one
-// of pkgs did not build.
-func declarationStatus(d testsource.Declaration, pkgs []string, runtime *gotest.Report) evidence.Status {
-	sub := gotest.Report{Packages: runtime.Packages}
-	for _, t := range runtime.Tests {
-		if slices.Contains(pkgs, t.Package) && slices.ContainsFunc(t.Bindings, func(b gotest.Binding) bool {
-			return b.ID == d.ID && owns(d, b.Owner)
+// rank orders outcomes from best to worst. A package that did not build ran
+// none of its tests, so build_fail is worse than a test that failed.
+var rank = map[evidence.Status]int{
+	evidence.Pass:      1,
+	evidence.Skipped:   2,
+	evidence.NotRun:    3,
+	evidence.Fail:      4,
+	evidence.BuildFail: 5,
+}
+
+// worst returns the worse of a and b; an empty or unknown status ranks lowest.
+func worst(a, b evidence.Status) evidence.Status {
+	if rank[b] > rank[a] {
+		return b
+	}
+	return a
+}
+
+// status is the worst outcome of the tests d ran as: those of its package
+// whose owner d declares, with the subtests that inherit from them. It is
+// build_fail when its package did not build, and not_run when none ran.
+func (rt *Runtime) status(d testsource.Declaration) evidence.Status {
+	pkg := rt.importPath(d)
+	sub := gotest.Report{Packages: rt.Report.Packages}
+	for _, t := range rt.Report.Tests {
+		if slices.ContainsFunc(t.Bindings, func(b gotest.Binding) bool {
+			return b.ID == d.ID && rt.declares(d, t.Package, b.Owner)
 		}) {
 			sub.Tests = append(sub.Tests, t)
 		}
 	}
-	return sub.Status(d.ID, pkgs...)
+	return sub.Status(d.ID, pkg)
 }
 
-// owns reports whether owner, the full runtime name of the test that carries
-// an ID, is the subtest d declares: its last segment is d's name as go test
-// rewrites it (or a "#NN" duplicate of it), below a segment named after d's
-// test function or suite method.
-func owns(d testsource.Declaration, owner string) bool {
-	segs := strings.Split(owner, "/")
-	last := segs[len(segs)-1]
-	name, _, _ := strings.Cut(rewrite(d.Name), "/")
-	if last != name {
-		suffix, ok := strings.CutPrefix(last, name+"#")
-		if _, err := strconv.Atoi(suffix); !ok || err != nil {
+// importPath is the import path of the package of d's file.
+func (rt *Runtime) importPath(d testsource.Declaration) string {
+	if dir := path.Dir(d.File); dir != "." {
+		return rt.Module + "/" + dir
+	}
+	return rt.Module
+}
+
+// declares reports whether d declares owner, the full name of a test of
+// package pkg that carries d's ID: pkg is d's package, and owner ends with
+// "/" and d's name as the testing package spells it, or with that and a
+// "#NN" duplicate suffix. When d sits in a Test function or a suite's Test
+// method, owner must run under it; a declaration in a helper runs under
+// whichever test calls it.
+func (rt *Runtime) declares(d testsource.Declaration, pkg, owner string) bool {
+	if rt.Module == "" || pkg != rt.importPath(d) {
+		return false
+	}
+	name := "/" + rewrite(d.Name)
+	parent, ok := strings.CutSuffix(owner, name)
+	if !ok {
+		i := strings.LastIndexByte(owner, '#')
+		if _, err := strconv.Atoi(owner[i+1:]); i < 0 || err != nil {
+			return false
+		}
+		if parent, ok = strings.CutSuffix(owner[:i], name); !ok {
 			return false
 		}
 	}
 	fn := d.Test[strings.LastIndex(d.Test, ".")+1:] // (*Suite).TestX runs as …/TestX
-	return slices.Contains(segs[:len(segs)-1], fn)
+	return !strings.HasPrefix(fn, "Test") || slices.Contains(strings.Split(parent, "/"), fn)
 }
 
 // rewrite spells a subtest name the way the testing package reports it:
@@ -310,19 +366,4 @@ func rewrite(name string) string {
 		}
 	}
 	return b.String()
-}
-
-// packagesOf returns the packages of runtime that can hold d: those whose
-// import path ends with d's directory. Without the module path, a
-// declaration at the repository root matches every package; its test and
-// subtest names still have to match.
-func packagesOf(d testsource.Declaration, runtime *gotest.Report) []string {
-	dir := path.Dir(d.File)
-	var pkgs []string
-	for _, p := range runtime.Packages {
-		if dir == "." || p.Name == dir || strings.HasSuffix(p.Name, "/"+dir) {
-			pkgs = append(pkgs, p.Name)
-		}
-	}
-	return pkgs
 }

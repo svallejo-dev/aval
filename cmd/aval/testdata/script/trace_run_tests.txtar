@@ -5,9 +5,9 @@
 
 cd repo
 ! exec aval trace --run-tests --plain
-stdout '^ID +KIND +STATUS +RUN +SPEC +TESTS$'
-stdout '^ORD-F01 +F +traced +pass +openspec/specs/refunds/spec.md:5 +refund/refund_test.go:6 pass$'
-stdout '^ORD-N01 +N +traced +fail +openspec/specs/refunds/spec.md:12 +refund/refund_test.go:11 fail$'
+stdout '^ID +KIND +STATUS +RUN +TITLE +SPEC +TESTS$'
+stdout '^ORD-F01 +F +traced +pass +Refund is idempotent +openspec/specs/refunds/spec.md:5 +refund/refund_test.go:6 pass$'
+stdout '^ORD-N01 +N +traced +fail +Refund never exceeds the total +openspec/specs/refunds/spec.md:12 +refund/refund_test.go:11 fail$'
 stderr '^aval: trace failed: 1 failing obligation$'
 
 ! exec aval trace --run-tests --json

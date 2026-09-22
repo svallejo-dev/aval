@@ -16,7 +16,8 @@ import (
 const (
 	specPath = "openspec/specs/refunds/spec.md"
 	testFile = "refund/refund_test.go"
-	pkg      = "example.com/shop/refund"
+	module   = "example.com/shop"
+	pkg      = module + "/refund"
 )
 
 func TestBuild(t *testing.T) {
@@ -26,8 +27,8 @@ func TestBuild(t *testing.T) {
 		name    string
 		repo    *openspec.Repo
 		decls   []testsource.Declaration
-		runtime *gotest.Report // nil: the tests did not run
-		want    []string       // describe(Build(...))
+		runtime *Runtime // nil: the tests did not run
+		want    []string // describe(Build(...))
 	}{
 		{
 			name:  "traced",
@@ -99,43 +100,76 @@ func TestBuild(t *testing.T) {
 		},
 		{
 			name: "runtime: each declaration gets its tests' outcome and the row the worst",
-			repo: specs(t, "ORD-F01 a", "ORD-N01 b", "ORD-I01 c"),
+			repo: specs(t, "ORD-F01 a", "ORD-N01 b", "ORD-I01 c", "ORD-I02 d"),
 			decls: []testsource.Declaration{
 				decl(t, "ORD-F01 refunds once", 6, "TestRefund"),
 				decl(t, "ORD-F01 refunds\tonce more", 12, "TestRefund"),
-				decl(t, "ORD-N01 caps", 20, "TestRefund"),
+				decl(t, "ORD-N01 caps/at zero", 20, "TestRefund"),
 				decl(t, "ORD-I01 ledger", 30, "(*Suite).TestLedger"),
+				decl(t, "ORD-I02 balances", 40, "checkBalance"), // a helper: any test may run it
 			},
 			runtime: report(evidence.Fail,
 				ran("TestRefund/ORD-F01_refunds_once", evidence.Pass),
 				ran("TestRefund/ORD-F01_refunds_once_more", evidence.Fail),
-				ran("TestRefund/ORD-N01_caps", evidence.Pass),
-				ran("TestRefund/ORD-N01_caps/negative", evidence.Skipped),
+				ran("TestRefund/ORD-N01_caps/at_zero", evidence.Pass),
+				ran("TestRefund/ORD-N01_caps/at_zero/negative", evidence.Skipped, "TestRefund/ORD-N01_caps/at_zero"),
 				ran("TestSuite/TestLedger/ORD-I01_ledger#01", evidence.Pass),
+				ran("TestAny/ORD-I02_balances", evidence.Pass),
 			),
 			want: []string{
 				"row ORD-F01 F require_test traced spec:1 run=fail tests=[refund/refund_test.go:6 pass, refund/refund_test.go:12 fail]",
 				"row ORD-I01 I require_test traced spec:3 run=pass tests=[refund/refund_test.go:30 pass]",
+				"row ORD-I02 I require_test traced spec:4 run=pass tests=[refund/refund_test.go:40 pass]",
 				"row ORD-N01 N require_test traced spec:2 run=skipped tests=[refund/refund_test.go:20 skipped]",
 			},
 		},
 		{
-			name:    "runtime: a declaration that did not run, or whose package did not build",
-			repo:    specs(t, "ORD-F01 a", "ORD-F02 b"),
-			decls:   []testsource.Declaration{decl(t, "ORD-F01 a", 6, "TestRefund"), {ID: id(t, "ORD-F02"), Name: "ORD-F02 b", File: "other/other_test.go", Line: 3, Test: "TestOther"}},
-			runtime: &gotest.Report{Packages: []gotest.Package{{Name: pkg, Status: evidence.Pass}, {Name: "example.com/shop/other", Status: evidence.BuildFail}}},
+			name: "runtime: a package that did not build is worse than one that passed",
+			repo: specs(t, "ORD-F01 a", "ORD-F02 b"),
+			decls: []testsource.Declaration{
+				decl(t, "ORD-F01 a", 6, "TestRefund"),
+				{ID: id(t, "ORD-F01"), Name: "ORD-F01 a", File: "other/other_test.go", Line: 3, Test: "TestRefund"},
+				decl(t, "ORD-F02 b", 9, "TestRefund"),
+			},
+			runtime: &Runtime{Module: module, Report: gotest.Report{
+				Packages: []gotest.Package{{Name: pkg, Status: evidence.Pass}, {Name: module + "/other", Status: evidence.BuildFail, FailedBuild: module + "/other", Output: "undefined: x"}},
+				Tests:    []gotest.TestOutcome{ran("TestRefund/ORD-F01_a", evidence.Pass)},
+			}},
 			want: []string{
-				"row ORD-F01 F require_test traced spec:1 run=not_run tests=[refund/refund_test.go:6 not_run]",
-				"row ORD-F02 F require_test traced spec:2 run=build_fail tests=[other/other_test.go:3 build_fail]",
+				"row ORD-F01 F require_test traced spec:1 run=build_fail tests=[other/other_test.go:3 build_fail, refund/refund_test.go:6 pass]",
+				"row ORD-F02 F require_test traced spec:2 run=not_run tests=[refund/refund_test.go:9 not_run]",
+				"build_fail example.com/shop/other",
 			},
 		},
 		{
-			name:  "runtime: an ID bound only at run time is undeclared, and warnings pass through",
-			repo:  specs(t, "ORD-F07 dynamic"),
+			name:  "runtime: a pattern that did not set up matches no declaration",
+			repo:  specs(t, "ORD-F01 a"),
 			decls: []testsource.Declaration{decl(t, "ORD-F01 a", 6, "TestRefund")},
-			runtime: func() *gotest.Report {
-				r := report(evidence.Pass, ran("TestRefund/ORD-F07_dynamic", evidence.Pass), ran("TestRefund/ORD-F01_a", evidence.Pass))
-				r.Warnings = []gotest.Warning{
+			runtime: &Runtime{Report: gotest.Report{
+				Packages: []gotest.Package{{Name: "./...", Status: evidence.BuildFail, FailedBuild: "./..."}},
+			}},
+			want: []string{"row ORD-F01 F require_test traced spec:1 run=not_run tests=[refund/refund_test.go:6 not_run]", "build_fail ./..."},
+		},
+		{
+			name: "runtime: every test no declaration matches is undeclared",
+			repo: specs(t, "ORD-F07 dynamic", "ORD-F10 static", "ORD-S01 fast"),
+			decls: []testsource.Declaration{
+				decl(t, "ORD-F10 static", 6, "TestRefund"),
+				decl(t, "ORD-S01 fast", 8, "TestRefund"),
+				{ID: id(t, "ORD-F10"), Name: "ORD-F10 static", File: "root_test.go", Line: 5, Test: "TestRoot"},
+			},
+			runtime: func() *Runtime {
+				r := report(evidence.Pass,
+					ran("TestRefund/ORD-F07_dynamic", evidence.Pass),       // no declaration at all
+					ran("TestRefund/ORD-F10_static", evidence.Pass),        // declared
+					ran("TestRefund/ORD-F10_dyn_1", evidence.Pass),         // a sibling built at run time
+					ran("TestOther/ORD-S01_fast", evidence.Pass),           // declared under another test function
+					ran("TestRefund/ORD-S01_xORD-S01_fast", evidence.Pass), // the name only ends like it
+				)
+				root := ran("TestRoot/ORD-F10_static", evidence.Pass) // the root package is the module
+				root.Package = module
+				r.Report.Tests = append(r.Report.Tests, root)
+				r.Report.Warnings = []gotest.Warning{
 					{Kind: gotest.SuspiciousSegment, Package: pkg, Test: "TestRefund/ORD-F04:_x", Detail: "ORD-F04:_x"},
 					{Kind: gotest.InvalidAttr, Package: pkg, Test: "TestRefund", Detail: "nope"},
 				}
@@ -143,8 +177,12 @@ func TestBuild(t *testing.T) {
 			}(),
 			want: []string{
 				"row ORD-F07 F require_test unverified spec:1 run=pass tests=[]",
-				"orphan orphan_test ORD-F01 refund/refund_test.go:6 TestRefund",
+				"row ORD-F10 F require_test traced spec:2 run=pass tests=[refund/refund_test.go:6 pass, root_test.go:5 pass]",
+				"row ORD-S01 S warn traced spec:3 run=not_run tests=[refund/refund_test.go:8 not_run]",
 				"orphan undeclared_runtime ORD-F07 example.com/shop/refund TestRefund/ORD-F07_dynamic",
+				"orphan undeclared_runtime ORD-F10 example.com/shop/refund TestRefund/ORD-F10_dyn_1",
+				"orphan undeclared_runtime ORD-S01 example.com/shop/refund TestOther/ORD-S01_fast",
+				"orphan undeclared_runtime ORD-S01 example.com/shop/refund TestRefund/ORD-S01_xORD-S01_fast",
 				"orphan unverified ORD-F07 openspec/specs/refunds/spec.md:1",
 				"warning invalid_attr TestRefund nope",
 				"warning suspicious_segment TestRefund/ORD-F04:_x ORD-F04:_x",
@@ -169,7 +207,7 @@ func TestBuild(t *testing.T) {
 func TestBuildNeverNil(t *testing.T) {
 	t.Parallel()
 	m := Build(&openspec.Repo{}, nil, nil)
-	if m.Rows == nil || m.Orphans == nil || m.Warnings == nil || m.Blocking == nil {
+	if m.Rows == nil || m.Orphans == nil || m.Warnings == nil || m.Blocking == nil || m.BuildFailures == nil {
 		t.Errorf("Build of an empty repository = %+v, want empty, non-nil lists", m)
 	}
 }
@@ -203,6 +241,9 @@ func describe(m Matrix) []string {
 	}
 	for _, b := range m.Blocking {
 		out = append(out, "blocking "+b)
+	}
+	for _, f := range m.BuildFailures {
+		out = append(out, "build_fail "+f.Package)
 	}
 	return out
 }
@@ -246,19 +287,20 @@ func decl(t *testing.T, name string, line int, test string) testsource.Declarati
 }
 
 // ran is a test of pkg bound, like gotest does, to the ID that starts the
-// outermost segment of its name carrying one.
-func ran(name string, status evidence.Status) gotest.TestOutcome {
+// outermost segment of its name carrying one. It owns the binding unless
+// owner names the ancestor test it inherits it from.
+func ran(name string, status evidence.Status, owner ...string) gotest.TestOutcome {
 	o := gotest.TestOutcome{Package: pkg, Name: name, Status: status}
-	segs := strings.Split(name, "/")
-	for i, s := range segs {
+	for _, s := range strings.Split(name, "/") {
 		if v, ok := obligation.FromTestSegment(s); ok {
-			o.Bindings = []gotest.Binding{{ID: v, Owner: strings.Join(segs[:i+1], "/")}}
+			o.Bindings = []gotest.Binding{{ID: v, Owner: append(owner, name)[0]}}
 			break
 		}
 	}
 	return o
 }
 
-func report(status evidence.Status, tests ...gotest.TestOutcome) *gotest.Report {
-	return &gotest.Report{Packages: []gotest.Package{{Name: pkg, Status: status}}, Tests: tests}
+// report is the run of the refund package of module.
+func report(status evidence.Status, tests ...gotest.TestOutcome) *Runtime {
+	return &Runtime{Module: module, Report: gotest.Report{Packages: []gotest.Package{{Name: pkg, Status: status}}, Tests: tests}}
 }

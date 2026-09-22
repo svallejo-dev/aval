@@ -3,7 +3,7 @@
 
 cd repo
 ! exec aval trace --plain
-stdout '^ORD-F01 +F +traced +openspec/specs/refunds/spec.md:5 '
+stdout '^ORD-F01 +F +traced +Refund is idempotent +openspec/specs/refunds/spec.md:5 '
 ! stdout 'ORD-F02 +F'
 stdout '^Spec findings$'
 stdout '^error +openspec/specs/refunds/spec.md:12 +invalid-id '

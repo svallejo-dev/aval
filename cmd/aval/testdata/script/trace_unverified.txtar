@@ -3,7 +3,7 @@
 cd repo
 ! exec aval trace --plain
 stdout '^ORD-F01 +F +traced '
-stdout '^ORD-I01 +I +unverified +openspec/specs/ledger/spec.md:12 +-$'
+stdout '^ORD-I01 +I +unverified +Ledger balances +openspec/specs/ledger/spec.md:12 +-$'
 stdout '^Orphans$'
 stdout '^unverified +ORD-I01 +openspec/specs/ledger/spec.md:12 +no test declares it$'
 ! stdout '✓'

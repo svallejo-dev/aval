@@ -5,8 +5,14 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/svallejo-dev/aval/internal/evidence"
+	"github.com/svallejo-dev/aval/internal/openspec"
+	"github.com/svallejo-dev/aval/internal/trace"
+	"github.com/svallejo-dev/aval/internal/ui"
 )
 
 const refundTest = `package refund
@@ -38,16 +44,36 @@ func TestTrace(t *testing.T) {
 			wantStderr: "aval: trace failed: 1 unverified obligation, 1 open question\n",
 		},
 		{
-			name:       "a spec warning does not fail",
-			files:      map[string]string{"openspec/specs/refunds/spec.md": spec("ORD-F01 Refund is idempotent across every retry of a client"), "refund/refund_test.go": refundTest},
+			name:  "a spec warning does not fail, and untested rows are not traced",
+			files: map[string]string{"openspec/specs/refunds/spec.md": spec("ORD-F01 Refund is idempotent across every retry of a client", "ORD-S01 Fast answer"), "refund/refund_test.go": refundTest},
+			args:  []string{"--plain"},
+			wantStdout: []string{
+				"warn  openspec/specs/refunds/spec.md:5  name-length",
+				"ORD-S01  S     untested  Fast answer ",
+				"✓ 1 obligation traced, 1 untested\n",
+			},
+		},
+		{
+			name: "title and characterization",
+			files: map[string]string{
+				"openspec/specs/refunds/spec.md": strings.Replace(spec("ORD-F01 Refund is idempotent"), "The system", "**aval**: characterization\nThe system", 1),
+				"refund/refund_test.go":          refundTest,
+			},
 			args:       []string{"--plain"},
-			wantStdout: []string{"warn  openspec/specs/refunds/spec.md:5  name-length", "✓ 1 obligation traced"},
+			wantStdout: []string{"ID       KIND  STATUS  TITLE                                    SPEC", "ORD-F01  F     traced  Refund is idempotent (characterization)  openspec/"},
 		},
 		{
 			name:       "no openspec directory",
 			args:       []string{"--plain"},
 			wantCode:   ExitUsage,
-			wantStderr: "has no openspec/ directory",
+			wantStderr: "has no openspec/specs/ or openspec/changes/ directory",
+		},
+		{
+			name:       "a Go package named openspec is not an OpenSpec tree",
+			files:      map[string]string{"openspec/openspec.go": "package openspec\n"},
+			args:       []string{"--plain"},
+			wantCode:   ExitUsage,
+			wantStderr: "has no openspec/specs/ or openspec/changes/ directory",
 		},
 		{
 			name: "invalid change manifest is usage",
@@ -91,11 +117,89 @@ func TestTraceWithoutGo(t *testing.T) {
 	assertOutput(t, "stderr", stderr.String(), "aval: run tests:")
 }
 
+// TestTraceFailures pins every reason to fail, each one alone.
+func TestTraceFailures(t *testing.T) {
+	t.Parallel()
+	untested := trace.Row{ID: "ORD-S01", Kind: "S", Status: trace.Untested, Runtime: evidence.Pass}
+	tests := []struct {
+		name string
+		data traceData
+		want []string
+	}{
+		{name: "clean", data: traceData{Matrix: trace.Matrix{Rows: []trace.Row{untested}}}},
+		{name: "spec warning", data: traceData{Findings: []specFinding{{Severity: openspec.SeverityWarn}}}},
+		{name: "spec error", data: traceData{Findings: []specFinding{{Severity: openspec.SeverityError}}}, want: []string{"1 spec error"}},
+		{
+			name: "undeclared runtime binding of an S obligation",
+			data: traceData{Matrix: trace.Matrix{Rows: []trace.Row{untested}, Orphans: []trace.Orphan{{Kind: trace.OrphanRuntime, ID: "ORD-S01"}}}},
+			want: []string{"1 undeclared runtime binding"},
+		},
+		{
+			name: "a failing test",
+			data: traceData{Matrix: trace.Matrix{Rows: []trace.Row{{ID: "ORD-F01", Runtime: evidence.Pass, Tests: []trace.Test{{Runtime: evidence.Pass}, {Runtime: evidence.Fail}}}}}},
+			want: []string{"1 failing obligation"},
+		},
+		{
+			name: "a failing obligation",
+			data: traceData{Matrix: trace.Matrix{Rows: []trace.Row{{ID: "ORD-F01", Runtime: evidence.BuildFail}}}},
+			want: []string{"1 failing obligation"},
+		},
+		{
+			name: "packages that did not build",
+			data: traceData{Matrix: trace.Matrix{BuildFailures: []trace.BuildFailure{{Package: "./..."}, {Package: "x"}}}},
+			want: []string{"2 package build failures"},
+		},
+		{
+			name: "orphans and open questions",
+			data: traceData{Matrix: trace.Matrix{Orphans: []trace.Orphan{{Kind: trace.OrphanUnverified}, {Kind: trace.OrphanTest}}, Blocking: []string{"ORD-O01"}}},
+			want: []string{"1 unverified obligation", "1 orphan test", "1 open question"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := traceFailures(tt.data); !slices.Equal(got, tt.want) {
+				t.Errorf("traceFailures = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestSettings checks that stdout and stderr each follow their own terminal:
+// `aval trace 2>err.log` at a terminal styles the table, never the log.
+func TestSettings(t *testing.T) {
+	t.Parallel()
+	g := globalFlags{}
+	noEnv := func(string) string { return "" }
+	out, errs := g.settings(noEnv, true, false, true)
+	if out.Mode != ui.ModeTUI || !out.Color || errs.Mode != ui.ModePlain || errs.Color || errs.Prompt {
+		t.Errorf("stdout at a terminal, stderr to a file: %+v, %+v; want tui with color, then plain", out, errs)
+	}
+	out, errs = g.settings(noEnv, false, true, true)
+	if out.Mode != ui.ModePlain || errs.Mode != ui.ModeTUI || !errs.Color || errs.Prompt {
+		t.Errorf("stdout to a pipe, stderr at a terminal: %+v, %+v; want plain, then tui with color and no prompt", out, errs)
+	}
+}
+
+func TestModulePath(t *testing.T) {
+	t.Parallel()
+	for gomod, want := range map[string]string{
+		"module example.com/shop\n\ngo 1.22\n":  "example.com/shop",
+		"// x\nmodule \"example.com/q\" // c\n": "example.com/q",
+		"go 1.22\n":                             "",
+		"":                                      "",
+	} {
+		if got := modulePath([]byte(gomod)); got != want {
+			t.Errorf("modulePath(%q) = %q, want %q", gomod, got, want)
+		}
+	}
+}
+
 func TestFindRoot(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	writeFiles(t, root, map[string]string{"openspec/specs/x/spec.md": "", "a/b/c.go": ""})
-	for _, start := range []string{root, filepath.Join(root, "a", "b")} {
+	writeFiles(t, root, map[string]string{"openspec/specs/x/spec.md": "", "a/b/c.go": "", "internal/openspec/openspec.go": "package openspec"})
+	for _, start := range []string{root, filepath.Join(root, "a", "b"), filepath.Join(root, "internal", "openspec")} {
 		if got, err := findRoot(start); err != nil || got != root {
 			t.Errorf("findRoot(%s) = %q, %v; want %q", start, got, err, root)
 		}
