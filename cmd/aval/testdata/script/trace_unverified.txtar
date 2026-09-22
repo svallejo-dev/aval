@@ -1,0 +1,44 @@
+# An obligation whose kind requires a test and has none fails the trace.
+
+cd repo
+! exec aval trace --plain
+stdout '^ORD-F01 +F +traced '
+stdout '^ORD-I01 +I +unverified +openspec/specs/ledger/spec.md:12 +-$'
+stdout '^Orphans$'
+stdout '^unverified +ORD-I01 +openspec/specs/ledger/spec.md:12 +no test declares it$'
+! stdout '✓'
+stderr '^aval: trace failed: 1 unverified obligation$'
+
+! exec aval trace --json
+stdout '"ok": false'
+stdout '"kind": "unverified"'
+stdout '"code": "failed"'
+stdout '"message": "trace failed: 1 unverified obligation"'
+! stderr .
+
+-- repo/openspec/specs/ledger/spec.md --
+# ledger Specification
+
+## Requirements
+
+### Requirement: ORD-F01 Refund writes a ledger entry
+The system SHALL write a ledger entry per refund.
+
+#### Scenario: Refund issued
+- **WHEN** a refund is issued
+- **THEN** one entry is written
+
+### Requirement: ORD-I01 Ledger balances
+The ledger SHALL always balance.
+
+#### Scenario: Any time
+- **WHEN** entries are summed
+- **THEN** the sum is zero
+-- repo/ledger/ledger_test.go --
+package ledger
+
+import "testing"
+
+func TestLedger(t *testing.T) {
+	t.Run("ORD-F01 writes one entry", func(t *testing.T) {})
+}

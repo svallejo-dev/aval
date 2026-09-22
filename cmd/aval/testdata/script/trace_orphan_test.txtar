@@ -1,0 +1,33 @@
+# A test that declares an ID no spec defines is an orphan and fails the trace.
+
+cd repo
+! exec aval trace --plain
+stdout '^ORD-F01 +F +traced '
+stdout '^orphan_test +ORD-F09 +refund/refund_test.go:7 +TestRefund declares an ID no spec defines$'
+stderr '^aval: trace failed: 1 orphan test$'
+
+! exec aval trace --json
+stdout '"kind": "orphan_test"'
+stdout '"id": "ORD-F09"'
+stdout '"path": "refund/refund_test.go"'
+
+-- repo/openspec/specs/refunds/spec.md --
+# refunds Specification
+
+## Requirements
+
+### Requirement: ORD-F01 Refund is idempotent
+The system SHALL process a refund at most once per key.
+
+#### Scenario: Duplicate key
+- **WHEN** a refund arrives with a processed key
+- **THEN** the first result is returned
+-- repo/refund/refund_test.go --
+package refund
+
+import "testing"
+
+func TestRefund(t *testing.T) {
+	t.Run("ORD-F01 refunds once", func(t *testing.T) {})
+	t.Run("ORD-F09 refunds in any currency", func(t *testing.T) {})
+}

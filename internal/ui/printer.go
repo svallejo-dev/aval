@@ -39,6 +39,10 @@ type Result struct {
 	Command string // command name, e.g. "version"
 	Data    any    // payload of the JSON envelope
 	Lines   []Line // human-readable form
+	// Issues are why the command failed although it has a result to show,
+	// such as a trace with unverified obligations. In json mode they make the
+	// envelope's ok false; otherwise they follow the lines, on stderr.
+	Issues []envelope.Issue
 }
 
 // Printer writes results and failures in the mode its settings resolved.
@@ -70,15 +74,27 @@ func NewPrinter(s Settings, stdout, stderr io.Writer, opts ...Option) *Printer {
 	return p
 }
 
-// Print writes r: its envelope in json mode, its lines otherwise.
+// Print writes r: its envelope in json mode, its lines and then its issues
+// otherwise.
 func (p *Printer) Print(r Result) error {
 	if p.settings.Mode == ModeJSON {
-		if err := envelope.Write(p.stdout, envelope.Envelope{Command: r.Command, OK: true, Data: r.Data}); err != nil {
+		e := envelope.Envelope{Command: r.Command, OK: len(r.Issues) == 0, Data: r.Data, Errors: r.Issues}
+		if err := envelope.Write(p.stdout, e); err != nil {
 			return fmt.Errorf("write output: %w", err)
 		}
 		return nil
 	}
-	return p.writeLines(p.stdout, r.Lines)
+	if err := p.writeLines(p.stdout, r.Lines); err != nil {
+		return err
+	}
+	var lines []Line
+	for _, is := range r.Issues {
+		lines = append(lines, issueLines(is)...)
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	return p.writeLines(p.stderr, lines)
 }
 
 // PrintError reports that command failed: with an error envelope on stdout in
@@ -92,11 +108,16 @@ func (p *Printer) PrintError(command string, is envelope.Issue) {
 			return
 		}
 	}
+	_ = p.writeLines(p.stderr, issueLines(is))
+}
+
+// issueLines is how an issue reads outside json mode.
+func issueLines(is envelope.Issue) []Line {
 	lines := []Line{{{Text: "aval:", Tone: ToneError}, {Text: " " + is.Message}}}
 	if is.Hint != "" {
 		lines = append(lines, Line{{Text: "hint: " + is.Hint, Tone: ToneMuted}})
 	}
-	_ = p.writeLines(p.stderr, lines)
+	return lines
 }
 
 // writeLines writes lines styled by the theme in tui mode and as bare text

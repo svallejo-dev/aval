@@ -1,0 +1,50 @@
+# Requirements without a valid ID and IDs defined twice are spec errors: they
+# fail the trace, and only the first definition of an ID becomes a row.
+
+cd repo
+! exec aval trace --plain
+stdout '^ORD-F01 +F +traced +openspec/specs/refunds/spec.md:5 '
+! stdout 'ORD-F02 +F'
+stdout '^Spec findings$'
+stdout '^error +openspec/specs/refunds/spec.md:12 +invalid-id '
+stdout '^error +openspec/specs/refunds/spec.md:19 +duplicate-id '
+stderr '^aval: trace failed: 2 spec errors$'
+
+! exec aval trace --json
+stdout '"rule": "invalid-id"'
+stdout '"rule": "duplicate-id"'
+stdout '"severity": "error"'
+
+-- repo/openspec/specs/refunds/spec.md --
+# refunds Specification
+
+## Requirements
+
+### Requirement: ORD-F01 Refund is idempotent
+The system SHALL process a refund at most once per key.
+
+#### Scenario: Duplicate key
+- **WHEN** a refund arrives with a processed key
+- **THEN** the first result is returned
+
+### Requirement: [ORD-F02] Refund reason required
+The system SHALL require a reason.
+
+#### Scenario: No reason
+- **WHEN** a refund has no reason
+- **THEN** it is rejected
+
+### Requirement: ORD-F01 Refund needs approval
+The system SHALL require approval above a limit.
+
+#### Scenario: Above the limit
+- **WHEN** the amount is above the limit
+- **THEN** approval is required
+-- repo/refund/refund_test.go --
+package refund
+
+import "testing"
+
+func TestRefund(t *testing.T) {
+	t.Run("ORD-F01 refunds once", func(t *testing.T) {})
+}

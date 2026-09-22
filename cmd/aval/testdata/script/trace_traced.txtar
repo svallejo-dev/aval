@@ -1,0 +1,71 @@
+# aval trace passes when every obligation that needs a test has one, from the
+# repository root or any directory below it, and fails as usage elsewhere.
+
+cd repo
+exec aval trace --plain
+stdout '^ORD-F01 +F +traced +openspec/specs/refunds/spec.md:5 +refund/refund_test.go:6$'
+stdout '^ORD-N01 +N +traced +openspec/specs/refunds/spec.md:12 +refund/refund_test.go:8, refund/refund_test.go:9$'
+stdout '^ORD-S01 +S +untested +openspec/specs/refunds/spec.md:19 +-$'
+stdout '^✓ 3 obligations traced$'
+! stdout 'Orphans'
+! stderr .
+
+cd refund
+exec aval trace --json
+stdout '"ok": true'
+stdout '"id": "ORD-F01"'
+stdout '"name": "ORD-F01 refunds once"'
+stdout '"findings": \[\]'
+stdout '"errors": \[\]'
+
+cd $WORK
+! exec aval trace --json
+stdout '"code": "usage"'
+! exec aval trace --plain
+stderr '^aval: no openspec/ directory in .* or above it'
+! exec aval trace --plain --dir nowhere
+stderr '^aval: nowhere has no openspec/ directory$'
+
+-- repo/go.mod --
+module example.com/shop
+
+go 1.22
+-- repo/openspec/specs/refunds/spec.md --
+# refunds Specification
+
+## Requirements
+
+### Requirement: ORD-F01 Refund is idempotent
+The system SHALL process a refund at most once per key.
+
+#### Scenario: Duplicate key
+- **WHEN** a refund arrives with a processed key
+- **THEN** the first result is returned
+
+### Requirement: ORD-N01 Refund never exceeds the total
+The system SHALL NOT refund more than the order total.
+
+#### Scenario: Too much
+- **WHEN** the amount exceeds the total
+- **THEN** the refund is rejected
+
+### Requirement: ORD-S01 Fast refund answer
+The system MUST answer within 300 ms at p99.
+
+#### Scenario: Nominal load
+- **WHEN** the load is nominal
+- **THEN** p99 stays below 300 ms
+-- repo/refund/refund_test.go --
+package refund
+
+import "testing"
+
+func TestRefund(t *testing.T) {
+	t.Run("ORD-F01 refunds once", func(t *testing.T) {})
+	for _, tt := range []struct{ name string }{
+		{name: "ORD-N01 caps at the total"},
+		{name: "ORD-N01 caps at zero"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {})
+	}
+}
