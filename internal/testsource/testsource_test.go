@@ -7,6 +7,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -183,6 +184,7 @@ func TestP(t *testing.T) {
 		if got := add(1, 2); got != 3 {
 			t.Errorf("add = %d", got)
 		}
+		refunder().mustRefund(t)
 	})
 	tests := []tc{
 		{name: "ORD-F02 sums one", in: []int{1}},
@@ -210,6 +212,17 @@ func (s *suite) TestSuite(t *testing.T) {
 	})
 }
 
+func (r *Refunder) mustRefund(t *testing.T) { t.Helper() }
+
+func TestNested(t *testing.T) {
+	setup := load(t)
+	for _, c := range setup {
+		t.Run(c, func(t *testing.T) {
+			t.Run("ORD-F06 nested in a table", func(t *testing.T) {})
+		})
+	}
+}
+
 func runHelper(t *testing.T) {
 	t.Run("ORD-F05 in a helper", func(t *testing.T) {
 		_ = []*tc{{name: sc.Itoa(1)}}
@@ -222,8 +235,8 @@ func runHelper(t *testing.T) {
 func TestFingerprint(t *testing.T) {
 	t.Parallel()
 
-	ids := []string{"ORD-F01", "ORD-F02", "ORD-F03", "ORD-F04", "ORD-F05"}
-	inTestP, usesTC := ids[:3], []string{"ORD-F01", "ORD-F02", "ORD-F03", "ORD-F05"}
+	ids := []string{"ORD-F01", "ORD-F02", "ORD-F03", "ORD-F04", "ORD-F05", "ORD-F06"}
+	inTestP, usesTC := ids[:3], []string{"ORD-F02", "ORD-F03", "ORD-F05"}
 	fingerprints := func(t *testing.T, src string) map[string]string {
 		t.Helper()
 		m := map[string]string{}
@@ -266,6 +279,14 @@ func TestFingerprint(t *testing.T) {
 		{name: "subtest added to another suite method", src: fpBase + "\nfunc (s *suite) TestMore(t *testing.T) { t.Run(\"x\", func(t *testing.T) {}) }\n"},
 		{name: "sibling added in a helper", src: edit(t, fpBase, "{\n\tt.Run(\"ORD-F05", "{\n\tt.Run(\"x\", func(t *testing.T) {})\n\tt.Run(\"ORD-F05")},
 		{name: "suite helper method", src: edit(t, fpBase, "s.n = 1", "s.n = 2"), changed: []string{"ORD-F04"}},
+		{name: "method on a production type", src: edit(t, fpBase, "{ t.Helper() }", "{}"), changed: []string{"ORD-F01"}},
+		{name: "table and loop added", src: edit(t, fpBase, "\t}\n}\n\ntype suite",
+			"\t}\n\tmore := []tc{{name: \"ORD-F09 new\"}}\n\tfor _, m := range more {\n\t\tt.Run(m.name, func(t *testing.T) {})\n\t}\n}\n\ntype suite")},
+		{name: "helpers named like fields, keys and locals", src: fpBase + "\nfunc name() {}\nfunc in() {}\nfunc got() {}\nfunc tt() {}\nfunc tests() {}\nfunc n() {}\nfunc t() {}\nfunc s() {}\n"},
+		{name: "table around a subtest emptied", src: edit(t, fpBase, "range setup", "range setup[:0]"), changed: []string{"ORD-F06"}},
+		{name: "table loaded with side effects changed", src: edit(t, fpBase, "load(t)", "load(nil)"), changed: []string{"ORD-F06"}},
+		{name: "subtest in a loop that never runs", src: edit(t, edit(t, fpBase, "\tt.Run(\"ORD-F01", "\tfor range 0 {\n\tt.Run(\"ORD-F01"),
+			"mustRefund(t)\n\t})\n", "mustRefund(t)\n\t})\n\t}\n"), changed: inTestP},
 		{name: "nested subtest edited", src: edit(t, fpBase, "t.Log(mod.Version,", "t.Log(mod.Version + \"x\","), changed: []string{"ORD-F05"}},
 		{name: "aliased import swapped", src: edit(t, fpBase, `sc "strconv"`, `sc "example.com/strconv"`), changed: []string{"ORD-F05"}},
 		{name: "versioned import swapped", src: edit(t, fpBase, `"example.com/mod/v2"`, `"example.com/mod/v3"`), changed: []string{"ORD-F05"}},
@@ -320,11 +341,59 @@ func TestBuildConstraint(t *testing.T) {
 		{plain, "p_amd64_test.go", "amd64"},
 		{plain, "p_linux_amd64_test.go", "linux\namd64"},
 		{plain, "p_amd64_linux_test.go", "linux"},
+		{plain, "refund_plan9.x_test.go", "plan9"}, // go/build cuts at the first "."
 		{tagged, "p_windows_test.go", "windows\nlinux && !cgo"},
 	} {
 		if got := buildConstraint(tt.file, tt.name); got != tt.want {
 			t.Errorf("buildConstraint(%s) = %q, want %q", tt.name, got, tt.want)
 		}
+	}
+}
+
+func TestTableLoops(t *testing.T) {
+	t.Parallel()
+
+	src := `package p
+
+func TestX(t *testing.T) {
+	a := []tc{}
+	for _, x := range a {
+		x := x
+		t.Run(x.name, f)
+	}
+	b := []tc{}
+	for _, y := range b {
+		t.Run(y.name, f)
+	}
+	t.Log(len(b))
+	for _, z := range b {
+		w := z
+		t.Run(w.name, f)
+	}
+	for range b {
+		t.Run("literal", f)
+	}
+}
+`
+	f, err := parser.ParseFile(token.NewFileSet(), "", src, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fn, ok := f.Decls[0].(*ast.FuncDecl)
+	if !ok {
+		t.Fatal("no function")
+	}
+	var loops []bool
+	for _, s := range fn.Body.List {
+		if _, ok := s.(*ast.RangeStmt); ok {
+			loops = append(loops, isTableLoop(s))
+		}
+	}
+	if want := []bool{true, true, false, false}; !slices.Equal(loops, want) {
+		t.Errorf("isTableLoop = %v, want %v", loops, want)
+	}
+	if got := tableOnly(fn); !maps.Equal(got, map[string]bool{"a": true}) {
+		t.Errorf("tableOnly = %v, want only a: b has another use", got)
 	}
 }
 

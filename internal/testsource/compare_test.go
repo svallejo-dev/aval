@@ -100,7 +100,7 @@ func TestCompareScans(t *testing.T) {
 		scanFiles(t, map[string]string{"p_test.go": head}),
 		map[obligation.ID]bool{mustID(t, "ORD-F02"): true},
 	))
-	want := "skip_added ORD-F01 p_test.go:18\ntest_removed ORD-F03 p_test.go:25"
+	want := "skip_added ORD-F01 p_test.go:18\ntest_removed ORD-F03 p_test.go:26"
 	if strings.Join(got, "\n") != want {
 		t.Errorf("Compare =\n%s\nwant\n%s", strings.Join(got, "\n"), want)
 	}
@@ -192,8 +192,9 @@ func TestCompareBypasses(t *testing.T) {
 		{"skip helper", ds(enclosing("\tskipUnlessDB(t)\n"), replace("p/helpers_test.go", "func check", "func skipUnlessDB(t *testing.T) { t.Skip(\"no db\") }\n\nfunc check")), all},
 		{"weakened helper", ds(replace("p/helpers_test.go", "if got != want {", "if got != want && false {")), all},
 		{"weakened named function", ds(replace("p/p_test.go", `strconv.Itoa(add(2, 2)), "4"`, `"4", "4"`)), []string{"fingerprint_changed ORD-F02"}},
-		{"golden rewritten", ds(replace("p/testdata/sum.golden", "3", "4")), all},
-		{"golden removed", ds(func(_ *testing.T, files map[string]string) { delete(files, "p/testdata/sum.golden") }), all},
+		// Only ORD-F03 names sum.golden.
+		{"golden rewritten", ds(replace("p/testdata/sum.golden", "3", "4")), []string{"fingerprint_changed ORD-F03"}},
+		{"golden removed", ds(func(_ *testing.T, files map[string]string) { delete(files, "p/testdata/sum.golden") }), []string{"fingerprint_changed ORD-F03"}},
 		{"golden added", ds(func(_ *testing.T, files map[string]string) { files["p/testdata/new.golden"] = "5" }), nil},
 		{"file limited to plan9", ds(rename("p/p_test.go", "p/p_plan9_test.go")), all},
 		{"original wrapped in if false", ds(replace("p/p_test.go", "\tt.Run(\"ORD-F01", "\tif false {\n\t\tt.Run(\"ORD-F01"), replace("p/p_test.go", "\t})\n\tt.Run(\"ORD-F02", "\t})\n\t}\n\tt.Run(\"ORD-F02")), all},
@@ -201,6 +202,12 @@ func TestCompareBypasses(t *testing.T) {
 			replace("p/p_test.go", "\tt.Run(\"ORD-F02", "\tt.Run(\"ORD-F09 new\", func(t *testing.T) { check(t, fmt.Sprint(extra()), \"1\") })\n\tt.Run(\"ORD-F02"),
 			replace("p/helpers_test.go", "func check", "func extra() int { return 1 }\n\nfunc check")), nil},
 		{"table entry added", ds(replace("p/p_test.go", `file: "sum.golden"}}`, `file: "sum.golden"}, {name: "ORD-F08 again", file: "sum.golden"}}`)), nil},
+		{"package-level function literal call added", ds(func(_ *testing.T, files map[string]string) {
+			files["p/init_test.go"] = "package p\n\nimport \"os\"\n\nvar _ = func() error { return os.Setenv(\"TZ\", \"UTC\") }()\n"
+		}), all},
+		{"flag var added", ds(func(_ *testing.T, files map[string]string) {
+			files["p/flag_test.go"] = "package p\n\nimport \"flag\"\n\nvar update = flag.Bool(\"update\", false, \"rewrite golden files\")\n"
+		}), nil},
 		{"TestMain added", ds(func(_ *testing.T, files map[string]string) {
 			files["p/main_test.go"] = "package p\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestMain(m *testing.M) { os.Exit(0) }\n"
 		}), all},
@@ -230,36 +237,52 @@ func TestCompareBypasses(t *testing.T) {
 func ds[T any](xs ...T) []T { return xs }
 
 // TestCompareTestdata checks that only a testdata file that existed at base
-// and changed flags the non-delta IDs of its own package.
+// and changed is reported, for the non-delta declarations that name it, or
+// for all of its package's when none does.
 func TestCompareTestdata(t *testing.T) {
 	t.Parallel()
 
 	base := map[string]string{
-		"p/p_test.go":          "package p\n\nimport \"testing\"\n\nfunc TestP(t *testing.T) {\n\tt.Run(\"ORD-F01 a\", func(t *testing.T) {})\n\tt.Run(\"ORD-F02 b\", func(t *testing.T) {})\n\tt.Run(\"ORD-F02 b again\", func(t *testing.T) {})\n}\n",
+		"p/p_test.go": `package p
+
+import "testing"
+
+func TestP(t *testing.T) {
+	t.Run("ORD-F01 a", func(t *testing.T) { _ = "testdata/a.golden" })
+	t.Run("ORD-F02 b", func(t *testing.T) { _ = loadB() })
+	t.Run("ORD-F02 b again", func(t *testing.T) {})
+}
+
+func loadB() string { return "b.txt" }
+`,
 		"p/testdata/a.golden":  "a",
 		"p/testdata/sub/b.txt": "b",
+		"p/testdata/other.txt": "o",
 		"q/q_test.go":          "package q\n\nimport \"testing\"\n\nfunc TestQ(t *testing.T) { t.Run(\"ORD-F03 c\", func(t *testing.T) {}) }\n",
 		"q/testdata/c.golden":  "c",
 	}
 	tests := []struct {
 		name    string
 		edit    func(files map[string]string)
-		changed string // an ID in the change's deltas
+		inDelta bool // ORD-F01 is in the change's deltas
 		want    []string
 	}{
-		{"golden added", func(f map[string]string) { f["p/testdata/new.golden"] = "n" }, "", nil},
-		{"golden modified", func(f map[string]string) { f["p/testdata/a.golden"] = "x" }, "", []string{
+		{"file added", func(f map[string]string) { f["p/testdata/new.golden"] = "n" }, false, nil},
+		{"file named by one declaration modified", func(f map[string]string) { f["p/testdata/a.golden"] = "x" }, false, []string{
 			"ORD-F01 testdata p/testdata/a.golden modified outside the delta of ORD-F01",
-			"ORD-F02 testdata p/testdata/a.golden modified outside the delta of ORD-F02",
 		}},
-		{"nested file removed", func(f map[string]string) { delete(f, "p/testdata/sub/b.txt") }, "", []string{
-			"ORD-F01 testdata p/testdata/sub/b.txt removed outside the delta of ORD-F01",
+		{"file named by an in-delta declaration modified", func(f map[string]string) { f["p/testdata/a.golden"] = "x" }, true, nil},
+		{"file named through a helper removed", func(f map[string]string) { delete(f, "p/testdata/sub/b.txt") }, false, []string{
 			"ORD-F02 testdata p/testdata/sub/b.txt removed outside the delta of ORD-F02",
 		}},
-		{"golden modified inside a delta", func(f map[string]string) { f["p/testdata/a.golden"] = "x" }, "ORD-F01", []string{
-			"ORD-F02 testdata p/testdata/a.golden modified outside the delta of ORD-F02",
+		{"file named by no declaration modified", func(f map[string]string) { f["p/testdata/other.txt"] = "x" }, false, []string{
+			"ORD-F01 testdata p/testdata/other.txt modified outside the delta of ORD-F01",
+			"ORD-F02 testdata p/testdata/other.txt modified outside the delta of ORD-F02",
 		}},
-		{"other package's golden modified", func(f map[string]string) { f["q/testdata/c.golden"] = "x" }, "", []string{
+		{"file named by no declaration modified, one ID in its delta", func(f map[string]string) { f["p/testdata/other.txt"] = "x" }, true, []string{
+			"ORD-F02 testdata p/testdata/other.txt modified outside the delta of ORD-F02",
+		}},
+		{"other package's file modified", func(f map[string]string) { f["q/testdata/c.golden"] = "x" }, false, []string{
 			"ORD-F03 testdata q/testdata/c.golden modified outside the delta of ORD-F03",
 		}},
 	}
@@ -270,7 +293,7 @@ func TestCompareTestdata(t *testing.T) {
 			files := maps.Clone(base)
 			tt.edit(files)
 			var got []string
-			for _, f := range Compare(before, scanFiles(t, files), map[obligation.ID]bool{mustID(t, "ORD-F01"): tt.changed != ""}) {
+			for _, f := range Compare(before, scanFiles(t, files), map[obligation.ID]bool{mustID(t, "ORD-F01"): tt.inDelta}) {
 				if f.Kind != evidence.FingerprintChanged {
 					t.Errorf("finding kind = %s, want %s", f.Kind, evidence.FingerprintChanged)
 				}

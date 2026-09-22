@@ -20,10 +20,11 @@ import (
 //     or the ID gained a declaration, in the same file or another one;
 //   - test_removed: a declaration of the ID has no counterpart in head.
 //
-// A testdata file of the package of one of the ID's declarations that exists
-// at base and was modified or removed at head is a fingerprint_changed too;
-// an added file never is, so a new golden file for a new obligation does not
-// flag the others.
+// A testdata file that existed at base and was modified or removed at head is
+// a fingerprint_changed too, for each declaration that names it (see
+// Declaration.TestdataRefs) or, when no base declaration of its package does,
+// for every declaration of the package. An added file never is, so a new
+// golden file for a new obligation does not flag the others.
 //
 // Declarations of an ID are paired one by one, and only within the same
 // directory and top-level test function: moving a test to another package or
@@ -35,13 +36,23 @@ import (
 // never nil.
 func Compare(base, head []Declaration, changed map[obligation.ID]bool) []evidence.Finding {
 	bases, heads := byID(base), byID(head)
+	named := map[string]map[string]bool{} // testdata files some declaration names, by directory
+	for _, d := range base {
+		dir := path.Dir(d.File)
+		if named[dir] == nil {
+			named[dir] = map[string]bool{}
+		}
+		for _, name := range d.TestdataRefs {
+			named[dir][name] = true
+		}
+	}
 	ids := slices.SortedFunc(maps.Keys(bases), func(a, b obligation.ID) int {
 		return strings.Compare(a.String(), b.String())
 	})
 	out := []evidence.Finding{}
 	for _, id := range ids {
 		if !changed[id] {
-			out = append(out, compareID(id.String(), bases[id], heads[id])...)
+			out = append(out, compareID(id.String(), bases[id], heads[id], named)...)
 		}
 	}
 	return out
@@ -54,7 +65,7 @@ var pairings = []func(b, h Declaration) bool{
 	func(Declaration, Declaration) bool { return true },
 }
 
-func compareID(id string, base, head []Declaration) []evidence.Finding {
+func compareID(id string, base, head []Declaration, named map[string]map[string]bool) []evidence.Finding {
 	pair := make([]int, len(base)) // index into head, or -1
 	used := make([]bool, len(head))
 	for i := range pair {
@@ -98,7 +109,8 @@ func compareID(id string, base, head []Declaration) []evidence.Finding {
 		after := head[pair[i]].Testdata
 		for _, name := range slices.Sorted(maps.Keys(b.Testdata)) {
 			sum, ok := after[name]
-			if reported[name] || ok && sum == b.Testdata[name] {
+			if reported[name] || ok && sum == b.Testdata[name] ||
+				named[path.Dir(b.File)][name] && !slices.Contains(b.TestdataRefs, name) {
 				continue
 			}
 			reported[name] = true

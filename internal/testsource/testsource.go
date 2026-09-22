@@ -27,16 +27,23 @@
 //   - the declaration kind, the package clause, the file's //go:build
 //     expression and its GOOS/GOARCH file name suffix (x_plan9_test.go);
 //   - the enclosing chain: the top-level function and every function literal
-//     around the declaration, with each statement that only calls Run left
-//     out, so adding a sibling subtest changes nothing while an early return,
-//     a shadowing assignment, a testing.Short guard or a wrapping if false
+//     around the declaration, without the statements that only belong to
+//     other subtests: those that only call Run, table loops (range loops
+//     whose body only runs subtests with computed names) and the composite
+//     literal definitions of tables nothing else uses. Adding a sibling
+//     subtest, or a table and its loop, changes nothing; an early return, a
+//     shadowing assignment, a testing.Short guard or a wrapping if false
 //     changes every declaration below it;
 //   - the bound code: for a Subtest the whole Run call, for a TableEntry the
-//     entry and the body of the loop that runs it;
+//     entry and the loop that runs it, plus the header of any other table
+//     loop around the declaration;
 //   - the helpers: every top-level declaration of the package's _test.go files
-//     that the code above names, transitively (functions, vars, consts, types
-//     with their methods; Test, Benchmark, Fuzz and Example functions are never
-//     helpers), plus its TestMain and init functions;
+//     that the code above names in value, call or type position,
+//     transitively (functions, vars, consts, types with their methods; Test,
+//     Benchmark, Fuzz and Example functions are never helpers), every method
+//     of those files it selects by name (x.mustRefund on a production type),
+//     and what runs for every test: TestMain, init and package-level vars
+//     whose initializer calls a function literal (var x = func() T {…}());
 //   - the imports those files use for the names the code above qualifies, and
 //     their blank and dot imports.
 //
@@ -44,26 +51,33 @@
 // reformatting, commenting or moving it keeps the fingerprint, changing any
 // token changes it. A table's entries are left out of every encoding but
 // their own, so adding an entry changes no other fingerprint. Helpers are
-// matched by name without type information: a local variable that shadows a
-// helper's name still pulls the helper in, and an unnamed import is matched
-// by a name guessed from its path. Production code is not included: changing
-// it is what a change is for. Fingerprints are only comparable between scans
-// by the same aval build.
+// matched by name without type information: selected field names and struct
+// literal keys are not references, and a name the code declares itself (a
+// parameter, a variable) is a local, which hides a helper of the same name.
+// An unnamed import is matched by a name guessed from its path. Production
+// code is not included: changing it is what a change is for. Fingerprints are
+// only comparable between scans by the same aval build.
 //
 // # Test data
 //
-// Test data is not part of the fingerprint, since any file may be read by any
-// test of the package and adding one must not flag the others. Instead,
-// Declaration.Testdata holds the content hash of every file in the package's
-// testdata tree, and Compare reports a file that existed at base and was
-// modified or removed at head.
+// Test data is not part of the fingerprint, so that adding a file flags
+// nothing. Declaration.Testdata holds the content hash of every file in the
+// package's testdata tree, and Declaration.TestdataRefs the files whose base
+// name ends a string literal of the code the fingerprint covers ("x.golden",
+// "testdata/x.golden"). Compare reports a file that existed at base and was
+// modified or removed at head for the declarations that name it or, when no
+// declaration of the package does, for all of them.
 //
-// # Gaps left to the runtime checks
+// # Gaps
 //
-// Three dependencies are knowingly left out; the gate's runtime checks (M2)
-// cover them: helpers in other packages (only the import path is hashed),
-// unnamed imports whose package name is not the one their path suggests, and
-// data files outside testdata.
+// Left to the gate's runtime checks (M2), which run the non-delta IDs of
+// each Test in isolation (-run '^TestX$/^(ID1|ID2)([_#]|$)'): helpers in
+// other packages (only the import path is hashed), unnamed imports whose
+// package name is not the one their path suggests, data files outside
+// testdata, sibling subtests that mutate state they capture, and earlier Test
+// functions with side effects. Accepted, and left to CODEOWNERS review of test
+// files: package-level vars whose initializer has side effects without
+// calling a function literal, such as var _ = os.Setenv(…).
 //
 // # Skips
 //
@@ -117,6 +131,9 @@ type Declaration struct {
 	// relative to the scanned directory, to the hex SHA-256 of its content.
 	// It is shared by the package's declarations: do not modify it.
 	Testdata map[string]string
+	// TestdataRefs are the files of Testdata that the declaration's code
+	// names, sorted.
+	TestdataRefs []string
 }
 
 // Scan parses every _test.go file under dir and returns the obligation IDs
@@ -175,7 +192,7 @@ func (s *scanner) visit(rel string, d fs.DirEntry, err error) error {
 	p := s.pkgs[key]
 	if p == nil {
 		p = &pkg{
-			fsys: s.fsys, fset: s.fset, dir: key[0], decls: map[string][]top{},
+			fsys: s.fsys, fset: s.fset, dir: key[0], decls: map[string][]top{}, methods: map[string][]top{},
 			tables: map[*ast.CompositeLit]bool{}, infos: map[infoKey]*info{}, skips: map[ast.Node]bool{},
 		}
 		s.pkgs[key] = p
@@ -186,15 +203,16 @@ func (s *scanner) visit(rel string, d fs.DirEntry, err error) error {
 
 // pkg is the test files of one package, which share their helpers.
 type pkg struct {
-	fsys   fs.FS
-	fset   *token.FileSet
-	dir    string
-	files  []*file
-	decls  map[string][]top // helpers by name; methods under their receiver type's
-	always []top            // TestMain and init
-	tables map[*ast.CompositeLit]bool
-	infos  map[infoKey]*info
-	skips  map[ast.Node]bool // per function: calls Skip outside its subtests
+	fsys    fs.FS
+	fset    *token.FileSet
+	dir     string
+	files   []*file
+	decls   map[string][]top // helpers by name; methods under their receiver type's
+	methods map[string][]top // methods by their own name
+	always  []top            // TestMain, init and vars initialized by a function literal
+	tables  map[*ast.CompositeLit]bool
+	infos   map[infoKey]*info
+	skips   map[ast.Node]bool // per function: calls Skip outside its subtests
 }
 
 type file struct {
@@ -222,10 +240,14 @@ func (p *pkg) add(f *file) {
 			case isEntryPoint(name):
 				continue
 			case d.Recv != nil && len(d.Recv.List) == 1:
+				p.methods[name] = append(p.methods[name], top{d, f})
 				name = recvType(d.Recv.List[0].Type)
 			}
 			p.decls[name] = append(p.decls[name], top{d, f})
 		case *ast.GenDecl:
+			if d.Tok == token.VAR && callsFuncLit(d) {
+				p.always = append(p.always, top{d, f})
+			}
 			for _, spec := range d.Specs {
 				switch s := spec.(type) {
 				case *ast.ValueSpec:
@@ -238,6 +260,28 @@ func (p *pkg) add(f *file) {
 			}
 		}
 	}
+}
+
+// callsFuncLit reports whether n calls a function literal, as the
+// initializer var x = func() T {…}() does.
+func callsFuncLit(n ast.Node) bool {
+	found := false
+	ast.Inspect(n, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			fun := call.Fun
+			for {
+				paren, ok := fun.(*ast.ParenExpr)
+				if !ok {
+					break
+				}
+				fun = paren.X
+			}
+			_, lit := fun.(*ast.FuncLit)
+			found = found || lit
+		}
+		return !found
+	})
+	return found
 }
 
 func isEntryPoint(name string) bool {
@@ -303,7 +347,8 @@ func (p *pkg) declarations() ([]Declaration, error) {
 	}
 	out := make([]Declaration, 0, len(found))
 	for _, pd := range found {
-		pd.d.Fingerprint, pd.d.Testdata = p.fingerprint(pd), testdata
+		pd.d.Fingerprint, pd.d.TestdataRefs = p.fingerprint(pd, testdata)
+		pd.d.Testdata = testdata
 		pd.d.Skips = p.skipped(pd)
 		out = append(out, pd.d)
 	}
