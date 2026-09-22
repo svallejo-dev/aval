@@ -40,7 +40,17 @@ El gate trabaja sobre un rango `base..head`:
 - **En CI:** `base` es el merge-base del PR con `main` (`fetch-depth: 0`) y `head` es `github.event.pull_request.head.sha`. El checkout usa `ref:` head, no el merge commit.
 - **En local:** `--base` y `--head` (por defecto el merge-base con `origin/main` y `HEAD`).
 
-**Orden obligatorio:** todas las entradas de la base (política, CODEOWNERS, baseline, specs de la base, `.golangci.yml` de la base, declaraciones de la base) se leen **antes** de ejecutar cualquier test del PR. Todo `git` corre con `GIT_NO_REPLACE_OBJECTS=1`.
+**Orden obligatorio:** todo lo que aval obtiene con `git` se calcula **antes** de ejecutar cualquier código del PR, porque un test puede reescribir `.git/config` o `.git/info/*`. Incluye:
+- las entradas de la base: política, CODEOWNERS, baseline, specs, `.golangci.yml` y declaraciones;
+- las del rango: diff, changes y scope (§3b).
+
+**Git endurecido:** todo `git` corre con:
+- `GIT_NO_REPLACE_OBJECTS=1` y `GIT_GRAFT_FILE` apuntando a `/dev/null`, para anular replace refs y grafts;
+- `--attr-source` al árbol vacío, para que el `.gitattributes` del head no cambie diffs ni merges;
+- `--ignore-submodules=none`, para que el `.gitmodules` del head no oculte cambios de submódulos;
+- `-z` y `--end-of-options`.
+
+Requiere git ≥ 2.40; con uno más antiguo, exit 3.
 
 | Entrada | De dónde sale |
 |---|---|
@@ -80,7 +90,7 @@ Las obligaciones F, N e I **fuera del delta** que tienen tests vinculados se eje
 
 ### 3b. Clasificación de commits (scope)
 
-Cada commit de `base..head` se clasifica por sus rutas con los globs `paths.dx`, `paths.feat` y `paths.seam` de la política **del SHA base**. Si una ruta encaja en varias familias, gana `seam` y después el glob más largo.
+Cada commit de `base..head` se clasifica por sus rutas con los globs `paths.dx`, `paths.feat` y `paths.seam` de la política **del SHA base**. Si una ruta encaja en varias familias, gana `seam`, después el glob más largo y, a igual longitud, `feat`: es la familia más estricta, y clasificar como `dx` algo que es `feat` podría bajar el tier. Un glob de directorio (`tools` o `tools/`) no encaja con lo que hay dentro: hace falta `tools/**`.
 
 | Rutas del commit | Familia |
 |---|---|
@@ -92,7 +102,7 @@ Cada commit de `base..head` se clasifica por sus rutas con los globs `paths.dx`,
 
 `seam` y `other` **nunca** hacen `mixed` a un commit. Esto enmienda la frase de ADR-0004 "mixed cuando toca dos o más familias": `mixed` significa que toca `dx` y `feat`.
 
-**Commits de merge:** se clasifican con `git show --remerge-diff --name-only --format=`, que requiere git ≥ 2.36 (con uno más antiguo, exit 3).
+**Commits de merge:** se clasifican con `git show --remerge-diff --name-only --format=`, con el git endurecido de §1.
 
 | Tipo de merge | Rutas que aporta |
 |---|---|
@@ -165,7 +175,7 @@ Hay dos tipos:
 | 0 | `pass` o `warn`; o cualquier veredicto en `observe` |
 | 1 | `block` en `enforce` |
 | 2 | Uso incorrecto o política inválida (ADR-0004) |
-| 3 | Falta una herramienta (`go`, `git` ≥ 2.36, `node`/`npm`) o su versión no es la fijada |
+| 3 | Falta una herramienta (`go`, `git` ≥ 2.40, `node`/`npm`) o su versión no es la fijada |
 
 ### 7. Evidencia, baseline y resumen
 
