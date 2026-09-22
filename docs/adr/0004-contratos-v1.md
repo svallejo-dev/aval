@@ -16,7 +16,8 @@ Cada contrato vive en el paquete del concepto que representa, con tipos Go, JSON
 | **ID de obligación** | `internal/obligation` | `<CTX>-<K><NN>`, p. ej. `ORD-F01` (convención y spike en ADR-0002). Política por tipo: F/N/I exigen test vinculado, S/A avisan, O bloquea |
 | **Manifiesto del repo** | `internal/manifest` | `aval.yaml`: `version: 1`, `context`, `mode: observe\|enforce`, `tierDefault`, `openspec.version`, `paths.{dx,feat,seam}`. Schema en `internal/manifest/schema/aval.v1.json` |
 | **Manifiesto del change** | `internal/manifest` | `openspec/changes/<id>/aval.yaml`: `version: 1`, `tier`, `owner`. Schema en `internal/manifest/schema/change.v1.json` |
-| **Bundle de evidencia** | `internal/evidence` | JSON con `schemaVersion: 1`. Schema en `internal/evidence/schema/bundle.v1.json` y golden en `internal/evidence/testdata/` |
+| **Bundle de evidencia** | `internal/evidence` | JSON con `schemaVersion: 2` desde ADR-0005 (v1 tenía `override`; v2 tiene `approvals`). Schema en `internal/evidence/schema/bundle.v2.json` y golden en `internal/evidence/testdata/` |
+| **Baseline** | `internal/baseline` | `.aval/baseline.json`: `version: 1`, `failing: [{package, test}]` (ADR-0005 §7). Schema en `internal/baseline/schema/baseline.v1.json` |
 | **Envelope de `--json`** | `internal/envelope` (sin Charm, ADR-0003) | `{schemaVersion, command, ok, data, errors[{code, message, hint}]}`. `errors` es siempre un array, también en los fallos. Con `ok: false`, `data` trae el resultado si el comando lo produjo y falló sus comprobaciones (p. ej. `aval trace`), y es `null` si no llegó a producirlo |
 | **Códigos de salida** | `internal/cli` | 0 OK · 1 verificación o gate fallido · 2 uso (también un manifiesto inválido) · 3 herramienta ausente o con versión distinta |
 | **Bloques gestionados** | `internal/profile` (M4) | Marcadores con versión del perfil: `<!-- aval:begin profile=1 -->` / `# aval:begin profile=1`. Nunca `OPENSPEC:START/END`, porque OpenSpec los borra |
@@ -36,14 +37,14 @@ Cada contrato vive en el paquete del concepto que representa, con tipos Go, JSON
 ### Reglas del bundle
 
 - **SHAs completos:** `base` y `head` son de 40 caracteres, y `generatedAt` es obligatorio.
-- **Listas nunca nulas:** "ningún hallazgo" se escribe `[]`, nunca `null`. El único campo que puede ser `null` es `override`.
+- **Listas nunca nulas:** "ningún hallazgo" se escribe `[]`, nunca `null`. En v1 el único campo que podía ser `null` era `override`; en v2 ninguno.
 - **Veredicto justificado:** un veredicto `warn` o `block` lleva al menos un motivo.
 - **Fuerza de la evidencia, coherente con los estados:**
 
   | Fuerza | Requiere |
   |---|---|
   | `strong` | Falla en la base y pasa en head |
-  | `weak` | No compila en la base y pasa en head |
+  | `weak` | Pasa en head y falla en la base por una causa que quizá no sea la falta del comportamiento: no compila su propio paquete de test, o head añade o modifica ficheros que no son Go ni están en `testdata/` dentro de un paquete de la obligación (en ese caso, con `note` obligatoria; ADR-0005 §2) |
   | `characterization` | Requisito marcado con `**aval**: characterization` que pasa en la base y en head |
   | `none` | Nada: es la ausencia de evidencia aceptable |
 

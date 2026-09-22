@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/svallejo-dev/aval/schema/baseline.v1.json",
+  "title": "aval baseline, version 1",
+  "description": "Unbound tests that were already failing when the repository adopted aval (.aval/baseline.json).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "failing"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "failing": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "package",
+          "test"
+        ],
+        "properties": {
+          "package": {
+            "type": "string",
+            "pattern": "^[^\\s\\p{Z}\\p{C}]+$"
+          },
+          "test": {
+            "type": "string",
+            "pattern": "^(Test|Fuzz|Example)[^\\s\\p{Z}\\p{C}]*$"
+          }
+        }
+      }
+    }
+  }
+}

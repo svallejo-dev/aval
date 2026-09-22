@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "failing": [
+    {
+      "package": "example.com/orders/internal/api",
+      "test": "TestHandlers"
+    },
+    {
+      "package": "example.com/orders/internal/order",
+      "test": "TestTotals/legacy_rounding"
+    }
+  ]
+}

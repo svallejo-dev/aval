@@ -17,15 +17,16 @@ const (
 	goldenPath = "testdata/bundle.golden.json"
 	baseSHA    = "1111111111111111111111111111111111111111"
 	headSHA    = "2222222222222222222222222222222222222222"
+	olderSHA   = "3333333333333333333333333333333333333333" // an earlier head of the same PR
 )
 
 var (
-	commitAt = time.Date(2026, 9, 21, 11, 0, 0, 0, time.UTC)
+	reviewAt = time.Date(2026, 9, 21, 11, 0, 0, 0, time.UTC)
 	genAt    = time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 )
 
 // sampleBundle is a blocked tier-1 change with one obligation of each
-// strength, a mixed commit and a rejected override.
+// strength, a mixed commit, a valid approval and a rejected override.
 func sampleBundle() Bundle {
 	return Bundle{
 		SchemaVersion: SchemaVersion,
@@ -56,8 +57,11 @@ func sampleBundle() Bundle {
 			{SHA: headSHA, Family: FamilyMixed, Families: []Family{FamilyDX, FamilyFeat}, Paths: []string{".golangci.yml", "internal/refund/refund.go"}},
 		},
 		Tamper: []Finding{{Kind: SkipAdded, ID: "ORD-N01", Detail: "t.Skip added to TestRefunds/ORD-N01_rejects_excess"}},
-		Override: &Override{Actor: "@dev", Reason: "hotfix", LabeledAt: commitAt.Add(-time.Hour), LastCommitAt: commitAt,
-			Valid: false, Rejection: "labeled before the last commit"},
+		Approvals: []Approval{
+			{Kind: ApprovalHuman, Actor: "@lead", CommitID: headSHA, SubmittedAt: reviewAt, Valid: true},
+			{Kind: ApprovalOverride, Actor: "@dev", CommitID: olderSHA, SubmittedAt: reviewAt.Add(-time.Hour), Reason: "hotfix",
+				Valid: false, Rejection: "review of an earlier commit"},
+		},
 		Verdict: Verdict{Result: ResultBlock, Reasons: []Reason{
 			{Code: "fail_before_missing", Message: "test passed at the base and the requirement is not characterization", ID: "ORD-N01"},
 			{Code: "mixed_commit", Message: "a commit touches dx and feat paths"},
@@ -108,9 +112,8 @@ func TestNilSlicesAreArrays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// override is the only field allowed to be null.
-	if n := bytes.Count(raw, []byte("null")); n != 1 {
-		t.Errorf("found %d nulls, want only the override: %s", n, raw)
+	if bytes.Contains(raw, []byte("null")) {
+		t.Errorf("found a null, want none: %s", raw)
 	}
 }
 
@@ -144,6 +147,12 @@ func TestEveryConstantIsInSchema(t *testing.T) {
 		b.Tamper[0].Kind = k
 		mustSchema(t, "finding "+string(k), b)
 	}
+	for _, k := range []ApprovalKind{ApprovalHuman, ApprovalOverride} {
+		b := sampleBundle()
+		b.Approvals[1].Kind = k
+		b.Approvals[1].Reason = ""
+		mustSchema(t, "approval kind "+string(k), b)
+	}
 	for _, r := range []Result{ResultPass, ResultWarn, ResultBlock} {
 		b := sampleBundle()
 		b.Verdict.Result = r
@@ -172,7 +181,8 @@ func TestValidate(t *testing.T) {
 		wantErr string // "" means valid
 	}{
 		{name: "sample is valid", mutate: func(*Bundle) {}},
-		{name: "wrong schema version", mutate: func(b *Bundle) { b.SchemaVersion = 2 }, wantErr: "schema"},
+		{name: "v1 schema version", mutate: func(b *Bundle) { b.SchemaVersion = 1 }, wantErr: "schema"},
+		{name: "future schema version", mutate: func(b *Bundle) { b.SchemaVersion = 3 }, wantErr: "schema"},
 		{name: "short head sha", mutate: func(b *Bundle) { b.Head = "2222222" }, wantErr: "schema"},
 		{name: "invalid base sha", mutate: func(b *Bundle) { b.Base = "not-a-sha" }, wantErr: "schema"},
 		{name: "unknown mode", mutate: func(b *Bundle) { b.Mode = "audit" }, wantErr: "schema"},
@@ -189,40 +199,49 @@ func TestValidate(t *testing.T) {
 		{name: "empty check name", mutate: func(b *Bundle) { b.Checks[0].Name = "" }, wantErr: "schema"},
 		{name: "strong without fail before", mutate: func(b *Bundle) { b.Obligations[0].Before = Pass }, wantErr: "strong needs"},
 		{name: "strong without pass after", mutate: func(b *Bundle) { b.Obligations[0].After = Fail }, wantErr: "strong needs"},
-		{name: "weak without build fail", mutate: func(b *Bundle) { b.Obligations[1].Before = Fail }, wantErr: "weak needs"},
+		{name: "weak failing at the base with a note", mutate: func(b *Bundle) { b.Obligations[1].Before = Fail }},
+		{name: "weak failing at the base without a note", mutate: func(b *Bundle) {
+			b.Obligations[1].Before, b.Obligations[1].Note = Fail, ""
+		}, wantErr: "needs a note"},
+		{name: "weak passing at the base", mutate: func(b *Bundle) { b.Obligations[1].Before = Pass }, wantErr: "weak needs"},
+		{name: "weak not passing at head", mutate: func(b *Bundle) { b.Obligations[1].After = Fail }, wantErr: "weak needs"},
 		{name: "characterization not declared", mutate: func(b *Bundle) { b.Obligations[2].Characterization = false }, wantErr: "characterization strength"},
 		{name: "strong on unchanged obligation", mutate: func(b *Bundle) { b.Obligations[0].Delta = Unchanged }, wantErr: "only applies to added or modified"},
 		{name: "mixed without families", mutate: func(b *Bundle) { b.Scope[0].Families = nil }, wantErr: "mixed"},
 		{name: "families on a feat commit", mutate: func(b *Bundle) { b.Scope[0].Family = FamilyFeat }, wantErr: "mixed"},
-		{name: "override without actor", mutate: func(b *Bundle) { b.Override.Actor = "" }, wantErr: "schema"},
-		{name: "rejected override without reason is recordable", mutate: func(b *Bundle) {
-			b.Override.Reason, b.Override.Rejection = "", "no reason given"
+		{name: "approval without actor", mutate: func(b *Bundle) { b.Approvals[0].Actor = "" }, wantErr: "schema"},
+		{name: "approval with a short commit id", mutate: func(b *Bundle) { b.Approvals[0].CommitID = "2222222" }, wantErr: "schema"},
+		{name: "unknown approval kind", mutate: func(b *Bundle) { b.Approvals[0].Kind = "label" }, wantErr: "schema"},
+		{name: "approval without submittedAt", mutate: func(b *Bundle) { b.Approvals[0].SubmittedAt = time.Time{} }, wantErr: "submittedAt"},
+		{name: "valid approval with a rejection", mutate: func(b *Bundle) { b.Approvals[0].Rejection = "stale" }, wantErr: "no rejection"},
+		{name: "human approval with a reason", mutate: func(b *Bundle) { b.Approvals[0].Reason = "because" }, wantErr: "only an override"},
+		{name: "valid approval of an earlier commit", mutate: func(b *Bundle) { b.Approvals[0].CommitID = olderSHA }, wantErr: "head commit"},
+		{name: "rejected approval of an earlier commit", mutate: func(b *Bundle) {
+			b.Approvals[0].CommitID, b.Approvals[0].Valid, b.Approvals[0].Rejection = olderSHA, false, "review of an earlier commit"
 		}},
+		{name: "rejected override without rejection", mutate: func(b *Bundle) { b.Approvals[1].Rejection = "" }, wantErr: "rejection reason"},
+		{name: "rejected override without reason is recordable", mutate: func(b *Bundle) {
+			b.Approvals[1].Reason, b.Approvals[1].Rejection = "", "no reason given"
+		}},
+		{name: "valid override of an earlier commit", mutate: func(b *Bundle) {
+			b.Approvals[1].Valid, b.Approvals[1].Rejection = true, ""
+		}, wantErr: "head commit"},
 		{name: "valid override without reason", mutate: func(b *Bundle) {
-			b.Override.Valid, b.Override.Rejection, b.Override.Reason = true, "", ""
-			b.Override.LabeledAt = commitAt.Add(time.Minute)
-		}, wantErr: "reason"},
-		{name: "valid override with a rejection", mutate: func(b *Bundle) {
-			b.Override.Valid, b.Override.LabeledAt = true, commitAt.Add(time.Minute)
-		}, wantErr: "no rejection"},
-		{name: "valid override labeled at the last commit time", mutate: func(b *Bundle) {
-			b.Override.Valid, b.Override.Rejection, b.Override.LabeledAt = true, "", commitAt
-		}, wantErr: "after a known last commit"},
-		{name: "valid override with unknown last commit", mutate: func(b *Bundle) {
-			b.Override.Valid, b.Override.Rejection, b.Override.LastCommitAt = true, "", time.Time{}
-		}, wantErr: "after a known last commit"},
+			b.Approvals[1].Valid, b.Approvals[1].Rejection, b.Approvals[1].CommitID, b.Approvals[1].Reason = true, "", headSHA, ""
+		}, wantErr: "needs a reason"},
+		{name: "valid override of the head commit", mutate: func(b *Bundle) {
+			b.Approvals[1].Valid, b.Approvals[1].Rejection, b.Approvals[1].CommitID = true, "", headSHA
+		}},
+		{name: "no approvals", mutate: func(b *Bundle) { b.Approvals = nil }},
 		{name: "characterization failing before", mutate: func(b *Bundle) { b.Obligations[2].Before = Fail }, wantErr: "characterization strength"},
 		{name: "characterization failing after", mutate: func(b *Bundle) { b.Obligations[2].After = Fail }, wantErr: "characterization strength"},
 		{name: "kind letter mismatch", mutate: func(b *Bundle) { b.Obligations[0].Kind = "N" }, wantErr: "kind letter"},
 		{name: "duplicate families", mutate: func(b *Bundle) { b.Scope[0].Families = []Family{FamilyFeat, FamilyFeat} }, wantErr: "schema"},
-		{name: "rejected override without rejection", mutate: func(b *Bundle) { b.Override.Rejection = "" }, wantErr: "rejection reason"},
-		{name: "valid override labeled before last commit", mutate: func(b *Bundle) {
-			b.Override.Valid, b.Override.Rejection = true, ""
-		}, wantErr: "after a known last commit"},
-		{name: "valid override labeled after last commit", mutate: func(b *Bundle) {
-			b.Override.Valid, b.Override.Rejection, b.Override.LabeledAt = true, "", commitAt.Add(time.Minute)
-		}},
-		{name: "no override", mutate: func(b *Bundle) { b.Override = nil }},
+		{name: "mixed from seam and other", mutate: func(b *Bundle) { b.Scope[0].Families = []Family{FamilySeam, FamilyOther} }, wantErr: "[dx feat]"},
+		{name: "mixed with families out of order", mutate: func(b *Bundle) { b.Scope[0].Families = []Family{FamilyFeat, FamilyDX} }, wantErr: "[dx feat]"},
+		{name: "mixed with a third family", mutate: func(b *Bundle) {
+			b.Scope[0].Families = []Family{FamilyDX, FamilyFeat, FamilySeam}
+		}, wantErr: "[dx feat]"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -256,7 +275,16 @@ func TestSchemaIsClosed(t *testing.T) {
 		mutate func(map[string]any)
 	}{
 		{"unknown top-level field", func(m map[string]any) { m["trusted"] = true }},
-		{"override missing", func(m map[string]any) { delete(m, "override") }},
+		{"approvals missing", func(m map[string]any) { delete(m, "approvals") }},
+		{"approvals null", func(m map[string]any) { m["approvals"] = nil }},
+		{"v1 override field", func(m map[string]any) { m["override"] = nil }},
+		{"unknown approval field", func(m map[string]any) {
+			if list, ok := m["approvals"].([]any); ok {
+				if first, ok := list[0].(map[string]any); ok {
+					first["trusted"] = true
+				}
+			}
+		}},
 		{"verdict missing", func(m map[string]any) { delete(m, "verdict") }},
 	} {
 		var m map[string]any
@@ -283,5 +311,96 @@ func TestCheckHead(t *testing.T) {
 	}
 	if err := b.CheckHead(baseSHA); !errors.Is(err, ErrInvalid) {
 		t.Errorf("CheckHead(other) = %v, want ErrInvalid", err)
+	}
+}
+
+// TestSchemaEnforcesApprovalRules: the approval rules the schema can express
+// hold in the schema itself, not only in Go (ADR-0004: one source of truth).
+func TestSchemaEnforcesApprovalRules(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*Approval)
+	}{
+		{"valid with a rejection", func(a *Approval) { a.Valid, a.Rejection = true, "stale" }},
+		{"rejected without rejection", func(a *Approval) { a.Valid, a.Rejection = false, "" }},
+		{"human approval with a reason", func(a *Approval) { a.Kind, a.Reason = ApprovalHuman, "because" }},
+		{"valid override without reason", func(a *Approval) {
+			a.Kind, a.Valid, a.Rejection, a.Reason = ApprovalOverride, true, "", ""
+		}},
+	} {
+		b := sampleBundle()
+		b.Approvals[1].CommitID = headSHA
+		tc.mutate(&b.Approvals[1])
+		if err := validateSchema(b); err == nil {
+			t.Errorf("%s: schema accepted it", tc.name)
+		}
+	}
+}
+
+func TestParse(t *testing.T) {
+	t.Parallel()
+
+	golden, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := Parse(bytes.NewReader(golden))
+	if err != nil {
+		t.Fatalf("Parse(golden): %v", err)
+	}
+	if again, _ := json.MarshalIndent(b, "", "  "); !bytes.Equal(append(again, '\n'), golden) {
+		t.Errorf("golden does not round-trip through Parse:\n%s", again)
+	}
+
+	// Each case is valid once re-encoded, so only a check of the raw bytes
+	// catches it.
+	for _, tc := range []struct {
+		name string
+		edit func(string) string
+	}{
+		{"unknown field", func(s string) string { return strings.Replace(s, `"repo":`, `"trusted": true, "repo":`, 1) }},
+		{"v1 override field", func(s string) string { return strings.Replace(s, `"approvals":`, `"override": null, "approvals":`, 1) }},
+		{"empty reason on a rejected override", func(s string) string {
+			return strings.Replace(s, `"reason": "hotfix"`, `"reason": ""`, 1)
+		}},
+		{"empty rejection on a valid approval", func(s string) string {
+			return strings.Replace(s, `"valid": true`, `"valid": true, "rejection": ""`, 1)
+		}},
+		{"duplicate head", func(s string) string {
+			return strings.Replace(s, `"head":`, `"head": "`+olderSHA+`", "head":`, 1)
+		}},
+		{"trailing data", func(s string) string { return s + "{}" }},
+	} {
+		edited := tc.edit(string(golden))
+		if edited == string(golden) {
+			t.Fatalf("%s: the edit did not apply", tc.name)
+		}
+		if _, err := Parse(strings.NewReader(edited)); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: Parse = %v, want ErrInvalid", tc.name, err)
+		}
+	}
+	if _, err := Parse(bytes.NewReader(append(golden, bytes.Repeat([]byte(" "), maxBundleBytes)...))); !errors.Is(err, ErrInvalid) {
+		t.Errorf("oversized bundle: Parse = %v, want ErrInvalid", err)
+	}
+}
+
+// TestSchemaEnforcesMixedRule: mixed means exactly [dx feat] in the schema
+// too, not only in Go.
+func TestSchemaEnforcesMixedRule(t *testing.T) {
+	t.Parallel()
+
+	for name, c := range map[string]Commit{
+		"mixed without families":  {SHA: headSHA, Family: FamilyMixed},
+		"mixed from seam and dx":  {SHA: headSHA, Family: FamilyMixed, Families: []Family{FamilyDX, FamilySeam}},
+		"mixed out of order":      {SHA: headSHA, Family: FamilyMixed, Families: []Family{FamilyFeat, FamilyDX}},
+		"families on a dx commit": {SHA: headSHA, Family: FamilyDX, Families: []Family{FamilyDX, FamilyFeat}},
+	} {
+		b := sampleBundle()
+		b.Scope[0] = c
+		if err := validateSchema(b); err == nil {
+			t.Errorf("%s: schema accepted it", name)
+		}
 	}
 }
