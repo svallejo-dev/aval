@@ -5,11 +5,15 @@ package cli
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
-	"slices"
+	"os"
+	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/svallejo-dev/aval/internal/envelope"
+	"github.com/svallejo-dev/aval/internal/ui"
 )
 
 // globalFlags are inherited by every subcommand.
@@ -18,6 +22,22 @@ type globalFlags struct {
 	plain       bool
 	yes         bool
 	noAnimation bool
+}
+
+// printer resolves the output settings once cobra has parsed the flags and
+// returns a printer for cmd's streams. The mode follows stdout, where results go.
+func (g *globalFlags) printer(cmd *cobra.Command) *ui.Printer {
+	stdout := cmd.OutOrStdout()
+	s := ui.Resolve(ui.Input{
+		Getenv:         os.Getenv,
+		JSON:           g.json,
+		Plain:          g.plain,
+		Yes:            g.yes,
+		NoAnimation:    g.noAnimation,
+		OutputTerminal: ui.IsTerminal(stdout),
+		StdinTerminal:  ui.IsTerminal(cmd.InOrStdin()),
+	})
+	return ui.NewPrinter(s, stdout, cmd.ErrOrStderr())
 }
 
 func newRootCmd(stdout, stderr io.Writer) *cobra.Command {
@@ -96,17 +116,49 @@ func execute(ctx context.Context, root *cobra.Command, args []string, stdout, st
 		}
 	}
 
-	// Flag parsing may have failed before --json was bound, so read it from args.
-	if wantsJSON(args) {
-		writeErrorEnvelope(stdout, stderr, commandName(root, args), code, err)
-		return code
-	}
-	fmt.Fprintln(stderr, "aval:", err)
+	s := errorSettings(args, ui.IsTerminal(stderr), os.Getenv)
+	ui.NewPrinter(s, stdout, stderr).PrintError(commandName(root, args), envelope.Issue{
+		Code:    errorCode(code),
+		Message: err.Error(),
+	})
 	return code
 }
 
-func wantsJSON(args []string) bool {
-	return slices.Contains(args, "--json") || slices.Contains(args, "--json=true")
+// errorSettings resolves how execute reports an error. Flag parsing may have
+// failed before cobra bound the flags, so --json and --plain are read from
+// args. The message goes to stderr, so the mode follows stderr, except in json
+// mode, where the envelope goes to stdout. Reporting an error never prompts.
+func errorSettings(args []string, stderrTerminal bool, getenv func(string) string) ui.Settings {
+	return ui.Resolve(ui.Input{
+		Getenv:         getenv,
+		JSON:           boolFlag(args, "json"),
+		Plain:          boolFlag(args, "plain"),
+		OutputTerminal: stderrTerminal,
+	})
+}
+
+// boolFlag reads the bool flag --name from args without cobra. Like pflag, it
+// accepts --name and --name=<v> for any v strconv.ParseBool accepts, the last
+// occurrence wins, and "--" ends the flags.
+func boolFlag(args []string, name string) bool {
+	on := false
+	for _, a := range args {
+		if a == "--" {
+			break
+		}
+		rest, ok := strings.CutPrefix(a, "--"+name)
+		if !ok {
+			continue
+		}
+		if rest == "" {
+			on = true
+		} else if v, ok := strings.CutPrefix(rest, "="); ok {
+			if b, err := strconv.ParseBool(v); err == nil {
+				on = b
+			}
+		}
+	}
+	return on
 }
 
 // commandName returns the subcommand args point to, or "aval".

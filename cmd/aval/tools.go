@@ -11,7 +11,6 @@ import (
 	_ "charm.land/bubbletea/v2"
 	_ "charm.land/glamour/v2"
 	_ "charm.land/huh/v2"
-	_ "charm.land/lipgloss/v2"
 	_ "github.com/getkin/kin-openapi/openapi3"
 	_ "github.com/santhosh-tekuri/jsonschema/v6"
 	_ "go.uber.org/goleak"

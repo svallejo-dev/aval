@@ -1,0 +1,5 @@
+Verification
+✓ unit tests passed
+! coverage is below its target
+✗ the gate blocked the change: obligation OBL-7 has no executed evidence
+3 verifiers in 1.2s

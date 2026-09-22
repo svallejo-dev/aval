@@ -30,3 +30,16 @@ func (e *ExitError) Unwrap() error { return e.Err }
 func usageError(err error) error {
 	return &ExitError{Code: ExitUsage, Err: err}
 }
+
+// errorCode names an exit code in the JSON envelope's errors.
+func errorCode(exitCode int) string {
+	switch exitCode {
+	case ExitFailed:
+		return "failed"
+	case ExitUsage:
+		return "usage"
+	case ExitTool:
+		return "tool"
+	}
+	return "unknown"
+}

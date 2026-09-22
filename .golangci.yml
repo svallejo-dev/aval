@@ -13,6 +13,7 @@ linters:
     - copyloopvar     # obsolete `i := i` copies (Go >= 1.22)
     - interfacebloat  # small interfaces
     - bodyclose       # HTTP response bodies are closed
+    - depguard        # agent hooks and the envelope stay free of Charm
   settings:
     errcheck:
       check-type-assertions: true
@@ -31,6 +32,23 @@ linters:
         - deferInLoop
     interfacebloat:
       max: 10
+    depguard:
+      # Exactly one named rule: with no rules at all, depguard would allow
+      # only the standard library everywhere.
+      rules:
+        charm-free:
+          files:
+            - "**/internal/envelope/**"
+            - "**/internal/hook/**"
+          deny:
+            - pkg: charm.land/
+              desc: agent hooks and the JSON envelope must not depend on Charm (ADR-0003, < 50 ms)
+            - pkg: github.com/charmbracelet/
+              desc: agent hooks and the JSON envelope must not depend on Charm (ADR-0003, < 50 ms)
+            - pkg: github.com/svallejo-dev/aval/internal/ui
+              desc: internal/ui pulls in Charm; hooks and the envelope must not import it, even indirectly (ADR-0003)
+            - pkg: github.com/svallejo-dev/aval/internal/cli
+              desc: internal/cli pulls in Charm through internal/ui (ADR-0003)
   exclusions:
     generated: strict
     presets:

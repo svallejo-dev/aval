@@ -17,7 +17,7 @@ Cada contrato vive en el paquete del concepto que representa, con tipos Go, JSON
 | **Manifiesto del repo** | `internal/manifest` | `aval.yaml`: `version: 1`, `context`, `mode: observe\|enforce`, `tierDefault`, `openspec.version`, `paths.{dx,feat,seam}`. Schema en `internal/manifest/schema/aval.v1.json` |
 | **Manifiesto del change** | `internal/manifest` | `openspec/changes/<id>/aval.yaml`: `version: 1`, `tier`, `owner`. Schema en `internal/manifest/schema/change.v1.json` |
 | **Bundle de evidencia** | `internal/evidence` | JSON con `schemaVersion: 1`. Schema en `internal/evidence/schema/bundle.v1.json` y golden en `internal/evidence/testdata/` |
-| **Envelope de `--json`** | `internal/cli` (pasará a `internal/ui`) | `{schemaVersion, command, ok, data, errors[{code, message, hint}]}`. `errors` es siempre un array, también en los fallos |
+| **Envelope de `--json`** | `internal/envelope` (sin Charm, ADR-0003) | `{schemaVersion, command, ok, data, errors[{code, message, hint}]}`. `errors` es siempre un array, también en los fallos |
 | **Códigos de salida** | `internal/cli` | 0 OK · 1 verificación o gate fallido · 2 uso (también un manifiesto inválido) · 3 herramienta ausente o con versión distinta |
 | **Bloques gestionados** | `internal/profile` (M4) | Marcadores con versión del perfil: `<!-- aval:begin profile=1 -->` / `# aval:begin profile=1`. Nunca `OPENSPEC:START/END`, porque OpenSpec los borra |
 
