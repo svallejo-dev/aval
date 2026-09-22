@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/svallejo-dev/aval/internal/envelope"
 	"github.com/svallejo-dev/aval/internal/ui"
 )
 
@@ -28,12 +29,13 @@ type globalFlags struct {
 func (g *globalFlags) printer(cmd *cobra.Command) *ui.Printer {
 	stdout := cmd.OutOrStdout()
 	s := ui.Resolve(ui.Input{
-		Getenv:      os.Getenv,
-		JSON:        g.json,
-		Plain:       g.plain,
-		Yes:         g.yes,
-		NoAnimation: g.noAnimation,
-		IsTerminal:  ui.IsTerminal(stdout),
+		Getenv:         os.Getenv,
+		JSON:           g.json,
+		Plain:          g.plain,
+		Yes:            g.yes,
+		NoAnimation:    g.noAnimation,
+		OutputTerminal: ui.IsTerminal(stdout),
+		StdinTerminal:  ui.IsTerminal(cmd.InOrStdin()),
 	})
 	return ui.NewPrinter(s, stdout, cmd.ErrOrStderr())
 }
@@ -114,20 +116,25 @@ func execute(ctx context.Context, root *cobra.Command, args []string, stdout, st
 		}
 	}
 
-	// Flag parsing may have failed before the flags were bound, so read them
-	// from args. The error goes to stderr, so the mode follows stderr, except
-	// in json mode, where the envelope goes to stdout.
-	s := ui.Resolve(ui.Input{
-		Getenv:     os.Getenv,
-		JSON:       boolFlag(args, "json"),
-		Plain:      boolFlag(args, "plain"),
-		IsTerminal: ui.IsTerminal(stderr),
-	})
-	ui.NewPrinter(s, stdout, stderr).PrintError(commandName(root, args), ui.Issue{
+	s := errorSettings(args, ui.IsTerminal(stderr), os.Getenv)
+	ui.NewPrinter(s, stdout, stderr).PrintError(commandName(root, args), envelope.Issue{
 		Code:    errorCode(code),
 		Message: err.Error(),
 	})
 	return code
+}
+
+// errorSettings resolves how execute reports an error. Flag parsing may have
+// failed before cobra bound the flags, so --json and --plain are read from
+// args. The message goes to stderr, so the mode follows stderr, except in json
+// mode, where the envelope goes to stdout. Reporting an error never prompts.
+func errorSettings(args []string, stderrTerminal bool, getenv func(string) string) ui.Settings {
+	return ui.Resolve(ui.Input{
+		Getenv:         getenv,
+		JSON:           boolFlag(args, "json"),
+		Plain:          boolFlag(args, "plain"),
+		OutputTerminal: stderrTerminal,
+	})
 }
 
 // boolFlag reads the bool flag --name from args without cobra. Like pflag, it

@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/svallejo-dev/aval/internal/envelope"
 	"github.com/svallejo-dev/aval/internal/ui"
 )
 
@@ -134,7 +135,7 @@ func TestVersionJSONEnvelope(t *testing.T) {
 		t.Fatalf("exit code = %d, stderr = %q", code, stderr.String())
 	}
 	got := decodeEnvelope(t, stdout.Bytes())
-	if got.SchemaVersion != 1 || got.Command != "version" || !got.OK {
+	if got.SchemaVersion != envelope.SchemaVersion || got.Command != "version" || !got.OK {
 		t.Errorf("envelope = %+v, want schemaVersion 1, command version, ok true", got)
 	}
 	var data versionInfo
@@ -147,11 +148,11 @@ func TestVersionJSONEnvelope(t *testing.T) {
 }
 
 type decodedEnvelope struct {
-	SchemaVersion int             `json:"schemaVersion"`
-	Command       string          `json:"command"`
-	OK            bool            `json:"ok"`
-	Data          json.RawMessage `json:"data"`
-	Errors        []ui.Issue      `json:"errors"`
+	SchemaVersion int              `json:"schemaVersion"`
+	Command       string           `json:"command"`
+	OK            bool             `json:"ok"`
+	Data          json.RawMessage  `json:"data"`
+	Errors        []envelope.Issue `json:"errors"`
 }
 
 func decodeEnvelope(t *testing.T, raw []byte) decodedEnvelope {
@@ -189,6 +190,41 @@ func TestBoolFlag(t *testing.T) {
 			t.Parallel()
 			if got := boolFlag(tt.args, "json"); got != tt.want {
 				t.Errorf("boolFlag(%q, json) = %v, want %v", tt.args, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestErrorSettings(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		args     []string
+		env      map[string]string
+		terminal bool // stderr is a terminal
+		want     ui.Mode
+		color    bool
+	}{
+		{name: "stderr not a terminal", args: []string{"version", "--nope"}, want: ui.ModePlain},
+		{name: "stderr on a terminal", args: []string{"version", "--nope"}, terminal: true, want: ui.ModeTUI, color: true},
+		{name: "NO_COLOR", args: []string{"version", "--nope"}, env: map[string]string{"NO_COLOR": "1"}, terminal: true, want: ui.ModeTUI},
+		{name: "CI", args: []string{"version", "--nope"}, env: map[string]string{"CI": "true"}, terminal: true, want: ui.ModePlain},
+		{name: "json", args: []string{"version", "--json", "--nope"}, terminal: true, want: ui.ModeJSON},
+		{name: "json=1", args: []string{"version", "--json=1", "--nope"}, want: ui.ModeJSON},
+		{name: "json=false", args: []string{"version", "--json=false", "--nope"}, terminal: true, want: ui.ModeTUI, color: true},
+		{name: "plain", args: []string{"version", "--plain", "--nope"}, terminal: true, want: ui.ModePlain},
+		{name: "plain=true", args: []string{"version", "--plain=true", "--nope"}, terminal: true, want: ui.ModePlain},
+		{name: "plain=0", args: []string{"version", "--plain=0", "--nope"}, terminal: true, want: ui.ModeTUI, color: true},
+		{name: "json wins over plain", args: []string{"version", "--plain", "--json"}, terminal: true, want: ui.ModeJSON},
+		{name: "flags after -- are arguments", args: []string{"version", "--", "--json", "--plain"}, terminal: true, want: ui.ModeTUI, color: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := errorSettings(tt.args, tt.terminal, func(key string) string { return tt.env[key] })
+			if got.Mode != tt.want || got.Color != tt.color || got.Prompt {
+				t.Errorf("errorSettings(%q, %v) = %+v, want mode %v, color %v and never a prompt", tt.args, tt.terminal, got, tt.want, tt.color)
 			}
 		})
 	}

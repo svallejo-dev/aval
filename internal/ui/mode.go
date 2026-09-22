@@ -4,9 +4,9 @@
 package ui
 
 import (
-	"io"
-	"os"
 	"strconv"
+
+	"github.com/charmbracelet/x/term"
 )
 
 // Mode is how aval writes its output.
@@ -38,12 +38,13 @@ func (m Mode) String() string {
 type Input struct {
 	// Getenv looks up an environment variable; os.Getenv in production.
 	// Nil means an empty environment.
-	Getenv      func(key string) string
-	JSON        bool // --json
-	Plain       bool // --plain
-	Yes         bool // --yes
-	NoAnimation bool // --no-animation
-	IsTerminal  bool // the output stream is a terminal
+	Getenv         func(key string) string
+	JSON           bool // --json
+	Plain          bool // --plain
+	Yes            bool // --yes
+	NoAnimation    bool // --no-animation
+	OutputTerminal bool // the stream the output goes to is a terminal
+	StdinTerminal  bool // stdin is a terminal, so someone can answer
 }
 
 // Settings is the resolved output behaviour of one invocation.
@@ -59,8 +60,8 @@ type Settings struct {
 // The mode is json with --json; otherwise plain with --plain, when the output
 // is not a terminal, when CI is true or when TERM=dumb; otherwise tui. Color,
 // animation and prompting exist only in tui: NO_COLOR turns color off,
-// --no-animation and AVAL_REDUCED_MOTION turn animation off, and --yes turns
-// prompting off. Like NO_COLOR (https://no-color.org), a variable counts as
+// --no-animation and AVAL_REDUCED_MOTION turn animation off, and prompting
+// also needs a terminal on stdin and no --yes. Like NO_COLOR (https://no-color.org), a variable counts as
 // set when it is present and not empty.
 func Resolve(in Input) Settings {
 	getenv := in.Getenv
@@ -73,23 +74,21 @@ func Resolve(in Input) Settings {
 	switch {
 	case in.JSON:
 		s.Mode = ModeJSON
-	case in.Plain, !in.IsTerminal, ci, getenv("TERM") == "dumb":
+	case in.Plain, !in.OutputTerminal, ci, getenv("TERM") == "dumb":
 		s.Mode = ModePlain
 	}
 	tui := s.Mode == ModeTUI
 	s.Color = tui && getenv("NO_COLOR") == ""
 	s.Animation = tui && !in.NoAnimation && getenv("AVAL_REDUCED_MOTION") == ""
-	s.Prompt = tui && !in.Yes
+	s.Prompt = tui && in.StdinTerminal && !in.Yes
 	return s
 }
 
-// IsTerminal reports whether w is a terminal (a character device), such as
-// os.Stdout when nothing redirects it. Buffers, pipes and files are not.
-func IsTerminal(w io.Writer) bool {
-	f, ok := w.(interface{ Stat() (os.FileInfo, error) })
-	if !ok {
-		return false
-	}
-	fi, err := f.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+// IsTerminal reports whether stream, typically an *os.File such as os.Stdin
+// or os.Stdout, is a terminal. It asks the terminal driver (an ioctl), so
+// /dev/null, pipes and files are not terminals, and neither is anything
+// without a file descriptor, such as a buffer.
+func IsTerminal(stream any) bool {
+	f, ok := stream.(interface{ Fd() uintptr })
+	return ok && term.IsTerminal(f.Fd())
 }

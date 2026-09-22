@@ -1,4 +1,7 @@
-package ui
+// Package envelope defines the JSON contract aval emits with --json, on
+// success and on failure. It depends only on the standard library, so agent
+// hooks can emit it within their latency budget (ADR-0003).
+package envelope
 
 import (
 	"encoding/json"
@@ -6,9 +9,11 @@ import (
 	"io"
 )
 
-// envelope is the JSON contract every command emits with --json, on success
-// and on failure. errors is always an array, never null.
-type envelope struct {
+// SchemaVersion is the version of the contract Write emits.
+const SchemaVersion = 1
+
+// Envelope is the JSON document every command emits with --json.
+type Envelope struct {
 	SchemaVersion int     `json:"schemaVersion"`
 	Command       string  `json:"command"`
 	OK            bool    `json:"ok"`
@@ -24,8 +29,10 @@ type Issue struct {
 	Hint    string `json:"hint,omitempty"` // what to do about it, if known
 }
 
-func writeEnvelope(w io.Writer, e envelope) error {
-	e.SchemaVersion = 1
+// Write encodes e to w as indented JSON. It stamps SchemaVersion and turns nil
+// errors into an empty array, so errors is never null.
+func Write(w io.Writer, e Envelope) error {
+	e.SchemaVersion = SchemaVersion
 	if e.Errors == nil {
 		e.Errors = []Issue{}
 	}

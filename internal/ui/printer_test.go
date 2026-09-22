@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/svallejo-dev/aval/internal/envelope"
 )
 
 var update = flag.Bool("update", false, "rewrite the golden files in testdata")
@@ -31,7 +33,7 @@ var (
 			{{Text: "3 verifiers in 1.2s", Tone: ToneMuted}},
 		},
 	}
-	sampleIssue = Issue{Code: "tool", Message: "openspec 1.12.0 found, want 1.13.1", Hint: "install openspec 1.13.1"}
+	sampleIssue = envelope.Issue{Code: "tool", Message: "openspec 1.12.0 found, want 1.13.1", Hint: "install openspec 1.13.1"}
 )
 
 // TestPrinterGolden pins each mode's output. The tui cases keep Color false:

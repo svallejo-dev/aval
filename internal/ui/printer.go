@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+
+	"github.com/svallejo-dev/aval/internal/envelope"
 )
 
 // Tone is the role of a piece of text. The tui mode maps each tone to a style
@@ -71,7 +73,10 @@ func NewPrinter(s Settings, stdout, stderr io.Writer, opts ...Option) *Printer {
 // Print writes r: its envelope in json mode, its lines otherwise.
 func (p *Printer) Print(r Result) error {
 	if p.settings.Mode == ModeJSON {
-		return writeEnvelope(p.stdout, envelope{Command: r.Command, OK: true, Data: r.Data})
+		if err := envelope.Write(p.stdout, envelope.Envelope{Command: r.Command, OK: true, Data: r.Data}); err != nil {
+			return fmt.Errorf("write output: %w", err)
+		}
+		return nil
 	}
 	return p.writeLines(p.stdout, r.Lines)
 }
@@ -80,9 +85,10 @@ func (p *Printer) Print(r Result) error {
 // json mode, with "aval: <message>" on stderr otherwise. It is the last thing
 // an invocation writes, so it has nowhere to report its own failure; if the
 // envelope cannot be written it falls back to stderr.
-func (p *Printer) PrintError(command string, is Issue) {
+func (p *Printer) PrintError(command string, is envelope.Issue) {
 	if p.settings.Mode == ModeJSON {
-		if writeEnvelope(p.stdout, envelope{Command: command, Errors: []Issue{is}}) == nil {
+		e := envelope.Envelope{Command: command, Errors: []envelope.Issue{is}}
+		if envelope.Write(p.stdout, e) == nil {
 			return
 		}
 	}
