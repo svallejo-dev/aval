@@ -12,6 +12,7 @@ import (
 	"regexp"
 
 	"github.com/bmatcuk/doublestar/v4"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -74,7 +75,7 @@ var (
 // ParseRepo decodes and validates a repository manifest.
 func ParseRepo(r io.Reader) (Repo, error) {
 	var m Repo
-	if err := decodeStrict(r, &m); err != nil {
+	if err := decodeStrict(r, repoSchema, &m); err != nil {
 		return Repo{}, fmt.Errorf("aval.yaml: %w", err)
 	}
 	if err := m.Validate(); err != nil {
@@ -86,7 +87,7 @@ func ParseRepo(r io.Reader) (Repo, error) {
 // ParseChange decodes and validates a per-change manifest.
 func ParseChange(r io.Reader) (Change, error) {
 	var c Change
-	if err := decodeStrict(r, &c); err != nil {
+	if err := decodeStrict(r, changeSchema, &c); err != nil {
 		return Change{}, fmt.Errorf("change manifest: %w", err)
 	}
 	if err := c.Validate(); err != nil {
@@ -139,7 +140,10 @@ func (p Paths) validate() []error {
 			if !doublestar.ValidatePattern(pat) {
 				errs = append(errs, fmt.Errorf("paths.%s: %q is not a valid glob", f.name, pat))
 			}
-			if other, dup := seen[pat]; dup {
+			switch other, dup := seen[pat]; {
+			case dup && other == f.name:
+				errs = append(errs, fmt.Errorf("paths.%s: %q is repeated", f.name, pat))
+			case dup:
 				errs = append(errs, fmt.Errorf("paths: %q appears in both %s and %s", pat, other, f.name))
 			}
 			seen[pat] = f.name
@@ -163,24 +167,45 @@ func (c Change) Validate() error {
 	return nil
 }
 
-// decodeStrict decodes a single YAML document, rejecting unknown fields,
-// empty input and trailing documents.
-func decodeStrict(r io.Reader, v any) error {
-	data, err := io.ReadAll(io.LimitReader(r, 1<<20))
+// maxManifestBytes caps a manifest's size. Larger input is an error, never
+// silently truncated: truncation could drop a field after the cut.
+const maxManifestBytes = 1 << 20
+
+// decodeStrict reads exactly one YAML document, validates it against the
+// manifest's JSON Schema (types, required fields, no nulls, no floats in
+// integer fields) and then decodes it into v rejecting unknown fields.
+func decodeStrict(r io.Reader, schema func() (*jsonschema.Schema, error), v any) error {
+	data, err := io.ReadAll(io.LimitReader(r, maxManifestBytes+1))
 	if err != nil {
 		return fmt.Errorf("read: %w", err)
 	}
-	if len(bytes.TrimSpace(data)) == 0 {
-		return fmt.Errorf("%w: empty document", ErrInvalid)
+	if len(data) > maxManifestBytes {
+		return fmt.Errorf("%w: larger than %d bytes", ErrInvalid, maxManifestBytes)
 	}
+
+	var doc any
 	dec := yaml.NewDecoder(bytes.NewReader(data))
-	dec.KnownFields(true)
-	if err := dec.Decode(v); err != nil {
+	if err := dec.Decode(&doc); err != nil {
+		if errors.Is(err, io.EOF) {
+			return fmt.Errorf("%w: empty document", ErrInvalid)
+		}
 		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	var extra any
 	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
 		return fmt.Errorf("%w: exactly one YAML document is allowed", ErrInvalid)
+	}
+	if doc == nil {
+		return fmt.Errorf("%w: empty document", ErrInvalid)
+	}
+	if err := validateDoc(schema, doc); err != nil {
+		return err
+	}
+
+	typed := yaml.NewDecoder(bytes.NewReader(data))
+	typed.KnownFields(true)
+	if err := typed.Decode(v); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	return nil
 }

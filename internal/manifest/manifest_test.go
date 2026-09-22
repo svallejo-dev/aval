@@ -23,45 +23,57 @@ paths:
   seam: ["internal/app/app.go"]
 `
 
+// parityCase is one manifest document. valid is what Parse must say; goOnly
+// marks documents the JSON Schema accepts but a Go-only rule rejects. Every
+// other document must get the same answer from Parse and from the schema.
+type parityCase struct {
+	name       string
+	yaml       string
+	valid      bool
+	goOnly     bool
+	wantErr    string // substring required in Go-only errors
+	skipSchema bool   // input the schema check cannot even load (oversized)
+}
+
+func repoWith(old, repl string) string { return strings.Replace(validRepo, old, repl, 1) }
+
 func TestParseRepo(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name        string
-		yaml        string
-		wantGoErr   string // substring; "" means valid for Go
-		schemaValid bool   // what the JSON Schema should say
-	}{
-		{name: "valid", yaml: validRepo, schemaValid: true},
-		{name: "unknown field", yaml: validRepo + "strict: false\n", wantGoErr: "field strict not found", schemaValid: false},
-		{name: "wrong version", yaml: strings.Replace(validRepo, "version: 1\n", "version: 2\n", 1), wantGoErr: "version: got 2", schemaValid: false},
-		{name: "lower-case context", yaml: strings.Replace(validRepo, "context: ORD", "context: ord", 1), wantGoErr: "context:", schemaValid: false},
-		{name: "unknown mode", yaml: strings.Replace(validRepo, "mode: observe", "mode: audit", 1), wantGoErr: "mode:", schemaValid: false},
-		{name: "tier out of range", yaml: strings.Replace(validRepo, "tierDefault: 1", "tierDefault: 4", 1), wantGoErr: "tierDefault:", schemaValid: false},
-		{name: "loose openspec version", yaml: strings.Replace(validRepo, "version: 1.13.1", "version: ^1.13", 1), wantGoErr: "openspec.version:", schemaValid: false},
-		{name: "missing feat paths", yaml: strings.Replace(validRepo, `  feat: ["internal/**", "api/**", "openspec/**"]`+"\n", "", 1), wantGoErr: "paths.feat:", schemaValid: false},
-		// Rules only Go can check: glob syntax and a pattern shared by two families.
-		{name: "invalid glob", yaml: strings.Replace(validRepo, `"cmd/**"`, `"cmd/[**"`, 1), wantGoErr: "not a valid glob", schemaValid: true},
-		{name: "pattern in two families", yaml: strings.Replace(validRepo, `"api/**"`, `"Makefile"`, 1), wantGoErr: "appears in both dx and feat", schemaValid: true},
-		{name: "two documents", yaml: validRepo + "---\n" + validRepo, wantGoErr: "exactly one YAML document", schemaValid: true},
-		{name: "empty", yaml: "  \n", wantGoErr: "empty document", schemaValid: false},
+	tests := []parityCase{
+		{name: "valid", yaml: validRepo, valid: true},
+		{name: "seam omitted", yaml: repoWith(`  seam: ["internal/app/app.go"]`+"\n", ""), valid: true},
+		{name: "unknown field", yaml: validRepo + "strict: false\n"},
+		{name: "wrong version", yaml: repoWith("version: 1\n", "version: 2\n")},
+		{name: "version as string", yaml: repoWith("version: 1\n", "version: \"1\"\n")},
+		{name: "version as float", yaml: repoWith("version: 1\n", "version: 1.9\n")},
+		{name: "lower-case context", yaml: repoWith("context: ORD", "context: ord")},
+		{name: "unknown mode", yaml: repoWith("mode: observe", "mode: audit")},
+		{name: "tier out of range", yaml: repoWith("tierDefault: 1", "tierDefault: 4")},
+		{name: "tier missing", yaml: repoWith("tierDefault: 1\n", "")},
+		{name: "tier null", yaml: repoWith("tierDefault: 1", "tierDefault: null")},
+		{name: "tier as float", yaml: repoWith("tierDefault: 1", "tierDefault: 0.99")},
+		{name: "loose openspec version", yaml: repoWith("version: 1.13.1", "version: ^1.13")},
+		{name: "missing feat paths", yaml: repoWith(`  feat: ["internal/**", "api/**", "openspec/**"]`+"\n", "")},
+		{name: "empty dx list", yaml: repoWith(`["Makefile", ".github/**", "cmd/**", "internal/platform/**"]`, "[]")},
+		{name: "empty glob", yaml: repoWith(`"Makefile"`, `""`)},
+		{name: "numeric glob", yaml: repoWith(`"Makefile"`, `123`)},
+		{name: "seam null", yaml: repoWith(`seam: ["internal/app/app.go"]`, "seam: null")},
+		{name: "invalid glob", yaml: repoWith(`"cmd/**"`, `"cmd/[**"`), goOnly: true, wantErr: "not a valid glob"},
+		{name: "pattern in two families", yaml: repoWith(`"api/**"`, `"Makefile"`), goOnly: true, wantErr: "appears in both dx and feat"},
+		{name: "pattern repeated in a family", yaml: repoWith(`"cmd/**"`, `"Makefile"`), goOnly: true, wantErr: "paths.dx: \"Makefile\" is repeated"},
+		{name: "two documents", yaml: validRepo + "---\n" + validRepo, goOnly: true, wantErr: "exactly one YAML document"},
+		{name: "blank", yaml: "  \n", wantErr: "empty document"},
+		{name: "comments only", yaml: "# nothing here\n", wantErr: "empty document"},
+		{name: "BOM only", yaml: "\xef\xbb\xbf", wantErr: "empty document"},
+		{name: "oversized", yaml: validRepo + "#" + strings.Repeat("x", maxManifestBytes), wantErr: "larger than", skipSchema: true},
 	}
 	sch := compileSchema(t, "aval.v1.json")
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			m, err := ParseRepo(strings.NewReader(tt.yaml))
-			switch {
-			case tt.wantGoErr == "" && err != nil:
-				t.Fatalf("ParseRepo: unexpected error: %v", err)
-			case tt.wantGoErr != "" && err == nil:
-				t.Fatalf("ParseRepo: got %+v, want error containing %q", m, tt.wantGoErr)
-			case tt.wantGoErr != "" && (!errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), tt.wantGoErr)):
-				t.Fatalf("ParseRepo error = %v, want ErrInvalid containing %q", err, tt.wantGoErr)
-			}
-			if got := schemaAccepts(t, sch, tt.yaml); got != tt.schemaValid {
-				t.Errorf("JSON Schema valid = %v, want %v", got, tt.schemaValid)
-			}
+			_, err := ParseRepo(strings.NewReader(tt.yaml))
+			assertParity(t, tt, err, sch)
 		})
 	}
 }
@@ -84,51 +96,57 @@ func TestParseRepoFields(t *testing.T) {
 func TestParseChange(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name        string
-		yaml        string
-		wantErr     bool
-		schemaValid bool
-	}{
-		{name: "tier 2 with owner", yaml: "version: 1\ntier: 2\nowner: \"@team-orders\"\n", schemaValid: true},
-		{name: "tier 0 without owner", yaml: "version: 1\ntier: 0\n", schemaValid: true},
-		{name: "tier out of range", yaml: "version: 1\ntier: 5\n", wantErr: true},
-		{name: "unknown field", yaml: "version: 1\ntier: 1\nrisk: high\n", wantErr: true},
-		{name: "missing version", yaml: "tier: 1\n", wantErr: true},
+	tests := []parityCase{
+		{name: "tier 2 with owner", yaml: "version: 1\ntier: 2\nowner: \"@team-orders\"\n", valid: true},
+		{name: "tier 0 without owner", yaml: "version: 1\ntier: 0\n", valid: true},
+		{name: "tier out of range", yaml: "version: 1\ntier: 5\n"},
+		{name: "tier missing", yaml: "version: 1\n"},
+		{name: "tier null", yaml: "version: 1\ntier: null\n"},
+		{name: "tier as float", yaml: "version: 1\ntier: 3.7\n"},
+		{name: "unknown field", yaml: "version: 1\ntier: 1\nrisk: high\n"},
+		{name: "missing version", yaml: "tier: 1\n"},
+		{name: "empty owner", yaml: "version: 1\ntier: 1\nowner: \"\"\n"},
+		{name: "null owner", yaml: "version: 1\ntier: 1\nowner: null\n"},
+		{name: "numeric owner", yaml: "version: 1\ntier: 1\nowner: 42\n"},
 	}
 	sch := compileSchema(t, "change.v1.json")
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := ParseChange(strings.NewReader(tt.yaml))
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("ParseChange error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if got := schemaAccepts(t, sch, tt.yaml); got != tt.schemaValid {
-				t.Errorf("JSON Schema valid = %v, want %v", got, tt.schemaValid)
-			}
+			assertParity(t, tt, err, sch)
 		})
+	}
+}
+
+// assertParity checks Parse's answer and that the schema file, validated
+// independently, agrees with it except for Go-only rules.
+func assertParity(t *testing.T, tt parityCase, err error, sch *jsonschema.Schema) {
+	t.Helper()
+	switch {
+	case tt.valid && err != nil:
+		t.Fatalf("Parse: unexpected error: %v", err)
+	case !tt.valid && err == nil:
+		t.Fatal("Parse: accepted an invalid document")
+	case !tt.valid && !errors.Is(err, ErrInvalid):
+		t.Fatalf("Parse error = %v, want it to wrap ErrInvalid", err)
+	case tt.wantErr != "" && !strings.Contains(err.Error(), tt.wantErr):
+		t.Fatalf("Parse error = %v, want it to contain %q", err, tt.wantErr)
+	}
+	if tt.skipSchema {
+		return
+	}
+	wantSchema := tt.valid || tt.goOnly
+	if got := schemaAccepts(t, sch, tt.yaml); got != wantSchema {
+		t.Errorf("JSON Schema accepts = %v, want %v", got, wantSchema)
 	}
 }
 
 func compileSchema(t *testing.T, name string) *jsonschema.Schema {
 	t.Helper()
-	raw, err := Schemas.ReadFile("schema/" + name)
+	sch, err := compile(name)
 	if err != nil {
-		t.Fatalf("read schema: %v", err)
-	}
-	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
-	if err != nil {
-		t.Fatalf("schema %s is not valid JSON: %v", name, err)
-	}
-	url := "https://github.com/svallejo-dev/aval/schema/" + name
-	c := jsonschema.NewCompiler()
-	if err := c.AddResource(url, doc); err != nil {
-		t.Fatalf("add schema: %v", err)
-	}
-	sch, err := c.Compile(url)
-	if err != nil {
-		t.Fatalf("compile schema %s: %v", name, err)
+		t.Fatal(err)
 	}
 	return sch
 }
@@ -137,8 +155,8 @@ func compileSchema(t *testing.T, name string) *jsonschema.Schema {
 func schemaAccepts(t *testing.T, sch *jsonschema.Schema, doc string) bool {
 	t.Helper()
 	var v any
-	if err := yaml.NewDecoder(strings.NewReader(doc)).Decode(&v); err != nil {
-		return false // not even YAML; empty documents land here too
+	if err := yaml.NewDecoder(strings.NewReader(doc)).Decode(&v); err != nil || v == nil {
+		return false // not YAML, or an empty document
 	}
 	raw, err := json.Marshal(v)
 	if err != nil {
