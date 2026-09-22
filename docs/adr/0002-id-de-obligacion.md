@@ -32,7 +32,7 @@ Las expresiones regulares son las del contrato v1, ya implementado en `internal/
 - **En Go:** el subtest empieza por el mismo ID: `t.Run("ORD-F01 Refund is idempotent", …)`.
   - test2json lo emite como `TestRefund/ORD-F01_Refund_is_idempotent`, porque Go cambia los espacios por `_` y el ID no tiene ninguno.
   - aval casa cada segmento del nombre con `^([A-Z][A-Z0-9]{1,9}-[FNISAO][0-9]{2,4})(?:_|$|#[0-9]+$)`, no con el título. El sufijo `#NN` es el que añade Go a los subtests con el nombre repetido.
-  - `go test -run 'TestRefund/^ORD-F01_'` ejecuta solo esa obligación.
+  - `go test -run '^TestRefund$/^ORD-F01([_#]|$)'` ejecuta solo esa obligación, incluidos un subtest llamado solo `ORD-F01` y sus duplicados `ORD-F01#01`.
 - **Caracterización:** si un requirement describe comportamiento que ya existía, lleva la línea de metadatos `**aval**: characterization` en su cuerpo.
 
 ## Evidencia
