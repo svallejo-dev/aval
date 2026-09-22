@@ -28,7 +28,9 @@ El gate defiende de un **agente** (o una persona) que quiere fusionar un cambio 
 
 aval informa además de cualquier edición de `.github/**`, `CODEOWNERS`, `.golangci.yml`, el `aval.yaml` raíz y `.aval/baseline.json` como `tamper` (§4). La protección fuerte, sin embargo, es la de GitHub.
 
-**Límite conocido:** un agente que opera con las credenciales de una persona actúa como esa persona. Los agentes deben usar una cuenta o token propio, sin permisos de revisión.
+**Límites conocidos de la v0:**
+- **Credenciales:** un agente que opera con las credenciales de una persona actúa como esa persona. Los agentes deben usar una cuenta o token propio, sin permisos de revisión.
+- **Runner comprometido:** el código del PR se ejecuta en el mismo runner que el gate, y en los runners de GitHub tiene sudo sin contraseña. Código malicioso que ataque al propio runner (sustituir el binario de aval, alterar ficheros entre pasos) queda fuera de lo que aval puede defender en la v0. Por eso el gate verifica en el mismo proceso, y la mitigación de fondo es ejecutar los tests en un entorno aislado del gate.
 
 ## Decisión
 
@@ -45,10 +47,10 @@ El gate trabaja sobre un rango `base..head`:
 | Política | El `aval.yaml` **raíz del SHA base**. Si no existe, el gate corre en `observe` (`no_base_policy`) |
 | Changes del PR | Directorios de `openspec/changes/<id>/` o `openspec/changes/archive/<fecha>-<id>/` que toca el diff `base..head` |
 | Tier | **max**(`tierDefault` si hay algún commit `feat` o `mixed` o algún change; el `tier` de cada change en head; el `tier` de ese mismo change en la base si ya existía). Un PR solo `dx`/`seam`/`other` y sin changes es **Tier 0**. El head puede subir el tier, nunca bajarlo |
-| Obligaciones del delta | IDs **ADDED ∪ MODIFIED ∪ REMOVED ∪ RENAMED** de esos changes. Solo las ADDED y MODIFIED (`added`/`modified`) exigen falla-antes; el resto son `unchanged` |
+| Obligaciones del delta | IDs **ADDED ∪ MODIFIED ∪ REMOVED** de esos changes. Solo las ADDED y MODIFIED (`added`/`modified`) exigen falla-antes; el resto son `unchanged`. RENAMED **no** forma parte del delta: solo cambia el título y conserva el ID, y el test no necesita cambiar |
 | Specs y reglas | `openspec.Load` en head, `Check(CheckOptions{Base})`, y el mismo `Check` en la base, para reportar solo los hallazgos **nuevos** |
 | Validación | `openspec.Validate` con la versión de la política, si el PR toca `openspec/` |
-| Declaraciones | `testsource.Scan` en base y en head; `Compare` con `changed` = los IDs del delta (incluidos REMOVED y RENAMED) |
+| Declaraciones | `testsource.Scan` en base y en head; `Compare` con `changed` = ADDED ∪ MODIFIED ∪ REMOVED. Un ID solo renombrado sigue protegido contra la manipulación |
 | Ejecución | Ejecución completa de `gotest` en head, falla-antes (§2) y regresiones aisladas (§3) |
 | Scope | §3b |
 | Aprobaciones | Reviews del PR (§5), leídas de la API de GitHub |
@@ -105,24 +107,24 @@ Cada regla incumplida añade un `Reason{Code, Message, ID}` al veredicto. Los c�
 
 | Código | Cuándo | Tier | Efecto |
 |---|---|---|---|
-| `spec_rule` | Un hallazgo de severidad error de `openspec.Check` en head **que no existía en la base** | 0–3 | block |
+| `spec_rule` | Un hallazgo de severidad error de `openspec.Check` en head **que no existía en la base**, emparejando por regla, ruta e ID, sin número de línea | 0–3 | block |
 | `openspec_invalid` | `Validate` falla (todo INFO es fallo salvo la allowlist de ADR-0002) | 0–3, si el PR toca `openspec/` | block |
-| `open_question` | Una obligación **O** en el delta | 1–3 | block |
+| `open_question` | Una obligación **O** ADDED o MODIFIED. Eliminar una O para resolverla no bloquea | 1–3 | block |
 | `unverified` | Una obligación F/N/I ADDED o MODIFIED sin test vinculado | 1–3 | block |
 | `fail_before_missing` | Falla-antes no válido (§2) | 1–3 | block |
 | `after_not_passing` | Un test **vinculado** (del delta o no) no pasa en head | 0–3 | block |
 | `regression` | Un test **no vinculado** falla en head y no figura en el baseline de la base | 0–3 | block |
 | `build_failed` | Algún paquete no compila o `go test` falla al preparar la ejecución, en head | 0–3 | block |
-| `tamper` | `testsource.Compare` devuelve un hallazgo, o el PR edita el `aval.yaml` raíz, `.aval/baseline.json`, `.github/**`, `CODEOWNERS` o `.golangci.yml` | 0–3 | block |
+| `tamper` | `testsource.Compare` devuelve un hallazgo, o el PR edita el `aval.yaml` raíz, `.aval/baseline.json`, `.github/**`, `CODEOWNERS` o `.golangci.yml`. Esas ediciones se registran como hallazgos `policy_edited` (baseline: `baseline_edited`) | 0–3 | block |
 | `undeclared_runtime` | Un test con ID se ejecuta sin declaración estática que lo empareje | 0–3 | block |
 | `mixed_commit` | Un commit `mixed` (§3b) | 0–3 | block |
 | `premortem_missing` | Un change de tier ≥ 2 sin `premortem.md` | según cada change | block |
 | `premortem_unmapped` | Un `premortem.md` sin ítems, o con un ítem que no cita ningún ID de **su** change. Ítem = elemento de lista de primer nivel, fuera de bloques de código | según cada change | block |
 | `approval_missing` | Tier 3 sin una aprobación válida (§5) | 3 | block |
 | `lint_new_issues` | golangci-lint, con **el `.golangci.yml` de la base**, informa de problemas nuevos (`issues.new-from-merge-base`) | 0–3, si la base tiene `.golangci.yml` | block |
-| `assumption` | Una obligación **A** en el delta | 1–3 | warn |
-| `slo_unverified` | Una obligación **S** en el delta (la v0 no mide SLOs) | 1–3 | warn |
-| `spec_warning` | Un hallazgo de severidad warn nuevo de `openspec.Check` | 0–3 | warn |
+| `assumption` | Una obligación **A** ADDED o MODIFIED | 1–3 | warn |
+| `slo_unverified` | Una obligación **S** ADDED o MODIFIED (la v0 no mide SLOs) | 1–3 | warn |
+| `spec_warning` | Un hallazgo de severidad warn nuevo de `openspec.Check`, emparejado igual que `spec_rule` | 0–3 | warn |
 | `seam_touched` | Un commit `feat` toca rutas `seam` | 0–3 | warn |
 | `weak_evidence` | Alguna obligación con fuerza `weak` | 1–3 | warn |
 | `no_base_policy` | El SHA base no tiene `aval.yaml` raíz (PR de adopción) | — | warn; el gate corre en `observe` |
@@ -136,7 +138,7 @@ Códigos **reservados** para hitos posteriores: `contract_breaking` y `contract_
 Las etiquetas no sirven: no se atan a un commit, y la hora de GitHub que podría anclarlas (la check suite) se puede adelantar empujando el SHA a otra rama. aval usa **reviews del PR**, que GitHub liga al commit revisado.
 
 Una aprobación es **válida** si cumple tres condiciones:
-1. es un review con `state: APPROVED` y **`commit_id` igual al SHA head**;
+1. es el **último review que no sea `COMMENTED`** de ese revisor (como hace GitHub), tiene `state: APPROVED` y **`commit_id` igual al SHA head**. Un `CHANGES_REQUESTED` o `DISMISSED` posterior la anula;
 2. su autor es un **CODEOWNER**: un usuario listado individualmente en el `CODEOWNERS` de la base para el `aval.yaml` raíz, o con `role_name` ∈ {`admin`, `maintain`} (`GET /repos/{o}/{r}/collaborators/{user}/permission`; el campo `permission` no sirve porque reporta `maintain` como `write`);
 3. GitHub ya impide que el autor del PR apruebe su propio PR.
 
@@ -167,7 +169,9 @@ Hay dos tipos:
 ### 7. Evidencia, baseline y resumen
 
 - **`aval verify`** escribe el bundle en `.aval/evidence/<head>.json` y el estado para hooks en `.aval/cache/verify-status.json` (formato de `internal/hook`), con clave `HEAD` + hash de `git diff HEAD`.
-- **`aval gate`** recalcula la evidencia en el mismo job (o reutiliza la de `verify` si `CheckHead` coincide), decide, escribe el veredicto y, en GitHub Actions, un resumen en `$GITHUB_STEP_SUMMARY`. El workflow sube el bundle como artefacto.
+- **`aval gate` en CI** (`GITHUB_ACTIONS=true`) ejecuta la verificación **en el mismo proceso** y **nunca reutiliza un bundle del disco**: el código del PR corre en el mismo runner y podría sobrescribir ficheros entre pasos, y `CheckHead` solo compara un SHA que es público.
+- **`aval gate` en local** puede reutilizar el bundle de `verify` si `CheckHead` coincide.
+- **Cierre:** el gate decide, escribe el veredicto y, en GitHub Actions, un resumen en `$GITHUB_STEP_SUMMARY`. El workflow sube el bundle como artefacto.
 
 **Bundle v2** (sube `schemaVersion`, según ADR-0004): sustituye `override` por **`approvals`**, una lista de:
 
