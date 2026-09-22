@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -74,6 +75,7 @@ func TestClassifyPaths(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			got, families := ClassifyPaths(testPaths, tt.files)
+			checkFamilies(t, evidence.Commit{Family: got, Families: families})
 			if got != tt.want || !reflect.DeepEqual(families, tt.families) {
 				t.Errorf("ClassifyPaths(%q) = %s %v, want %s %v", tt.files, got, families, tt.want, tt.families)
 			}
@@ -154,6 +156,9 @@ func TestClassifyHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, c := range got {
+		checkFamilies(t, c)
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Classify:\n got %+v\nwant %+v", got, want)
 	}
@@ -226,6 +231,9 @@ func TestClassifyMerges(t *testing.T) {
 	got, err := Classify(t.Context(), r.dir, base, "HEAD", testPaths)
 	if err != nil {
 		t.Fatal(err)
+	}
+	for _, c := range got {
+		checkFamilies(t, c)
 	}
 	// The side commit may come anywhere before the octopus merge.
 	bySHA := func(cs []evidence.Commit) map[string]evidence.Commit {
@@ -385,6 +393,17 @@ func TestClassifyErrors(t *testing.T) {
 				t.Errorf("Classify error = %v, want it to mention %q", err, tt.msg)
 			}
 		})
+	}
+}
+
+// checkFamilies asserts the bundle contract (v2 schema: const ["dx","feat"]):
+// Families is exactly [dx feat], in that order, for a mixed commit and nil
+// for any other.
+func checkFamilies(t *testing.T, c evidence.Commit) {
+	t.Helper()
+	if c.Family == mixed && !slices.Equal(c.Families, []evidence.Family{evidence.FamilyDX, evidence.FamilyFeat}) ||
+		c.Family != mixed && c.Families != nil {
+		t.Errorf("commit %s: %s with Families %#v, want [dx feat] exactly when mixed and nil otherwise", c.SHA, c.Family, c.Families)
 	}
 }
 
