@@ -199,7 +199,12 @@ func TestValidate(t *testing.T) {
 		{name: "empty check name", mutate: func(b *Bundle) { b.Checks[0].Name = "" }, wantErr: "schema"},
 		{name: "strong without fail before", mutate: func(b *Bundle) { b.Obligations[0].Before = Pass }, wantErr: "strong needs"},
 		{name: "strong without pass after", mutate: func(b *Bundle) { b.Obligations[0].After = Fail }, wantErr: "strong needs"},
-		{name: "weak without build fail", mutate: func(b *Bundle) { b.Obligations[1].Before = Fail }, wantErr: "weak needs"},
+		{name: "weak failing at the base with a note", mutate: func(b *Bundle) { b.Obligations[1].Before = Fail }},
+		{name: "weak failing at the base without a note", mutate: func(b *Bundle) {
+			b.Obligations[1].Before, b.Obligations[1].Note = Fail, ""
+		}, wantErr: "needs a note"},
+		{name: "weak passing at the base", mutate: func(b *Bundle) { b.Obligations[1].Before = Pass }, wantErr: "weak needs"},
+		{name: "weak not passing at head", mutate: func(b *Bundle) { b.Obligations[1].After = Fail }, wantErr: "weak needs"},
 		{name: "characterization not declared", mutate: func(b *Bundle) { b.Obligations[2].Characterization = false }, wantErr: "characterization strength"},
 		{name: "strong on unchanged obligation", mutate: func(b *Bundle) { b.Obligations[0].Delta = Unchanged }, wantErr: "only applies to added or modified"},
 		{name: "mixed without families", mutate: func(b *Bundle) { b.Scope[0].Families = nil }, wantErr: "mixed"},

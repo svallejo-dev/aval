@@ -1,7 +1,9 @@
 // Package strictjson decodes JSON contracts strictly: exactly one value, no
 // unknown fields and no duplicate object keys. encoding/json and the schema
 // validator both let the last duplicate win, so without this check a document
-// could show one value to a human reader and another to aval.
+// could show one value to a human reader and another to aval. Keys count as
+// duplicates when encoding/json would map them to the same field, which
+// ignores case under Unicode simple folding ("a" and "A", "s" and "ſ").
 package strictjson
 
 import (
@@ -10,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
+	"unicode"
 )
 
 // Decode checks data for duplicate keys, then decodes its single JSON value
@@ -31,7 +35,7 @@ func Decode(data []byte, v any) error {
 
 // frame is one open object or array while walking the tokens.
 type frame struct {
-	keys    map[string]bool // nil for arrays
+	keys    map[string]bool // folded keys; nil for arrays
 	wantKey bool            // objects only: the next token is a key or '}'
 }
 
@@ -65,10 +69,11 @@ func CheckDuplicateKeys(data []byte) error {
 			if !ok {
 				return fmt.Errorf("syntax: object key is %v, not a string", tok)
 			}
-			if top.keys[key] {
+			folded := fold(key)
+			if top.keys[folded] {
 				return fmt.Errorf("duplicate key %q", key)
 			}
-			top.keys[key], top.wantKey = true, false
+			top.keys[folded], top.wantKey = true, false
 			continue
 		}
 		switch tok {
@@ -83,4 +88,19 @@ func CheckDuplicateKeys(data []byte) error {
 			valueDone()
 		}
 	}
+}
+
+// fold maps each rune to the smallest rune of its simple case-folding orbit,
+// so fold(x) == fold(y) exactly when strings.EqualFold(x, y).
+func fold(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		lowest := r
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			lowest = min(lowest, f)
+		}
+		b.WriteRune(lowest)
+	}
+	return b.String()
 }

@@ -63,7 +63,7 @@ type Strength string
 // Evidence strengths.
 const (
 	Strong        Strength = "strong"           // failed at the base, passes at head
-	Weak          Strength = "weak"             // did not build at the base, passes at head
+	Weak          Strength = "weak"             // failed at the base for a reason that may not be the missing behavior, passes at head
 	Characterized Strength = "characterization" // declared pre-existing behavior: passes at base and head
 	None          Strength = "none"             // missing, not passing at head, or passing at the base undeclared
 )
@@ -301,8 +301,14 @@ func (o Obligation) validate() error {
 			return fmt.Errorf("strong needs before=fail and after=pass, got %s→%s", o.Before, o.After)
 		}
 	case Weak:
-		if o.Before != BuildFail || o.After != Pass {
-			return fmt.Errorf("weak needs before=build_fail and after=pass, got %s→%s", o.Before, o.After)
+		// build_fail: the test's own package did not build at the base.
+		// fail: the base run lacked head-only files the test may read, so
+		// the note must say which (ADR-0005 §2).
+		if (o.Before != BuildFail && o.Before != Fail) || o.After != Pass {
+			return fmt.Errorf("weak needs before=build_fail or fail and after=pass, got %s→%s", o.Before, o.After)
+		}
+		if o.Before == Fail && o.Note == "" {
+			return errors.New("weak with before=fail needs a note explaining why the failure may not prove the change")
 		}
 	case Characterized:
 		if !o.Characterization || o.Before != Pass || o.After != Pass {

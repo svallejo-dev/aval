@@ -20,7 +20,11 @@ func TestCheckDuplicateKeys(t *testing.T) {
 		{name: "top-level duplicate", in: `{"version":2,"version":1}`, wantErr: `duplicate key "version"`},
 		{name: "duplicate after a nested object", in: `{"a":{"x":1},"b":[1,{"y":2}],"a":3}`, wantErr: `duplicate key "a"`},
 		{name: "nested duplicate", in: `{"list":[{"k":1,"k":2}]}`, wantErr: `duplicate key "k"`},
-		{name: "escaped duplicate", in: `{"a":1,"a":2}`, wantErr: `duplicate key "a"`},
+		{name: "escaped duplicate", in: `{"a":1,"\u0061":2}`, wantErr: `duplicate key "a"`},
+		{name: "case-only duplicate", in: `{"head":1,"Head":2}`, wantErr: `duplicate key "Head"`},
+		{name: "unicode fold duplicate", in: `{"s":1,"\u017f":2}`, wantErr: "duplicate key"},
+		{name: "kelvin sign duplicate", in: `{"k":1,"\u212a":2}`, wantErr: "duplicate key"},
+		{name: "distinct keys", in: `{"ab":1,"ba":2,"a":3,"b":4}`},
 		{name: "malformed", in: `{"a":}`, wantErr: "syntax"},
 	}
 	for _, tt := range tests {
