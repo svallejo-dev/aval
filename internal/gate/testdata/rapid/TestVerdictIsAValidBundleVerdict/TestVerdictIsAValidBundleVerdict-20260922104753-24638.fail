@@ -1,0 +1,39 @@
+# 2026/09/22 10:47:53.018832 [TestVerdictIsAValidBundleVerdict] [rapid] draw policy: false
+# 2026/09/22 10:47:53.018834 [TestVerdictIsAValidBundleVerdict] [rapid] draw scope: []evidence.Commit{}
+# 2026/09/22 10:47:53.018835 [TestVerdictIsAValidBundleVerdict] [rapid] draw changes: []gate.Change{}
+# 2026/09/22 10:47:53.018836 [TestVerdictIsAValidBundleVerdict] [rapid] draw obligations: []evidence.Obligation{}
+# 2026/09/22 10:47:53.018836 [TestVerdictIsAValidBundleVerdict] [rapid] draw findings: []openspec.Finding{}
+# 2026/09/22 10:47:53.018837 [TestVerdictIsAValidBundleVerdict] [rapid] draw validated: false
+# 2026/09/22 10:47:53.018837 [TestVerdictIsAValidBundleVerdict] [rapid] draw tamper: []evidence.Finding{}
+# 2026/09/22 10:47:53.018837 [TestVerdictIsAValidBundleVerdict] [rapid] draw undeclared: []string{}
+# 2026/09/22 10:47:53.018838 [TestVerdictIsAValidBundleVerdict] [rapid] draw build: []string{}
+# 2026/09/22 10:47:53.018838 [TestVerdictIsAValidBundleVerdict] [rapid] draw unbound: []baseline.Test{baseline.Test{Package:"p", Test:"TestA"}, baseline.Test{Package:"example.com/shop/refund", Test:"TestLegacy"}}
+# 2026/09/22 10:47:53.018840 [TestVerdictIsAValidBundleVerdict] [rapid] draw baseline: []baseline.Test{}
+# 2026/09/22 10:47:53.018840 [TestVerdictIsAValidBundleVerdict] [rapid] draw lintcfg: false
+# 2026/09/22 10:47:53.018840 [TestVerdictIsAValidBundleVerdict] [rapid] draw issues: 0
+# 2026/09/22 10:47:53.018841 [TestVerdictIsAValidBundleVerdict] [rapid] draw approvals: []evidence.Approval{}
+# 2026/09/22 10:47:53.018853 [TestVerdictIsAValidBundleVerdict] reasons not sorted: [{Code:no_base_policy Message:the base commit has no root aval.yaml: the gate only observes ID:} {Code:regression Message:p TestA fails at head and is not in the base baseline ID:} {Code:regression Message:example.com/shop/refund TestLegacy fails at head and is not in the base baseline ID:}]
+# 
+v0.4.8#9653872395712965913
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0xccccccccccccd
+0x0
+0x1
+0xccccccccccccd
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
