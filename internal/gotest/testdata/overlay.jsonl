@@ -1,0 +1,27 @@
+{"ImportPath":"example.com/fixturemod/overlay/mail","Action":"build-output","Output":"# example.com/fixturemod/overlay/d\n"}
+{"ImportPath":"example.com/fixturemod/overlay/mail","Action":"build-output","Output":"overlay/d/notify_test.go:7:2: cannot find module providing package example.com/fixturemod/overlay/mail: import lookup disabled by -mod=readonly\n"}
+{"ImportPath":"example.com/fixturemod/overlay/mail","Action":"build-fail"}
+{"Time":"2006-01-02T15:04:05Z","Action":"start","Package":"example.com/fixturemod/overlay/d"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/overlay/d","Output":"FAIL\texample.com/fixturemod/overlay/d [setup failed]\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"fail","Package":"example.com/fixturemod/overlay/d","Elapsed":0,"FailedBuild":"example.com/fixturemod/overlay/mail"}
+{"ImportPath":"example.com/fixturemod/overlay/b [example.com/fixturemod/overlay/b.test]","Action":"build-output","Output":"# example.com/fixturemod/overlay/b [example.com/fixturemod/overlay/b.test]\n"}
+{"ImportPath":"example.com/fixturemod/overlay/b [example.com/fixturemod/overlay/b.test]","Action":"build-output","Output":"overlay/b/refund_test.go:8:13: undefined: PartialRefund\n"}
+{"ImportPath":"example.com/fixturemod/overlay/b [example.com/fixturemod/overlay/b.test]","Action":"build-fail"}
+{"Time":"2006-01-02T15:04:05Z","Action":"start","Package":"example.com/fixturemod/overlay/a"}
+{"Time":"2006-01-02T15:04:05Z","Action":"start","Package":"example.com/fixturemod/overlay/b"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/overlay/b","Output":"FAIL\texample.com/fixturemod/overlay/b [build failed]\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"fail","Package":"example.com/fixturemod/overlay/b","Elapsed":0,"FailedBuild":"example.com/fixturemod/overlay/b [example.com/fixturemod/overlay/b.test]"}
+{"Time":"2006-01-02T15:04:05Z","Action":"start","Package":"example.com/fixturemod/overlay/c"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/overlay/c","Output":"?   \texample.com/fixturemod/overlay/c\t[no test files]\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"skip","Package":"example.com/fixturemod/overlay/c","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/overlay/a","Test":"TestReserve"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/overlay/a","Test":"TestReserve","Output":"=== RUN   TestReserve\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/overlay/a","Test":"TestReserve/ORD-F40_reserves_available_stock"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/overlay/a","Test":"TestReserve/ORD-F40_reserves_available_stock","Output":"=== RUN   TestReserve/ORD-F40_reserves_available_stock\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/overlay/a","Test":"TestReserve/ORD-F40_reserves_available_stock","Output":"--- PASS: TestReserve/ORD-F40_reserves_available_stock (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/overlay/a","Test":"TestReserve/ORD-F40_reserves_available_stock","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/overlay/a","Test":"TestReserve","Output":"--- PASS: TestReserve (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/overlay/a","Test":"TestReserve","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/overlay/a","Output":"PASS\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/overlay/a","Output":"ok  \texample.com/fixturemod/overlay/a\t0.000s\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/overlay/a","Elapsed":0}
