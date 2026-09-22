@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "repo": "svallejo-dev/aval-sandbox",
+  "base": "1111111111111111111111111111111111111111",
+  "head": "2222222222222222222222222222222222222222",
+  "avalVersion": "v0.0.0-test",
+  "generatedAt": "2026-09-21T12:00:00Z",
+  "mode": "enforce",
+  "tier": 1,
+  "changes": [
+    "add-refunds"
+  ],
+  "obligations": [
+    {
+      "id": "ORD-F01",
+      "kind": "F",
+      "source": "openspec/specs/refunds/spec.md#ORD-F01 Refund is idempotent",
+      "characterization": false,
+      "tests": [
+        "TestRefunds/ORD-F01_second_refund_is_a_no-op"
+      ],
+      "before": "fail",
+      "after": "pass",
+      "strength": "strong"
+    },
+    {
+      "id": "ORD-N01",
+      "kind": "N",
+      "source": "openspec/specs/refunds/spec.md#ORD-N01 Never refund more than charged",
+      "characterization": false,
+      "tests": [
+        "TestRefunds/ORD-N01_rejects_excess"
+      ],
+      "before": "pass",
+      "after": "pass",
+      "strength": "none"
+    }
+  ],
+  "checks": [
+    {
+      "name": "go-test",
+      "command": "go test -json ./...",
+      "exitCode": 0,
+      "durationMs": 4210,
+      "status": "pass"
+    },
+    {
+      "name": "golangci-lint",
+      "command": "golangci-lint run --new-from-merge-base=main",
+      "exitCode": 0,
+      "durationMs": 9120,
+      "status": "pass"
+    }
+  ],
+  "scope": [
+    {
+      "sha": "2222222222222222222222222222222222222222",
+      "family": "feat",
+      "paths": [
+        "internal/refund/refund.go",
+        "internal/refund/refund_test.go"
+      ]
+    }
+  ],
+  "tamper": [],
+  "override": null,
+  "verdict": {
+    "result": "block",
+    "reasons": [
+      {
+        "code": "fail_before_missing",
+        "message": "test passed at the base and the requirement is not marked characterization",
+        "id": "ORD-N01"
+      }
+    ]
+  },
+  "notCollected": [
+    "mutation",
+    "rollback",
+    "slo"
+  ]
+}
