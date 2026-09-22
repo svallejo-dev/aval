@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -23,7 +24,10 @@ type Options struct {
 	// cached results, which parse the same; pass 1 to force a fresh run.
 	Count   int
 	Timeout time.Duration // -timeout; zero keeps go test's default
-	Env     []string      // KEY=VALUE pairs added to the environment, e.g. RAPID_NOFAILFILE=1
+	Env     []string      // KEY=VALUE pairs added to Environ, e.g. RAPID_NOFAILFILE=1
+	// Environ is the environment Env adds to. Nil means os.Environ(); pass a
+	// filtered copy to keep variables away from go test and the tests.
+	Environ []string
 }
 
 // ErrInvalidOptions is wrapped by Run's error for options it refuses.
@@ -92,9 +96,19 @@ func Run(ctx context.Context, dir string, opts Options) (Report, error) {
 	return run(ctx, dir, opts, execGo)
 }
 
-// execFunc runs the go command with args in dir. exitCode is go's exit
-// status; err is set only when go did not run or did not exit on its own.
-// It is the seam unit tests replace with a canned stream.
+// environ returns the whole environment go test runs with.
+func (o Options) environ() []string {
+	env := o.Environ
+	if env == nil {
+		env = os.Environ()
+	}
+	return append(slices.Clip(env), o.Env...)
+}
+
+// execFunc runs the go command with args in dir and exactly env as its
+// environment. exitCode is go's exit status; err is set only when go did
+// not run or did not exit on its own. It is the seam unit tests replace
+// with a canned stream.
 type execFunc func(ctx context.Context, dir string, args, env []string, stdout, stderr io.Writer) (exitCode int, err error)
 
 func run(ctx context.Context, dir string, opts Options, goCmd execFunc) (Report, error) {
@@ -112,7 +126,7 @@ func run(ctx context.Context, dir string, opts Options, goCmd execFunc) (Report,
 	done := make(chan result, 1)
 	pr, pw := io.Pipe()
 	go func() {
-		code, err := goCmd(ctx, dir, args, opts.Env, pw, &stderr)
+		code, err := goCmd(ctx, dir, args, opts.environ(), pw, &stderr)
 		_ = pw.Close() // always nil for a PipeWriter; Parse then sees EOF
 		done <- result{code, err}
 	}()
@@ -145,7 +159,7 @@ const waitDelay = 5 * time.Second
 func execGo(ctx context.Context, dir string, args, env []string, stdout, stderr io.Writer) (int, error) {
 	cmd := exec.CommandContext(ctx, "go", args...) //nolint:gosec // no shell: args come from Options.Args
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = env
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	cmd.WaitDelay = waitDelay
 	killGroup := ownProcessGroup(cmd)

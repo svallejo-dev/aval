@@ -64,8 +64,8 @@ func fake(t *testing.T, stdout, stderr string, code int, err error) execFunc {
 		if want := (Options{Packages: []string{"./p"}}).Args(); dir != "dir" || !reflect.DeepEqual(args, want) {
 			t.Errorf("exec(%q, %q), want (dir, %q)", dir, args, want)
 		}
-		if !reflect.DeepEqual(env, []string{"K=V"}) {
-			t.Errorf("env = %q, want [K=V]", env)
+		if !reflect.DeepEqual(env, []string{"A=1", "K=V"}) {
+			t.Errorf("env = %q, want Environ then Env: [A=1 K=V]", env)
 		}
 		_, _ = io.WriteString(out, stdout)
 		_, _ = io.WriteString(errOut, stderr)
@@ -75,7 +75,7 @@ func fake(t *testing.T, stdout, stderr string, code int, err error) execFunc {
 
 func TestRun(t *testing.T) {
 	t.Parallel()
-	opts := Options{Packages: []string{"./p"}, Env: []string{"K=V"}}
+	opts := Options{Packages: []string{"./p"}, Env: []string{"K=V"}, Environ: []string{"A=1"}}
 	failing := fixture(t, "fail")
 
 	r, err := run(t.Context(), "dir", opts, fake(t, failing, "", 1, nil))
