@@ -17,16 +17,24 @@ import (
 
 // Options configures Run.
 type Options struct {
-	Packages []string      // package patterns; empty means "./..."
-	Run      string        // -run pattern, e.g. from RunPattern; empty runs every test
-	Count    int           // -count; zero means 1, which also bypasses the test cache
-	Timeout  time.Duration // -timeout; zero keeps go test's default
-	Env      []string      // KEY=VALUE pairs added to the environment, e.g. RAPID_NOFAILFILE=1
+	Packages []string // package patterns; empty means "./..."; none may start with "-"
+	Run      string   // -run pattern, e.g. from RunPattern; empty runs every test
+	// Count is -count, passed only when positive. Zero lets go test reuse
+	// cached results, which parse the same; pass 1 to force a fresh run.
+	Count   int
+	Timeout time.Duration // -timeout; zero keeps go test's default
+	Env     []string      // KEY=VALUE pairs added to the environment, e.g. RAPID_NOFAILFILE=1
 }
+
+// ErrInvalidOptions is wrapped by Run's error for options it refuses.
+var ErrInvalidOptions = errors.New("invalid go test options")
 
 // Args returns the arguments Run passes to the go command.
 func (o Options) Args() []string {
-	args := []string{"test", "-json", "-count=" + strconv.Itoa(max(o.Count, 1))}
+	args := []string{"test", "-json"}
+	if o.Count > 0 {
+		args = append(args, "-count="+strconv.Itoa(o.Count))
+	}
 	if o.Run != "" {
 		args = append(args, "-run="+o.Run)
 	}
@@ -77,7 +85,9 @@ func (e *ToolError) Unwrap() error { return e.Err }
 // non-zero, Report.ExitCode says so and the Report says why. Run returns a
 // *ToolError when go test could not run at all: go is missing, it exited
 // non-zero without reporting a single package (a bad flag), or its output
-// could not be read. When ctx ends first it returns ctx's error, wrapped.
+// could not be read. When ctx ends first it stops go test and the tests it
+// started, and returns ctx's error, wrapped. Options it refuses, such as a
+// package that would be read as a flag, wrap ErrInvalidOptions.
 func Run(ctx context.Context, dir string, opts Options) (Report, error) {
 	return run(ctx, dir, opts, execGo)
 }
@@ -88,6 +98,11 @@ func Run(ctx context.Context, dir string, opts Options) (Report, error) {
 type execFunc func(ctx context.Context, dir string, args, env []string, stdout, stderr io.Writer) (exitCode int, err error)
 
 func run(ctx context.Context, dir string, opts Options, goCmd execFunc) (Report, error) {
+	for _, p := range opts.Packages {
+		if strings.HasPrefix(p, "-") {
+			return Report{}, fmt.Errorf("%w: package %q would be read as a flag", ErrInvalidOptions, p)
+		}
+	}
 	args := opts.Args()
 	var stderr capture
 	type result struct {
@@ -122,8 +137,8 @@ func run(ctx context.Context, dir string, opts Options, goCmd execFunc) (Report,
 	return rep, nil
 }
 
-// waitDelay bounds how long Run waits for go's output after go exits or is
-// killed.
+// waitDelay bounds how long Run waits, once ctx ends, for go to exit after
+// the interrupt and for its output to close.
 const waitDelay = 5 * time.Second
 
 // execGo runs the go command found in PATH.
@@ -133,10 +148,12 @@ func execGo(ctx context.Context, dir string, args, env []string, stdout, stderr 
 	cmd.Env = append(os.Environ(), env...)
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	cmd.WaitDelay = waitDelay
+	killGroup := ownProcessGroup(cmd)
 	err := cmd.Run()
 	var exitErr *exec.ExitError
 	switch {
 	case ctx.Err() != nil:
+		killGroup()
 		return -1, fmt.Errorf("run go: %w", context.Cause(ctx))
 	case errors.As(err, &exitErr) && exitErr.Exited():
 		return exitErr.ExitCode(), nil

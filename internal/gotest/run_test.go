@@ -22,8 +22,9 @@ func TestOptionsArgs(t *testing.T) {
 		opts Options
 		want []string
 	}{
-		{Options{}, []string{"test", "-json", "-count=1", "./..."}},
-		{Options{Count: -2}, []string{"test", "-json", "-count=1", "./..."}},
+		{Options{}, []string{"test", "-json", "./..."}}, // cached results are welcome
+		{Options{Count: -2}, []string{"test", "-json", "./..."}},
+		{Options{Count: 1}, []string{"test", "-json", "-count=1", "./..."}},
 		{
 			Options{Packages: []string{"./a", "./b"}, Run: "^TestX$", Count: 3, Timeout: 90 * time.Second},
 			[]string{"test", "-json", "-count=3", "-run=^TestX$", "-timeout=1m30s", "./a", "./b"},
@@ -112,6 +113,18 @@ func TestRun(t *testing.T) {
 	}
 }
 
+func TestRunRejectsFlagsAsPackages(t *testing.T) {
+	t.Parallel()
+	opts := Options{Packages: []string{"./a", "-exec=evil.sh"}}
+	_, err := run(t.Context(), "dir", opts, func(context.Context, string, []string, []string, io.Writer, io.Writer) (int, error) {
+		t.Error("go ran with a flag among the packages")
+		return 0, nil
+	})
+	if !errors.Is(err, ErrInvalidOptions) || !strings.Contains(err.Error(), "-exec=evil.sh") {
+		t.Errorf("err = %v, want ErrInvalidOptions naming the package", err)
+	}
+}
+
 func TestRunCanceled(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())
@@ -136,13 +149,19 @@ func TestRunGoMissing(t *testing.T) {
 
 // TestRunFixtureModule really runs go test on the fixture module, so the
 // selection facts the fixtures rely on hold with the current toolchain.
+// fixtureModule is the module the fixtures come from, and fixtureEnv keeps
+// the caller's workspace and flags out of runs in it, as regen.sh does.
+var (
+	fixtureModule = filepath.Join("testdata", "fixturemod")
+	fixtureEnv    = []string{"GOWORK=off", "GOFLAGS=-mod=readonly"}
+)
+
 func TestRunFixtureModule(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs go test")
 	}
 	t.Parallel()
-	dir := filepath.Join("testdata", "fixturemod")
-	env := []string{"GOWORK=off", "GOFLAGS=-mod=readonly"}
+	dir, env := fixtureModule, fixtureEnv
 
 	r, err := Run(t.Context(), dir, Options{Packages: []string{"./pass"}, Run: RunPattern("TestOrder", id(t, "ORD-N01")), Env: env})
 	if err != nil {
