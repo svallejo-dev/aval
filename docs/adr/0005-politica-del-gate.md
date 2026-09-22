@@ -30,6 +30,7 @@ aval informa además de cualquier edición de `.github/**`, `CODEOWNERS`, `.gola
 
 **Límites conocidos de la v0:**
 - **Credenciales:** un agente que opera con las credenciales de una persona actúa como esa persona. Los agentes deben usar una cuenta o token propio, sin permisos de revisión.
+- **`weak` se puede provocar:** un test que referencia cualquier símbolo nuevo no compila en la base. Por eso `weak` es un aviso y el resumen lo muestra al revisor humano, nunca un pase silencioso.
 - **Runner comprometido:** el código del PR se ejecuta en el mismo runner que el gate, y en los runners de GitHub tiene sudo sin contraseña. Código malicioso que ataque al propio runner (sustituir el binario de aval, alterar ficheros entre pasos) queda fuera de lo que aval puede defender en la v0. Por eso el gate verifica en el mismo proceso, y la mitigación de fondo es ejecutar los tests en un entorno aislado del gate.
 
 ## Decisión
@@ -69,17 +70,26 @@ Requiere git ≥ 2.40; con uno más antiguo, exit 3.
 
 Aplica a las obligaciones **F, N e I** con delta `added` o `modified`:
 1. **Worktree:** `git worktree add --detach <tmp> <base>`.
-2. **Superposición:** en los paquetes de sus tests se copian, desde head, los `*_test.go` añadidos o modificados y los ficheros de `testdata/` añadidos o modificados. **Se borran** las rutas que head eliminó o renombró en esos paquetes.
-3. **Selección exacta:** a partir de los **nombres completos** de sus tests en la ejecución de head (por ejemplo `TestSuite/TestX/ORD-F01_…`) se construye un patrón anclado por nivel: `-run '^TestSuite$/^TestX$/^ORD-F01([_#]|$)'`. Cada nivel va escapado, y los IDs se agrupan por Test de primer nivel.
+2. **Superposición:** en **todo el diff**, no solo en los paquetes de la obligación:
+   - **primero se borran** las rutas que head eliminó o renombró (un renombre cuenta como baja más alta);
+   - después se copian desde head los `*_test.go` y los ficheros de `testdata/` añadidos o modificados.
+
+   Limitarlo a los paquetes daría un `strong` falso si un test nuevo lee `testdata/` compartido.
+3. **Selección exacta:**
+   - a partir de los **nombres completos** de sus tests en la ejecución de head (por ejemplo `TestSuite/TestX/ORD-F01_…`) se construye un patrón anclado por nivel: `-run '^TestSuite$/^TestX$/^ORD-F01([_#]|$)'`, con cada nivel escapado;
+   - se ejecuta **un `go test` por (Test de primer nivel, ID)**, para que un hermano con un bug en la base no cambie el estado de otro ID.
 4. **Estado:** el de cada ID sale de `gotest.Report.Status(id, <paquetes de sus tests en head>)`.
 5. **Limpieza:** el worktree se elimina siempre.
+6. **Entorno:** git y `go test` se lanzan sin las variables de repositorio que exporta un hook de git (`GIT_DIR`, `GIT_INDEX_FILE`, `GIT_WORK_TREE`…). Si no, un test de la base que use git escribiría en el índice de quien ejecuta aval.
 
 La fuerza (ADR-0004) exige **además** que el estado en head sea `pass`:
 
 | Estado en la base | Fuerza | Efecto |
 |---|---|---|
 | `fail` | `strong` | Válido |
-| `build_fail` | `weak` | Válido; motivo `weak_evidence` |
+| `fail`, y head añade o modifica ficheros que no son Go ni están en `testdata/` dentro de un paquete de la obligación | `weak`, con `note` | Válido; motivo `weak_evidence`. El fallo puede deberse a esos ficheros, no a la falta del comportamiento. Los datos de test van en `testdata/` |
+| `build_fail` del propio paquete de test de la obligación | `weak` | Válido; motivo `weak_evidence` |
+| `build_fail` de otro paquete o por un módulo ausente | `none`, con `note` | Bloquea (`fail_before_missing`). Las dependencias y los paquetes auxiliares nuevos entran antes, en un PR `dx` |
 | `pass` con `**aval**: characterization` | `characterization` | Válido |
 | `pass` sin la marca | `none` | Bloquea (`fail_before_missing`) |
 | `not_run` / `skipped` | `none` | Bloquea (`fail_before_missing`) |
@@ -179,7 +189,7 @@ Hay dos tipos:
 
 ### 7. Evidencia, baseline y resumen
 
-- **`aval verify`** escribe el bundle en `.aval/evidence/<head>.json` y el estado para hooks en `.aval/cache/verify-status.json` (formato de `internal/hook`), con clave `HEAD` + hash de `git diff HEAD`.
+- **`aval verify`** escribe el bundle en `.aval/evidence/<head>.json` y el estado para hooks en `.aval/cache/verify-status.json` (formato de `internal/hook`). La clave es `HEAD` más un hash de `git diff HEAD` **y de los ficheros sin seguimiento** (ruta y contenido): un fichero nuevo tras `verify` invalida el estado.
 - **`aval gate` en CI** (`GITHUB_ACTIONS=true`) ejecuta la verificación **en el mismo proceso** y **nunca reutiliza un bundle del disco**: el código del PR corre en el mismo runner y podría sobrescribir ficheros entre pasos, y `CheckHead` solo compara un SHA que es público.
 - **`aval gate` en local** puede reutilizar el bundle de `verify` si `CheckHead` coincide.
 - **Cierre:** el gate decide, escribe el veredicto y, en GitHub Actions, un resumen en `$GITHUB_STEP_SUMMARY`. El workflow sube el bundle como artefacto.
