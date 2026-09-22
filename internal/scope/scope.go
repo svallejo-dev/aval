@@ -46,7 +46,8 @@
 // # What the change cannot steer
 //
 // The files of head must not change the answer, so Classify runs git
-// (2.40 or newer, ErrToolMissing otherwise) with:
+// hardened (package git: 2.40 or newer, git.ErrToolMissing otherwise), which
+// among other things means:
 //
 //   - --ignore-submodules=none, so a head .gitmodules with ignore = all
 //     cannot hide gitlink changes;
@@ -62,12 +63,9 @@
 package scope
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"os/exec"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -76,43 +74,31 @@ import (
 
 	"github.com/svallejo-dev/aval/internal/evidence"
 	"github.com/svallejo-dev/aval/internal/manifest"
+	"github.com/svallejo-dev/aval/internal/platform/git"
 )
 
-var (
-	// ErrInvalidRange is wrapped by Classify's error for a base or head it
-	// refuses before running git.
-	ErrInvalidRange = errors.New("invalid commit range")
-	// ErrToolMissing is wrapped by Classify's error when git is not on PATH
-	// or is older than 2.40. Callers map it to exit code 3.
-	ErrToolMissing = errors.New("scope: git 2.40 or newer is required")
-)
+// ErrInvalidRange is wrapped by Classify's error for a base or head it
+// refuses before running git.
+var ErrInvalidRange = errors.New("invalid commit range")
 
 // Classify classifies every commit of base..head in repoRoot, parents first,
 // by the paths it touches. paths are the globs of the base policy, already
 // checked by manifest validation. An empty base classifies every commit
 // reachable from head. The result is never nil, and neither is any Paths.
+// When git is not on PATH or is older than 2.40, the error wraps
+// git.ErrToolMissing.
 func Classify(ctx context.Context, repoRoot, base, head string, paths manifest.Paths) ([]evidence.Commit, error) {
 	rng, err := revRange(base, head)
 	if err != nil {
 		return nil, err
 	}
-	g := runner{dir: repoRoot}
-	version, err := g.git(ctx, "version")
-	if err != nil {
-		return nil, err
+	g := git.New(repoRoot)
+	if err := g.CheckVersion(ctx); err != nil {
+		return nil, fmt.Errorf("scope: %w", err)
 	}
-	if err := checkVersion(string(version)); err != nil {
-		return nil, err
-	}
-	// The empty tree has a different ID in SHA-1 and SHA-256 repositories.
-	emptyTree, err := g.git(ctx, "hash-object", "-t", "tree", "--stdin")
+	out, err := g.Run(ctx, nil, "rev-list", "--reverse", "--topo-order", "--parents", "--end-of-options", rng, "--")
 	if err != nil {
-		return nil, err
-	}
-	g.attrSource = strings.TrimSpace(string(emptyTree))
-	out, err := g.git(ctx, "rev-list", "--reverse", "--topo-order", "--parents", "--end-of-options", rng, "--")
-	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("scope: %w", err)
 	}
 	commits := []evidence.Commit{}
 	for line := range strings.Lines(string(out)) {
@@ -120,7 +106,7 @@ func Classify(ctx context.Context, repoRoot, base, head string, paths manifest.P
 		if len(shas) == 0 {
 			continue
 		}
-		files, err := g.touched(ctx, shas[0], len(shas)-1)
+		files, err := touched(ctx, g, shas[0], len(shas)-1)
 		if err != nil {
 			return nil, err
 		}
@@ -206,7 +192,7 @@ func revRange(base, head string) (string, error) {
 
 // touched lists the paths commit sha, with the given number of parents,
 // touches, as git prints them (sorted). See the package doc for merges.
-func (g runner) touched(ctx context.Context, sha string, parents int) ([]string, error) {
+func touched(ctx context.Context, g *git.Runner, sha string, parents int) ([]string, error) {
 	var args []string
 	switch {
 	case parents == 2:
@@ -220,9 +206,9 @@ func (g runner) touched(ctx context.Context, sha string, parents int) ([]string,
 		args = append(args, "--format=", "--no-color", "--no-ext-diff", "--no-textconv", "--no-show-signature")
 	}
 	args = append(args, "--no-renames", "--ignore-submodules=none", "--name-only", "-z", "--end-of-options", sha, "--")
-	out, err := g.git(ctx, args...)
+	out, err := g.Run(ctx, nil, args...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("scope: %w", err)
 	}
 	files := []string{}
 	for f := range strings.SplitSeq(string(out), "\x00") {
@@ -231,49 +217,4 @@ func (g runner) touched(ctx context.Context, sha string, parents int) ([]string,
 		}
 	}
 	return files, nil
-}
-
-// checkVersion returns ErrToolMissing unless out, what git version prints,
-// names git 2.40 or newer: --remerge-diff arrived in 2.36, --attr-source in
-// 2.40.
-func checkVersion(out string) error {
-	v, _ := strings.CutPrefix(strings.TrimSpace(out), "git version ")
-	var major, minor int
-	if _, err := fmt.Sscanf(v, "%d.%d", &major, &minor); err == nil && (major > 2 || major == 2 && minor >= 40) {
-		return nil
-	}
-	return fmt.Errorf("%w: git version says %q", ErrToolMissing, strings.TrimSpace(out))
-}
-
-// runner runs git in one repository.
-type runner struct {
-	dir        string
-	attrSource string // tree to read attributes from; empty reads the worktree's
-}
-
-// git runs git, ignoring replace refs and grafts, and returns its stdout. A
-// failure carries git's stderr; a missing git wraps ErrToolMissing and
-// exec.ErrNotFound.
-func (g runner) git(ctx context.Context, args ...string) ([]byte, error) {
-	argv := args
-	if g.attrSource != "" {
-		argv = append([]string{"--attr-source=" + g.attrSource}, args...)
-	}
-	cmd := exec.CommandContext(ctx, "git", argv...) //nolint:gosec // no shell: fixed flags, and revisions follow --end-of-options
-	cmd.Dir = g.dir
-	cmd.Env = append(os.Environ(), "GIT_NO_REPLACE_OBJECTS=1", "GIT_GRAFT_FILE="+os.DevNull)
-	out, err := cmd.Output()
-	if ctx.Err() != nil {
-		return nil, fmt.Errorf("git %s: %w", args[0], context.Cause(ctx))
-	}
-	var exitErr *exec.ExitError
-	switch {
-	case errors.As(err, &exitErr):
-		return nil, fmt.Errorf("git %s: %w: %s", args[0], err, bytes.TrimSpace(exitErr.Stderr))
-	case errors.Is(err, exec.ErrNotFound):
-		return nil, fmt.Errorf("%w: %w", ErrToolMissing, err)
-	case err != nil:
-		return nil, fmt.Errorf("git %s: %w", args[0], err)
-	}
-	return out, nil
 }

@@ -11,10 +11,11 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/svallejo-dev/aval/internal/platform/git"
 )
 
 const verifyReason = "Run `aval verify` and fix failures before finishing."
@@ -30,8 +31,9 @@ func checkVerified(ctx context.Context, in input) *response {
 		return nil
 	}
 	dir := cmp.Or(in.Cwd, ".")
-	pushed := pushedHead(ctx, dir)
-	root, key, err := CurrentKey(ctx, dir)
+	g := git.New(dir) // shared, so that git hash-object runs once
+	pushed := pushedHead(ctx, g)
+	root, key, err := currentKey(ctx, g, dir)
 	if err != nil {
 		return nil
 	}
@@ -53,10 +55,10 @@ func checkVerified(ctx context.Context, in input) *response {
 // contains HEAD: no commit of HEAD is missing from every remote. Unlike
 // for-each-ref --contains, rev-list walks the history once, whatever the
 // number of remote refs. It reports true when git fails: the hook fails open.
-func pushedHead(ctx context.Context, dir string) <-chan bool {
+func pushedHead(ctx context.Context, g *git.Runner) <-chan bool {
 	pushed := make(chan bool, 1)
 	go func() {
-		out, err := git(ctx, dir, "rev-list", "-n1", "HEAD", "--not", "--remotes").Output()
+		out, err := g.Run(ctx, nil, "rev-list", "-n1", "HEAD", "--not", "--remotes")
 		pushed <- err != nil || len(out) == 0
 	}()
 	return pushed
@@ -180,8 +182,14 @@ func ReadStatus(root string) (Status, error) {
 }
 
 // CurrentKey returns the root of the git working tree that holds dir and its
-// Key. It runs its three git commands concurrently, for latency.
+// Key. It runs its three git commands concurrently, for latency, hardened
+// like every git aval runs (package git).
 func CurrentKey(ctx context.Context, dir string) (root string, key Key, err error) {
+	return currentKey(ctx, git.New(dir), dir)
+}
+
+// currentKey is CurrentKey with g, a Runner for dir.
+func currentKey(ctx context.Context, g *git.Runner, dir string) (root string, key Key, err error) {
 	type result struct {
 		out []byte
 		err error
@@ -189,19 +197,19 @@ func CurrentKey(ctx context.Context, dir string) (root string, key Key, err erro
 	output := func(args ...string) <-chan result {
 		ch := make(chan result, 1)
 		go func() {
-			out, err := git(ctx, dir, args...).Output()
+			out, err := g.Run(ctx, nil, args...)
 			ch <- result{out, err}
 		}()
 		return ch
 	}
 	revParse := output("rev-parse", "--show-toplevel", "HEAD")
 	untracked := output("ls-files", "-z", "--others", "--exclude-standard", "--full-name", "--", ":/")
-	// The flags make the output independent of diff drivers, colors and
-	// diff.relative; --binary makes binary edits count.
+	// The flags make the output independent of diff drivers, colors,
+	// diff.relative and the submodules' ignore settings; --binary makes
+	// binary edits count.
 	h := sha256.New()
-	diff := git(ctx, dir, "diff", "--binary", "--no-color", "--no-ext-diff", "--no-textconv", "--no-relative", "HEAD", "--")
-	diff.Stdout = h
-	diffErr := diff.Run()
+	diffErr := g.Stream(ctx, h, "diff", "--binary", "--no-color", "--no-ext-diff", "--no-textconv", "--no-relative",
+		"--ignore-submodules=none", "HEAD", "--")
 
 	rp, ut := <-revParse, <-untracked
 	if err := errors.Join(rp.err, ut.err, diffErr); err != nil {
@@ -251,13 +259,4 @@ func contentDigest(name string) ([]byte, error) {
 		}
 	}
 	return h.Sum(nil), nil
-}
-
-// git returns a git command for dir. GIT_OPTIONAL_LOCKS=0 keeps git diff from
-// taking the index lock the agent's own git commands need.
-func git(ctx context.Context, dir string, args ...string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...) //nolint:gosec // fixed git subcommands; dir is only a -C argument
-	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
-	cmd.WaitDelay = time.Second
-	return cmd
 }

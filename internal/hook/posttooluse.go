@@ -119,7 +119,8 @@ func isOpenSpecRoot(dir string) bool {
 }
 
 // gitRoot returns the nearest directory from dir up that holds .git, with
-// symlinks resolved.
+// symlinks resolved. It runs no git: git rev-parse, hardened, would put two
+// git processes in the hook's path, the empty tree first (package git).
 func gitRoot(dir string) (string, bool) {
 	dir, err := resolve(dir)
 	if err != nil {

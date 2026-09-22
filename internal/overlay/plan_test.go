@@ -162,16 +162,3 @@ func TestOwnBuild(t *testing.T) {
 		}
 	}
 }
-
-func TestSupported(t *testing.T) {
-	t.Parallel()
-	for v, want := range map[string]bool{
-		"git version 2.40.0": true, "git version 2.50.1 (Apple Git-155)": true,
-		"git version 2.45.1.windows.1": true, "git version 3.0.0": true,
-		"git version 2.39.5": false, "git version 1.99.0": false, "hub version 2.14": false,
-	} {
-		if got := supported(v); got != want {
-			t.Errorf("supported(%q) = %v, want %v", v, got, want)
-		}
-	}
-}

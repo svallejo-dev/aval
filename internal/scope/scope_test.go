@@ -16,6 +16,7 @@ import (
 
 	"github.com/svallejo-dev/aval/internal/evidence"
 	"github.com/svallejo-dev/aval/internal/manifest"
+	"github.com/svallejo-dev/aval/internal/platform/git"
 )
 
 func TestMain(m *testing.M) {
@@ -326,36 +327,12 @@ func TestClassifyIgnoresPlantedHistory(t *testing.T) {
 	}
 }
 
-func TestCheckVersion(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		out string
-		ok  bool
-	}{
-		{"git version 2.50.1 (Apple Git-155)\n", true},
-		{"git version 2.40.0\n", true},
-		{"git version 2.45.1.windows.1\n", true},
-		{"git version 3.0.0\n", true},
-		{"git version 2.39.5\n", false},
-		{"git version 1.99.0\n", false},
-		{"git version\n", false},
-		{"", false},
-	}
-	for _, tt := range tests {
-		err := checkVersion(tt.out)
-		if (err == nil) != tt.ok || err != nil && !errors.Is(err, ErrToolMissing) {
-			t.Errorf("checkVersion(%q) = %v, want ok %t", tt.out, err, tt.ok)
-		}
-	}
-}
-
 // TestClassifyWithoutGit changes PATH, so it cannot run in parallel.
 func TestClassifyWithoutGit(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	_, err := Classify(t.Context(), t.TempDir(), "", "HEAD", testPaths)
-	if !errors.Is(err, ErrToolMissing) || !errors.Is(err, exec.ErrNotFound) {
-		t.Errorf("Classify without git: error %v, want ErrToolMissing and exec.ErrNotFound", err)
+	if !errors.Is(err, git.ErrToolMissing) || !errors.Is(err, exec.ErrNotFound) {
+		t.Errorf("Classify without git: error %v, want git.ErrToolMissing and exec.ErrNotFound", err)
 	}
 }
 

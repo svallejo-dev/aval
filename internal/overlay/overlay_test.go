@@ -1,17 +1,20 @@
 package overlay
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/svallejo-dev/aval/internal/evidence"
+	"github.com/svallejo-dev/aval/internal/platform/git"
 )
 
 // goEnv keeps the developer's workspace, flags, toolchain and proxy out of
@@ -40,12 +43,13 @@ func (r testRepo) git(args ...string) string {
 }
 
 // fixtureRepo commits testdata/repo/base and then testdata/repo/head, and
-// returns the repository and both commits. The index is rebuilt from the
-// files each time, so a rename that only changes case is one on macOS too.
-func fixtureRepo(t *testing.T) (r testRepo, base, head string) {
+// returns the repository, made with the extra git init args, and both
+// commits. The index is rebuilt from the files each time, so a rename that
+// only changes case is one on macOS too.
+func fixtureRepo(t *testing.T, initArgs ...string) (r testRepo, base, head string) {
 	t.Helper()
 	r = testRepo{t: t, dir: t.TempDir()}
-	r.git("init", "--quiet")
+	r.git(append([]string{"init", "--quiet"}, initArgs...)...)
 	commit := func(tree string) string {
 		entries, err := os.ReadDir(r.dir)
 		if err != nil {
@@ -252,9 +256,9 @@ func TestPrepareRevisions(t *testing.T) {
 			t.Errorf("base %q: err = %v, want ErrRevision", rev, err)
 		}
 	}
-	var gerr *GitError
+	var gerr *git.Error
 	if _, err := Prepare(t.Context(), t.TempDir(), "HEAD~1", "HEAD", PrepareOptions{}); !errors.As(err, &gerr) || errors.Is(err, ErrRevision) {
-		t.Errorf("outside a repository: err = %v, want a *GitError", err)
+		t.Errorf("outside a repository: err = %v, want a *git.Error", err)
 	}
 }
 
@@ -297,8 +301,82 @@ func TestRunEnv(t *testing.T) {
 func TestPrepareGitMissing(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	_, err := Prepare(t.Context(), t.TempDir(), "HEAD~1", "HEAD", PrepareOptions{})
-	var gerr *GitError
+	var gerr *git.Error
 	if !errors.Is(err, ErrToolMissing) || !errors.Is(err, exec.ErrNotFound) || !errors.As(err, &gerr) {
-		t.Errorf("err = %v, want ErrToolMissing wrapping a *GitError and exec.ErrNotFound", err)
+		t.Errorf("err = %v, want ErrToolMissing wrapping a *git.Error and exec.ErrNotFound", err)
+	}
+}
+
+// TestPrepareSHA256 checks that attributes come from the repository's own
+// empty tree: git refuses the SHA-1 one in a SHA-256 repository.
+func TestPrepareSHA256(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a git repository")
+	}
+	t.Parallel()
+	probe := exec.CommandContext(t.Context(), "git", "init", "--quiet", "--object-format=sha256", t.TempDir()) //nolint:gosec // a temporary path
+	if out, err := probe.CombinedOutput(); err != nil {
+		t.Skipf("this git cannot create a SHA-256 repository: %v\n%s", err, out)
+	}
+	r, base, head := fixtureRepo(t, "--object-format=sha256")
+	tmp := t.TempDir()
+	w, err := Prepare(t.Context(), filepath.Join(r.dir, "svc"), base, head, PrepareOptions{TempDir: tmp})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for tree, file := range map[string]string{"head": "calc/calc_test.go", "base": "calc/calc.go"} {
+		want, err := os.ReadFile(filepath.Join("testdata", "repo", tree, "svc", file)) //nolint:gosec // a fixture
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := os.ReadFile(filepath.Join(w.moduleDir, file)); err != nil || !bytes.Equal(got, want) { //nolint:gosec // the worktree
+			t.Errorf("%s in the worktree = %q, %v; want %s's", file, got, err, tree)
+		}
+	}
+	if len(w.Base) != 64 || w.Base != base {
+		t.Errorf("Base = %s, want %s", w.Base, base)
+	}
+	if err := w.Close(); err != nil {
+		t.Error(err)
+	}
+	assertClean(t, r, tmp)
+}
+
+// TestCloseWithoutDir checks that Close removes the worktree once the
+// directory Prepare ran in is gone: git runs in the common directory.
+func TestCloseWithoutDir(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a git repository")
+	}
+	t.Parallel()
+	r, base, head := fixtureRepo(t)
+	dir, tmp := filepath.Join(r.dir, "svc"), t.TempDir()
+	w, err := Prepare(t.Context(), dir, base, head, PrepareOptions{TempDir: tmp})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Errorf("Close without %s: %v", dir, err)
+	}
+	assertClean(t, r, tmp)
+}
+
+// TestPrepareOldGit puts a git 2.39 first on PATH, so it cannot run in
+// parallel.
+func TestPrepareOldGit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake git is a shell script")
+	}
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\necho 'git version 2.39.5'\n"), 0o700); err != nil { //nolint:gosec // it must be executable
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	_, err := Prepare(t.Context(), t.TempDir(), "HEAD~1", "HEAD", PrepareOptions{})
+	if !errors.Is(err, ErrToolMissing) || !errors.Is(err, git.ErrToolMissing) {
+		t.Errorf("err = %v, want ErrToolMissing wrapping git.ErrToolMissing", err)
 	}
 }

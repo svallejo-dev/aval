@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -22,6 +23,17 @@ func TestCheckVerified(t *testing.T) {
 	untracked := files(map[string]string{"x_test.go": "package a\n\nimport \"testing\"\n\nfunc TestX(t *testing.T) { t.Fatal() }\n"})
 	commit := func(t *testing.T, dir string) { gitT(t, dir, "commit", "-q", "-a", "--allow-empty", "-m", "next") }
 	push := func(t *testing.T, dir string) { gitT(t, dir, "update-ref", "refs/remotes/origin/main", "HEAD") }
+	// gitlink points mod, a submodule that .gitmodules tells git diff to
+	// ignore, at the commit whose ID repeats c.
+	ignored := files(map[string]string{".gitmodules": "[submodule \"mod\"]\n\tpath = mod\n\turl = ./mod\n\tignore = all\n"})
+	gitlink := func(c string) step {
+		return func(t *testing.T, dir string) {
+			if err := os.MkdirAll(filepath.Join(dir, "mod"), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			gitT(t, dir, "update-index", "--add", "--cacheinfo", "160000,"+strings.Repeat(c, 40)+",mod")
+		}
+	}
 	tests := []struct {
 		name      string
 		in        input
@@ -43,6 +55,7 @@ func TestCheckVerified(t *testing.T) {
 		{name: "stale after an edit", steps: []step{passed, edit}, wantBlock: true},
 		{name: "stale after an untracked file", steps: []step{passed, untracked}, wantBlock: true},
 		{name: "stale after a commit", steps: []step{edit, passed, commit}, wantBlock: true},
+		{name: "stale after a submodule change .gitmodules ignores", steps: []step{ignored, gitlink("1"), commit, passed, gitlink("2")}, wantBlock: true},
 		{name: "fresh after staging", steps: []step{edit, passed, func(t *testing.T, dir string) { gitT(t, dir, "add", "a.go") }}},
 		{name: "fresh after aval's own output", steps: []step{edit, passed, files(map[string]string{".aval/evidence/x.json": "{}"})}},
 		{name: "stale after another untracked .aval file", steps: []step{edit, passed, files(map[string]string{".aval/baseline.json": "{}"})}, wantBlock: true},
@@ -66,6 +79,22 @@ func TestCheckVerified(t *testing.T) {
 				t.Errorf("checkVerified() = %+v, want nil", got)
 			}
 		})
+	}
+}
+
+// TestCurrentKeyIgnoresGitEnv sets what a git hook exports, as when one
+// runs aval verify, so it cannot run in parallel.
+func TestCurrentKeyIgnoresGitEnv(t *testing.T) {
+	dir := newRepo(t, map[string]string{"a.go": "package a\n"})
+	other := newRepo(t, map[string]string{"b.go": "package b\n"})
+	root, key, err := CurrentKey(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_DIR", filepath.Join(other, ".git"))
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(other, ".git", "index"))
+	if gotRoot, got, err := CurrentKey(context.Background(), dir); err != nil || gotRoot != root || got != key {
+		t.Errorf("CurrentKey under GIT_DIR = %s, %+v, %v; want %s, %+v", gotRoot, got, err, root, key)
 	}
 }
 
