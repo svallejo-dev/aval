@@ -3,6 +3,7 @@ package openspec
 import (
 	"context"
 	"io/fs"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -75,6 +76,58 @@ func TestLive(t *testing.T) {
 			assertShowDeltas(t, r.Changes[0].Deltas, openspecCLI(t, root, "show", c.change, "--type", "change", "--json", "--deltas-only"))
 		})
 	}
+
+	t.Run("main spec with a level-1 heading", func(t *testing.T) {
+		const name = "negative/h1-between-requirements/spec-after.md"
+		root := writeRepo(t, fstest.MapFS{"openspec/specs/refunds/spec.md": {Data: fixture(t, name)}})
+		report, err := Validate(t.Context(), root, liveVersion)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := decodeReport(t, "negative/h1-between-requirements/validate-spec-after.json").Items; !equalItems(report.Items, want) {
+			t.Errorf("validate:\n got %+v\nwant %+v", report.Items, want)
+		}
+		r, err := Load(t.Context(), os.DirFS(root))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// OpenSpec passes the spec, aval does not: show loses ORD-F12.
+		if got, want := brief(r.Check(CheckOptions{})), []string{"openspec/specs/refunds/spec.md:52 error stray-heading"}; !slices.Equal(got, want) {
+			t.Errorf("findings = %q, want %q", got, want)
+		}
+		show := decodeShow[showSpec](t, openspecCLI(t, root, "show", "refunds", "--type", "spec", "--json"))
+		if show.RequirementCount != len(r.Specs[0].Requirements)-1 {
+			t.Errorf("show counts %d requirements, archive's reader %d", show.RequirementCount, len(r.Specs[0].Requirements))
+		}
+	})
+
+	t.Run("allowed INFO for a change without spec deltas", func(t *testing.T) {
+		root := writeRepo(t, fstest.MapFS{
+			"openspec/specs/refunds/spec.md":            {Data: fixture(t, "refunds/spec-after.md")},
+			"openspec/changes/docs-only/.openspec.yaml": {Data: []byte("schema: spec-driven\ncreated: 2026-09-22\nskip_specs: true\n")},
+		})
+		report, err := Validate(t.Context(), root, liveVersion)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := Item{ID: "docs-only", Type: "change", Valid: true, Issues: []Issue{{Level: "INFO", Path: "file", Message: allowedInfo[0]}}}
+		if !report.Passed() || !slices.ContainsFunc(report.Items, func(it Item) bool { return equalItems([]Item{it}, []Item{want}) }) {
+			t.Errorf("Passed() = %v, items %+v, want the allowed INFO %+v", report.Passed(), report.Items, want)
+		}
+	})
+
+	t.Run("a repository .npmrc cannot redirect npx", func(t *testing.T) {
+		t.Setenv("npm_config_cache", t.TempDir()) // nothing cached: npx must download
+		fsys := maps.Clone(baseline)
+		fsys[".npmrc"] = &fstest.MapFile{Data: []byte("registry=http://127.0.0.1:9/\n")}
+		report, err := Validate(t.Context(), writeRepo(t, fsys), liveVersion)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !report.Passed() {
+			t.Errorf("report = %+v, want a pass", report)
+		}
+	})
 }
 
 func decodeReport(t *testing.T, name string) Report {
@@ -117,7 +170,7 @@ func openspecCLI(t *testing.T, dir string, args ...string) []byte {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), runTimeout)
 	defer cancel()
-	out, err := execRunner{}.Run(ctx, dir, cliEnv, "npx", append([]string{"-y", npmPackage + "@" + liveVersion}, args...)...)
+	out, err := execRunner{waitDelay: defaultWaitDelay}.Run(ctx, dir, cliEnv, "npx", append([]string{"-y", npmPackage + "@" + liveVersion}, args...)...)
 	if err != nil || out.code != 0 {
 		t.Fatalf("openspec %q: exit %d, %v\n%s%s", args, out.code, err, out.stdout, out.stderr)
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -43,26 +44,67 @@ func (f *fakeRunner) Run(ctx context.Context, dir string, env []string, name str
 	return f.out, f.err
 }
 
+// repoRoot creates a repository with an openspec/ directory and returns its
+// path as OpenSpec reports it: absolute and without symlinks.
+func repoRoot(t *testing.T) string {
+	t.Helper()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, Dir), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
 func TestValidate(t *testing.T) {
 	t.Parallel()
 
+	root := repoRoot(t)
+	rooted := func(s string) []byte { return []byte(strings.ReplaceAll(s, "<ROOT>", root)) }
+	captured := func(name string) []byte { return rooted(string(fixture(t, name))) }
+	report := func(items string) []byte {
+		return rooted(`{"version": "1.0", "root": {"path": "<ROOT>", "source": "nearest"}, "items": ` + items + `}`)
+	}
+	info := func(level, msg string) []byte {
+		return report(`[{"id": "c", "type": "change", "valid": true, "issues": [{"level": "` + level + `", "path": "file", "message": "` + msg + `"}]}]`)
+	}
+	const skipSpecs = "skip_specs is set in .openspec.yaml: change declares no spec-level behavior changes, zero deltas accepted"
 	noRoot := `{"status": [{"severity": "error", "code": "no_openspec_root", "message": "No OpenSpec root found from the current directory."}]}`
+	withFile := t.TempDir()
+	if err := os.WriteFile(filepath.Join(withFile, Dir), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	tests := []struct {
 		name    string
+		root    string // default: root
 		version string
 		run     fakeRunner
 		passed  bool
 		is      []error // the error wraps each of these; nil for no error
 		msg     string  // the error names this
 	}{
-		{name: "clean", run: fakeRunner{out: output{stdout: fixture(t, "json/validate-spec-after.json")}}, passed: true},
-		{name: "INFO fails", run: fakeRunner{out: output{stdout: fixture(t, "negative/modified-case-variant/validate.json")}}},
-		{name: "ERROR fails", run: fakeRunner{out: output{stdout: fixture(t, "negative/modified-drops-scenario/validate.json"), code: 1}}},
+		{name: "clean", run: fakeRunner{out: output{stdout: captured("json/validate-spec-after.json")}}, passed: true},
+		{name: "INFO fails", run: fakeRunner{out: output{stdout: captured("negative/modified-case-variant/validate.json")}}},
+		{name: "ERROR fails", run: fakeRunner{out: output{stdout: captured("negative/modified-drops-scenario/validate.json"), code: 1}}},
+		{name: "allowed INFO passes", run: fakeRunner{out: output{stdout: info("INFO", skipSpecs)}}, passed: true},
+		{name: "allowed message at another level fails", run: fakeRunner{out: output{stdout: info("WARNING", skipSpecs)}}},
+		{name: "allowed message must match exactly", run: fakeRunner{out: output{stdout: info("INFO", skipSpecs+".")}}},
 		{name: "node missing", run: fakeRunner{missing: "node"}, is: []error{ErrToolMissing, exec.ErrNotFound}, msg: "look up node"},
 		{name: "npx missing", run: fakeRunner{missing: "npx"}, is: []error{ErrToolMissing, exec.ErrNotFound}, msg: "look up npx"},
 		{name: "range version", version: "^1.13.1", msg: `version "^1.13.1" must be exact`},
 		{name: "tag version", version: "latest", msg: `version "latest" must be exact`},
+		{name: "no openspec directory", root: t.TempDir(), is: []error{fs.ErrNotExist}, msg: "has no openspec/ directory"},
+		{name: "openspec is a file", root: withFile, msg: "openspec is not a directory"},
 		{name: "run fails", run: fakeRunner{err: context.DeadlineExceeded}, is: []error{ErrToolFailed, context.DeadlineExceeded}},
+		{
+			name: "another root",
+			run:  fakeRunner{out: output{stdout: []byte(strings.ReplaceAll(string(fixture(t, "json/validate-spec-after.json")), "<ROOT>", "/parent"))}},
+			is:   []error{ErrToolFailed},
+			msg:  `OpenSpec validated "/parent" instead of "` + root + `"`,
+		},
 		{
 			name: "no OpenSpec root",
 			run:  fakeRunner{out: output{stdout: []byte(noRoot), code: 1}},
@@ -79,7 +121,7 @@ func TestValidate(t *testing.T) {
 		{name: "report without items", run: fakeRunner{out: output{stdout: []byte(`{"version": "1.0"}`)}}, is: []error{ErrToolFailed}},
 		{
 			name: "failing exit with a passing report",
-			run:  fakeRunner{out: output{stdout: []byte(`{"version": "1.0", "items": []}`), code: 1}},
+			run:  fakeRunner{out: output{stdout: report("[]"), code: 1}},
 			is:   []error{ErrToolFailed},
 			msg:  "exit status 1 with a passing report",
 		},
@@ -87,9 +129,8 @@ func TestValidate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			version := cmp.Or(tt.version, "1.13.1")
 			run := tt.run
-			got, err := validate(context.Background(), &run, "/repo", version)
+			got, err := validate(context.Background(), &run, cmp.Or(tt.root, root), cmp.Or(tt.version, "1.13.1"))
 
 			for _, target := range tt.is {
 				if !errors.Is(err, target) {
@@ -103,20 +144,21 @@ func TestValidate(t *testing.T) {
 				if !strings.Contains(err.Error(), tt.msg) {
 					t.Errorf("error %q does not contain %q", err, tt.msg)
 				}
-				if tt.is == nil && run.ran {
-					t.Error("npx ran with an invalid version")
+				if run.ran != (tt.run.out.stdout != nil || tt.run.out.stderr != nil || tt.run.err != nil) {
+					t.Errorf("npx ran = %v", run.ran)
 				}
 				return
 			}
-			if got.Passed() != tt.passed {
-				t.Errorf("Passed() = %v, want %v", got.Passed(), tt.passed)
+			if got.Passed() != tt.passed || got.Root != root {
+				t.Errorf("Passed() = %v, root %q; want %v, %q", got.Passed(), got.Root, tt.passed, root)
 			}
 			want := []string{"npx", "-y", "@fission-ai/openspec@1.13.1", "validate", "--all", "--strict", "--json"}
-			if !slices.Equal(run.cmd, want) || run.dir != "/repo" {
-				t.Errorf("ran %q in %s, want %q in /repo", run.cmd, run.dir, want)
+			if !slices.Equal(run.cmd, want) || run.dir != root {
+				t.Errorf("ran %q in %s, want %q in %s", run.cmd, run.dir, want, root)
 			}
-			if !slices.Equal(run.env, []string{"OPENSPEC_TELEMETRY=0", "OPENSPEC_NO_UPDATE_CHECK=1"}) {
-				t.Errorf("env = %q", run.env)
+			wantEnv := []string{"OPENSPEC_TELEMETRY=0", "OPENSPEC_NO_UPDATE_CHECK=1", "npm_config_registry=https://registry.npmjs.org/"}
+			if !slices.Equal(run.env, wantEnv) {
+				t.Errorf("env = %q, want %q", run.env, wantEnv)
 			}
 			if run.deadline <= 0 || run.deadline > runTimeout {
 				t.Errorf("deadline in %v, want within %v", run.deadline, runTimeout)
@@ -143,15 +185,15 @@ func TestReportFromCaptures(t *testing.T) {
 	}
 
 	var files []string
-	for _, pattern := range []string{"*/*/validate.json", "json/validate-*.json", "extra-files/validate*.json"} {
+	for _, pattern := range []string{"*/*/validate.json", "*/*/validate-spec-after.json", "json/validate-*.json", "extra-files/validate*.json"} {
 		matches, err := fs.Glob(spike, pattern)
 		if err != nil {
 			t.Fatal(err)
 		}
 		files = append(files, matches...)
 	}
-	if len(files) != 19 {
-		t.Errorf("found %d captured reports, want 19: %q", len(files), files)
+	if len(files) != 22 {
+		t.Errorf("found %d captured reports, want 22: %q", len(files), files)
 	}
 	for _, name := range files {
 		t.Run(name, func(t *testing.T) {
@@ -181,7 +223,7 @@ func TestReportFindings(t *testing.T) {
 		{ID: "refunds", Type: "spec", Valid: false, Issues: []Issue{{Level: "WARNING", Path: "requirements[0].scenarios", Line: 9, Message: "no scenario"}}},
 		{ID: "c1", Type: "change", Valid: false, Issues: []Issue{{Level: "ERROR", Path: "file", Line: 4, Message: "no deltas"}}},
 		{ID: "c2", Type: "change", Valid: false},
-		{ID: "c3", Type: "change", Valid: true},
+		{ID: "c3", Type: "change", Valid: true, Issues: []Issue{{Level: "INFO", Path: "file", Message: allowedInfo[0]}}},
 	}}
 	want := []string{
 		"openspec/specs/refunds/spec.md:9: error: WARNING requirements[0].scenarios: no scenario [openspec]",
@@ -195,8 +237,8 @@ func TestReportFindings(t *testing.T) {
 	if !slices.Equal(got, want) || r.Passed() {
 		t.Errorf("findings:\n got %q\nwant %q (Passed %v)", got, want, r.Passed())
 	}
-	if !(Report{Items: []Item{{Valid: true}}}).Passed() || !(Report{}).Passed() {
-		t.Error("a report with no issues must pass")
+	if !(Report{Items: []Item{{Valid: true}}}).Passed() || !(Report{}).Passed() || !(Report{Items: r.Items[3:]}).Passed() {
+		t.Error("a report with no issues, or only allowed INFO, must pass")
 	}
 }
 
@@ -210,7 +252,7 @@ func TestExecRunner(t *testing.T) {
 
 	t.Run("output and exit status", func(t *testing.T) {
 		t.Parallel()
-		out, err := execRunner{}.Run(context.Background(), dir, []string{"AVAL_PROBE=on"},
+		out, err := execRunner{waitDelay: time.Second}.Run(context.Background(), dir, []string{"AVAL_PROBE=on"},
 			"sh", "-c", `printf '%s %s' "$AVAL_PROBE" "$(pwd -P)"; printf oops >&2; exit 3`)
 		if err != nil {
 			t.Fatal(err)
@@ -231,6 +273,14 @@ func TestExecRunner(t *testing.T) {
 		_, err := execRunner{}.Run(ctx, dir, nil, "sleep", "10")
 		if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 5*time.Second {
 			t.Errorf("err = %v after %v, want a prompt deadline error", err, time.Since(start))
+		}
+	})
+	t.Run("a child keeps the pipes open", func(t *testing.T) {
+		t.Parallel()
+		start := time.Now()
+		_, err := execRunner{waitDelay: 100 * time.Millisecond}.Run(context.Background(), dir, nil, "sh", "-c", "sleep 5 & printf started")
+		if !errors.Is(err, exec.ErrWaitDelay) || time.Since(start) > 3*time.Second {
+			t.Errorf("err = %v after %v, want exec.ErrWaitDelay well before the child exits", err, time.Since(start))
 		}
 	})
 	t.Run("output cap", func(t *testing.T) {

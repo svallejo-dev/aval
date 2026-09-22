@@ -14,6 +14,17 @@ make verify           # build + tests con -race + lint
 
 Si instalas herramientas con `go install`, ejecuta después `asdf reshim golang` para que queden en el PATH.
 
+### Test diferencial contra OpenSpec
+
+`internal/openspec` tiene un test que ejecuta la CLI real de OpenSpec sobre los fixtures del spike. No forma parte de `make verify` porque necesita Node y red:
+
+```sh
+AVAL_OPENSPEC_LIVE=1 go test -run '^TestLive$' ./internal/openspec
+```
+
+- Necesita Node 26 y npx. Node no está en `.tool-versions`; el job `openspec-live` del CI fija la major 26.
+- npx descarga `@fission-ai/openspec` en la versión exacta que fija el test, del registro público de npm, aunque haya un `.npmrc` que diga otra cosa. Uno de los casos usa una caché de npm vacía para forzar esa descarga.
+
 ## Modelo de ramas: trunk-based con ramas cortas
 
 `main` está siempre verde y en condiciones de hacer release. El ruleset `main-trunk` la protege:

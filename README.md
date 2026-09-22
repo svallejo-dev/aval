@@ -25,6 +25,10 @@ aval verify        ejecuta verificadores y genera la evidencia
 aval gate          decide y devuelve el exit code para CI
 ```
 
+## Requisitos
+
+- **Node.js y npx** para validar las specs. aval ejecuta `npx -y @fission-ai/openspec@<versión>` con la versión exacta de `openspec.version` en `aval.yaml`, nunca un rango ni `latest`. La primera vez, npx descarga ese paquete de la red, siempre del registro público de npm (`https://registry.npmjs.org/`): aval lo fija en el entorno, que manda sobre cualquier `.npmrc` del repositorio o del usuario. La telemetría y la comprobación de actualizaciones de OpenSpec van desactivadas. Sin Node ni npx, aval sale con código 3.
+
 ## Contribuir
 
 Modelo de ramas, commits y releases: [CONTRIBUTING.md](CONTRIBUTING.md).
