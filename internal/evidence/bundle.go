@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -57,7 +58,7 @@ type Strength string
 const (
 	Strong        Strength = "strong"           // failed at the base, passes at head
 	Weak          Strength = "weak"             // did not build at the base, passes at head
-	Characterized Strength = "characterization" // pre-existing behavior: passes at base and head, as declared
+	Characterized Strength = "characterization" // declared pre-existing behavior: passes at base and head
 	None          Strength = "none"             // missing, not passing at head, or passing at the base undeclared
 )
 
@@ -236,8 +237,11 @@ func (b Bundle) Validate() error {
 		if !o.Valid && o.Rejection == "" {
 			errs = append(errs, errors.New("override: a rejected override needs a rejection reason"))
 		}
-		if o.Valid && !o.LabeledAt.After(o.LastCommitAt) {
-			errs = append(errs, errors.New("override: valid only when labeled after the last commit"))
+		if o.Valid && o.Reason == "" {
+			errs = append(errs, errors.New("override: a valid override needs a reason"))
+		}
+		if o.Valid && (o.LastCommitAt.IsZero() || !o.LabeledAt.After(o.LastCommitAt)) {
+			errs = append(errs, errors.New("override: valid only when labeled after a known last commit"))
 		}
 	}
 	if len(errs) > 0 {
@@ -258,14 +262,17 @@ func (o Obligation) validate() error {
 			return fmt.Errorf("weak needs before=build_fail and after=pass, got %s→%s", o.Before, o.After)
 		}
 	case Characterized:
-		if !o.Characterization || o.After != Pass {
-			return errors.New("characterization strength needs characterization=true and after=pass")
+		if !o.Characterization || o.Before != Pass || o.After != Pass {
+			return errors.New("characterization strength needs characterization=true, before=pass and after=pass")
 		}
 	case None:
 		// Anything goes: none is the absence of acceptable evidence.
 	}
 	if o.Delta == Unchanged && (o.Strength == Strong || o.Strength == Weak) {
 		return errors.New("fail-before strength only applies to added or modified obligations")
+	}
+	if i := strings.LastIndexByte(o.ID, '-'); i < 0 || i+1 >= len(o.ID) || o.ID[i+1:i+2] != o.Kind {
+		return fmt.Errorf("kind %q does not match the ID's kind letter", o.Kind)
 	}
 	return nil
 }

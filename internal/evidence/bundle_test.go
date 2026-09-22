@@ -151,7 +151,7 @@ func TestEveryConstantIsInSchema(t *testing.T) {
 	}
 	for _, k := range []string{"F", "N", "I", "S", "A", "O"} {
 		b := sampleBundle()
-		b.Obligations[3].Kind = k
+		b.Obligations[3].Kind, b.Obligations[3].ID = k, "ORD-"+k+"09"
 		mustSchema(t, "kind "+k, b)
 	}
 }
@@ -195,11 +195,30 @@ func TestValidate(t *testing.T) {
 		{name: "mixed without families", mutate: func(b *Bundle) { b.Scope[0].Families = nil }, wantErr: "mixed"},
 		{name: "families on a feat commit", mutate: func(b *Bundle) { b.Scope[0].Family = FamilyFeat }, wantErr: "mixed"},
 		{name: "override without actor", mutate: func(b *Bundle) { b.Override.Actor = "" }, wantErr: "schema"},
-		{name: "override without reason", mutate: func(b *Bundle) { b.Override.Reason = "" }, wantErr: "schema"},
+		{name: "rejected override without reason is recordable", mutate: func(b *Bundle) {
+			b.Override.Reason, b.Override.Rejection = "", "no reason given"
+		}},
+		{name: "valid override without reason", mutate: func(b *Bundle) {
+			b.Override.Valid, b.Override.Rejection, b.Override.Reason = true, "", ""
+			b.Override.LabeledAt = commitAt.Add(time.Minute)
+		}, wantErr: "reason"},
+		{name: "valid override with a rejection", mutate: func(b *Bundle) {
+			b.Override.Valid, b.Override.LabeledAt = true, commitAt.Add(time.Minute)
+		}, wantErr: "no rejection"},
+		{name: "valid override labeled at the last commit time", mutate: func(b *Bundle) {
+			b.Override.Valid, b.Override.Rejection, b.Override.LabeledAt = true, "", commitAt
+		}, wantErr: "after a known last commit"},
+		{name: "valid override with unknown last commit", mutate: func(b *Bundle) {
+			b.Override.Valid, b.Override.Rejection, b.Override.LastCommitAt = true, "", time.Time{}
+		}, wantErr: "after a known last commit"},
+		{name: "characterization failing before", mutate: func(b *Bundle) { b.Obligations[2].Before = Fail }, wantErr: "characterization strength"},
+		{name: "characterization failing after", mutate: func(b *Bundle) { b.Obligations[2].After = Fail }, wantErr: "characterization strength"},
+		{name: "kind letter mismatch", mutate: func(b *Bundle) { b.Obligations[0].Kind = "N" }, wantErr: "kind letter"},
+		{name: "duplicate families", mutate: func(b *Bundle) { b.Scope[0].Families = []Family{FamilyFeat, FamilyFeat} }, wantErr: "schema"},
 		{name: "rejected override without rejection", mutate: func(b *Bundle) { b.Override.Rejection = "" }, wantErr: "rejection reason"},
 		{name: "valid override labeled before last commit", mutate: func(b *Bundle) {
 			b.Override.Valid, b.Override.Rejection = true, ""
-		}, wantErr: "after the last commit"},
+		}, wantErr: "after a known last commit"},
 		{name: "valid override labeled after last commit", mutate: func(b *Bundle) {
 			b.Override.Valid, b.Override.Rejection, b.Override.LabeledAt = true, "", commitAt.Add(time.Minute)
 		}},
@@ -232,13 +251,22 @@ func TestSchemaIsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, tc := range []struct{ name, from, to string }{
-		{"unknown top-level field", `"tier": 1,`, `"tier": 1, "trusted": true,`},
-		{"override removed", `"override": {`, `"overrideX": {`},
+	for _, tc := range []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{"unknown top-level field", func(m map[string]any) { m["trusted"] = true }},
+		{"override missing", func(m map[string]any) { delete(m, "override") }},
+		{"verdict missing", func(m map[string]any) { delete(m, "verdict") }},
 	} {
-		mutated := bytes.Replace(raw, []byte(tc.from), []byte(tc.to), 1)
-		if bytes.Equal(mutated, raw) {
-			t.Fatalf("%s: replacement did not apply", tc.name)
+		var m map[string]any
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatal(err)
+		}
+		tc.mutate(m)
+		mutated, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
 		}
 		if err := validateJSON(mutated); err == nil {
 			t.Errorf("%s: schema accepted it", tc.name)
