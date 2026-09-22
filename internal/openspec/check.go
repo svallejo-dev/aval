@@ -46,12 +46,16 @@ type Finding struct {
 	Severity Severity
 	Rule     Rule
 	Path     string // slash-separated path from the repository root
-	Line     int    // 1-based
+	Line     int    // 1-based; 0 when no line applies
 	Message  string
 }
 
 func (f Finding) String() string {
-	return fmt.Sprintf("%s:%d: %s: %s [%s]", f.Path, f.Line, f.Severity, f.Message, f.Rule)
+	where := f.Path
+	if f.Line > 0 {
+		where = fmt.Sprintf("%s:%d", f.Path, f.Line)
+	}
+	return fmt.Sprintf("%s: %s: %s [%s]", where, f.Severity, f.Message, f.Rule)
 }
 
 func (q Requirement) finding(s Severity, rule Rule, msg string) Finding {

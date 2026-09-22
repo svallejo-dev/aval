@@ -15,7 +15,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # .tool-versions (asdf) is the single source of truth for tool versions.
+      # .tool-versions (asdf) pins Go and golangci-lint. Node, needed only by
+      # the openspec-live job, is pinned in that job.
       - uses: actions/setup-go@v7
         with:
           go-version-file: .tool-versions
@@ -36,3 +37,26 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: ${{ steps.tools.outputs.golangci }}
+
+  # Differential test of internal/openspec against the real OpenSpec CLI
+  # (ADR-0002). It needs Node and npm, and installs OpenSpec from the npm
+  # registry into aval's cache, so it stays out of the ci job. Node is not in .tool-versions: its major is pinned
+  # here, and the OpenSpec version in the test.
+  openspec-live:
+    name: openspec-live
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: .tool-versions
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+
+      - name: Differential test against OpenSpec
+        env:
+          AVAL_OPENSPEC_LIVE: "1"
+        run: go test -race -count=1 -run '^TestLive$' -v ./internal/openspec

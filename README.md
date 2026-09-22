@@ -25,6 +25,15 @@ aval verify        ejecuta verificadores y genera la evidencia
 aval gate          decide y devuelve el exit code para CI
 ```
 
+## Requisitos
+
+- **Node.js y npm** para validar las specs con OpenSpec, en la versión exacta de `openspec.version` en `aval.yaml`, nunca un rango ni `latest`.
+  - OpenSpec nunca sale del repositorio: aval no usa su `node_modules` ni su `.npmrc`.
+  - La primera vez que se usa una versión, aval la instala fuera del repositorio, en `<caché del usuario>/aval/openspec/<versión>`, con `npm install --prefix <dir> --no-save --ignore-scripts --registry https://registry.npmjs.org/ @fission-ai/openspec@<versión>`. Esa instalación necesita red y va siempre al registro público de npm.
+  - npm corre sin las variables `npm_config_*` del entorno. Después, aval comprueba el nombre y la versión del `package.json` instalado. La instalación se escribe en un directorio temporal y se mueve con un rename, así que dos ejecuciones a la vez no la corrompen.
+  - Las siguientes ejecuciones reutilizan esa instalación: aval lanza su `bin` con `node` desde la raíz del repositorio, con la telemetría y la comprobación de actualizaciones de OpenSpec desactivadas.
+  - Sin Node ni npm, aval sale con código 3. Si la instalación de la caché no es la esperada, falla sin ejecutarla; hay que borrar ese directorio.
+
 ## Contribuir
 
 Modelo de ramas, commits y releases: [CONTRIBUTING.md](CONTRIBUTING.md).
