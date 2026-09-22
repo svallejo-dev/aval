@@ -7,6 +7,9 @@
 // ("ORD-F01 Refund is idempotent") and the Go subtest name
 // (t.Run("ORD-F01 rejects duplicates", ...)), which is how aval traces a
 // requirement to the tests that prove it.
+//
+// Two IDs name the same obligation only if their strings are equal: ORD-F01
+// and ORD-F001 are different obligations.
 package obligation
 
 import (
@@ -51,23 +54,26 @@ func (k Kind) Valid() bool {
 	return false
 }
 
-// Policy returns how the gate treats obligations of kind k.
+// Policy returns how the gate treats obligations of kind k. It fails closed:
+// a kind aval does not know blocks, it is never silently downgraded to a warning.
 func (k Kind) Policy() Policy {
 	switch k {
 	case Positive, Negative, Invariant:
 		return RequireTest
-	case Open:
-		return Block
-	default:
+	case SLO, Assumption:
 		return Warn
+	default:
+		return Block
 	}
 }
 
-// ID identifies an obligation. The zero value is not a valid ID.
+// ID identifies an obligation. IDs only come from Parse, FromTestSegment and
+// FromRequirementName, so an ID always matches its string. The zero value is
+// not a valid ID.
 type ID struct {
-	Context string
-	Kind    Kind
-	Number  int
+	context string
+	kind    Kind
+	number  int
 	raw     string
 }
 
@@ -81,8 +87,9 @@ var (
 	// A test2json name segment: spaces became underscores and duplicate
 	// subtest names got a #NN suffix.
 	testSegment = regexp.MustCompile(`^` + idPattern + `(?:_|$|#[0-9]+$)`)
-	// An OpenSpec requirement name: the ID, whitespace, then a title.
-	requirementName = regexp.MustCompile(`^` + idPattern + `\s+(\S.*)$`)
+	// An OpenSpec requirement name: the ID, blanks, then a title with no
+	// surrounding blanks. Line breaks never match.
+	requirementName = regexp.MustCompile(`^` + idPattern + `[ \t]+(\S(?:.*\S)?)[ \t]*$`)
 )
 
 // Parse parses s as an obligation ID such as "ORD-F01".
@@ -105,7 +112,8 @@ func FromTestSegment(segment string) (ID, bool) {
 }
 
 // FromRequirementName splits an OpenSpec requirement name such as
-// "ORD-F01 Refund is idempotent" into its ID and title.
+// "ORD-F01 Refund is idempotent" into its ID and trimmed title. Rules on the
+// whole name (length, forbidden characters) belong to the spec validator.
 func FromRequirementName(name string) (ID, string, bool) {
 	m := requirementName.FindStringSubmatch(name)
 	if m == nil {
@@ -120,8 +128,17 @@ func fromMatch(ctx, kind, num string) ID {
 		// Unreachable: the regular expression only matches digits.
 		panic(fmt.Sprintf("obligation: non-numeric match %q", num))
 	}
-	return ID{Context: ctx, Kind: Kind(kind[0]), Number: n, raw: ctx + "-" + kind + num}
+	return ID{context: ctx, kind: Kind(kind[0]), number: n, raw: ctx + "-" + kind + num}
 }
+
+// Context returns the bounded-context prefix, e.g. "ORD".
+func (id ID) Context() string { return id.context }
+
+// Kind returns the obligation kind, e.g. Positive for ORD-F01.
+func (id ID) Kind() Kind { return id.kind }
+
+// Number returns the numeric part, e.g. 1 for ORD-F01.
+func (id ID) Number() int { return id.number }
 
 // String returns the ID exactly as written, preserving leading zeros.
 func (id ID) String() string { return id.raw }
