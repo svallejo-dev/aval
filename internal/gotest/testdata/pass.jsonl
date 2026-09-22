@@ -1,0 +1,81 @@
+{"Time":"2006-01-02T15:04:05Z","Action":"start","Package":"example.com/fixturemod/pass"}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/pass","Test":"TestOrder"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrder","Output":"=== RUN   TestOrder\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-F01_rejects_duplicates"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-F01_rejects_duplicates","Output":"=== RUN   TestOrder/ORD-F01_rejects_duplicates\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-F01_rejects_duplicates","Output":"--- PASS: TestOrder/ORD-F01_rejects_duplicates (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-F01_rejects_duplicates","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-F01_rejects_duplicates#01"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-F01_rejects_duplicates#01","Output":"=== RUN   TestOrder/ORD-F01_rejects_duplicates#01\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-F01_rejects_duplicates#01","Output":"--- PASS: TestOrder/ORD-F01_rejects_duplicates#01 (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-F01_rejects_duplicates#01","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-F02_accepts_distinct_skus"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-F02_accepts_distinct_skus","Output":"=== RUN   TestOrder/ORD-F02_accepts_distinct_skus\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-F02_accepts_distinct_skus","Output":"--- PASS: TestOrder/ORD-F02_accepts_distinct_skus (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-F02_accepts_distinct_skus","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-N01"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-N01","Output":"=== RUN   TestOrder/ORD-N01\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-N01","Output":"--- PASS: TestOrder/ORD-N01 (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-N01","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-N01#01"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-N01#01","Output":"=== RUN   TestOrder/ORD-N01#01\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-N01#01","Output":"--- PASS: TestOrder/ORD-N01#01 (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-N01#01","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-F03_keeps_in/out_order"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-F03_keeps_in/out_order","Output":"=== RUN   TestOrder/ORD-F03_keeps_in/out_order\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-F03_keeps_in/out_order","Output":"--- PASS: TestOrder/ORD-F03_keeps_in/out_order (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-F03_keeps_in/out_order","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-F04:_colon_after_the_ID"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-F04:_colon_after_the_ID","Output":"=== RUN   TestOrder/ORD-F04:_colon_after_the_ID\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-F04:_colon_after_the_ID","Output":"--- PASS: TestOrder/ORD-F04:_colon_after_the_ID (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-F04:_colon_after_the_ID","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrder","Output":"--- PASS: TestOrder (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/pass","Test":"TestOrder","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/pass","Test":"TestOrderNested"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrderNested","Output":"=== RUN   TestOrderNested\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/pass","Test":"TestOrderNested/ORD-F05_lists_skus_in_insertion_order"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrderNested/ORD-F05_lists_skus_in_insertion_order","Output":"=== RUN   TestOrderNested/ORD-F05_lists_skus_in_insertion_order\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/pass","Test":"TestOrderNested/ORD-F05_lists_skus_in_insertion_order/empty_order"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrderNested/ORD-F05_lists_skus_in_insertion_order/empty_order","Output":"=== RUN   TestOrderNested/ORD-F05_lists_skus_in_insertion_order/empty_order\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrderNested/ORD-F05_lists_skus_in_insertion_order/empty_order","Output":"--- PASS: TestOrderNested/ORD-F05_lists_skus_in_insertion_order/empty_order (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/pass","Test":"TestOrderNested/ORD-F05_lists_skus_in_insertion_order/empty_order","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/pass","Test":"TestOrderNested/ORD-F05_lists_skus_in_insertion_order/two_skus"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrderNested/ORD-F05_lists_skus_in_insertion_order/two_skus","Output":"=== RUN   TestOrderNested/ORD-F05_lists_skus_in_insertion_order/two_skus\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrderNested/ORD-F05_lists_skus_in_insertion_order/two_skus","Output":"--- PASS: TestOrderNested/ORD-F05_lists_skus_in_insertion_order/two_skus (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/pass","Test":"TestOrderNested/ORD-F05_lists_skus_in_insertion_order/two_skus","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrderNested/ORD-F05_lists_skus_in_insertion_order","Output":"--- PASS: TestOrderNested/ORD-F05_lists_skus_in_insertion_order (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/pass","Test":"TestOrderNested/ORD-F05_lists_skus_in_insertion_order","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/pass","Test":"TestOrderNested/happy_path"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrderNested/happy_path","Output":"=== RUN   TestOrderNested/happy_path\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/pass","Test":"TestOrderNested/happy_path/ORD-F06_accepts_a_single_sku"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrderNested/happy_path/ORD-F06_accepts_a_single_sku","Output":"=== RUN   TestOrderNested/happy_path/ORD-F06_accepts_a_single_sku\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrderNested/happy_path/ORD-F06_accepts_a_single_sku","Output":"--- PASS: TestOrderNested/happy_path/ORD-F06_accepts_a_single_sku (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/pass","Test":"TestOrderNested/happy_path/ORD-F06_accepts_a_single_sku","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrderNested/happy_path","Output":"--- PASS: TestOrderNested/happy_path (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/pass","Test":"TestOrderNested/happy_path","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrderNested","Output":"--- PASS: TestOrderNested (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/pass","Test":"TestOrderNested","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/pass","Test":"TestOrderAttr"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrderAttr","Output":"=== RUN   TestOrderAttr\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/pass","Test":"TestOrderAttr/duplicate_sku_is_rejected"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrderAttr/duplicate_sku_is_rejected","Output":"=== RUN   TestOrderAttr/duplicate_sku_is_rejected\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"attr","Package":"example.com/fixturemod/pass","Test":"TestOrderAttr/duplicate_sku_is_rejected","Key":"aval.req","Value":"ORD-F01"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrderAttr/duplicate_sku_is_rejected","Output":"=== ATTR  TestOrderAttr/duplicate_sku_is_rejected aval.req ORD-F01\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"attr","Package":"example.com/fixturemod/pass","Test":"TestOrderAttr/duplicate_sku_is_rejected","Key":"aval.req","Value":"ORD-F02"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrderAttr/duplicate_sku_is_rejected","Output":"=== ATTR  TestOrderAttr/duplicate_sku_is_rejected aval.req ORD-F02\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrderAttr/duplicate_sku_is_rejected","Output":"--- PASS: TestOrderAttr/duplicate_sku_is_rejected (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/pass","Test":"TestOrderAttr/duplicate_sku_is_rejected","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrderAttr","Output":"--- PASS: TestOrderAttr (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/pass","Test":"TestOrderAttr","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/pass","Test":"TestOrderSkip"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrderSkip","Output":"=== RUN   TestOrderSkip\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/pass","Test":"TestOrderSkip/ORD-F07_survives_a_restart"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrderSkip/ORD-F07_survives_a_restart","Output":"=== RUN   TestOrderSkip/ORD-F07_survives_a_restart\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrderSkip/ORD-F07_survives_a_restart","Output":"    order_test.go:93: needs a database\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrderSkip/ORD-F07_survives_a_restart","Output":"--- SKIP: TestOrderSkip/ORD-F07_survives_a_restart (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"skip","Package":"example.com/fixturemod/pass","Test":"TestOrderSkip/ORD-F07_survives_a_restart","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrderSkip","Output":"--- PASS: TestOrderSkip (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/pass","Test":"TestOrderSkip","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Output":"PASS\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Output":"ok  \texample.com/fixturemod/pass\t0.000s\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/pass","Elapsed":0}

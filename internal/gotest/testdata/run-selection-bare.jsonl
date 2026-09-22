@@ -1,0 +1,12 @@
+{"Time":"2006-01-02T15:04:05Z","Action":"start","Package":"example.com/fixturemod/pass"}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/pass","Test":"TestOrder"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrder","Output":"=== RUN   TestOrder\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-N01"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-N01","Output":"=== RUN   TestOrder/ORD-N01\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-N01","Output":"--- PASS: TestOrder/ORD-N01 (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/pass","Test":"TestOrder/ORD-N01","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Test":"TestOrder","Output":"--- PASS: TestOrder (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/pass","Test":"TestOrder","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Output":"PASS\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/pass","Output":"ok  \texample.com/fixturemod/pass\t0.000s\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/pass","Elapsed":0}
