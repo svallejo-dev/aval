@@ -191,7 +191,7 @@ Hay dos tipos:
 
 ### 7. Evidencia, baseline y resumen
 
-- **`aval verify`** escribe el bundle en `.aval/evidence/<head>.json` y el estado para hooks en `.aval/cache/verify-status.json` (formato de `internal/hook`). La clave es `HEAD` más un hash de `git diff HEAD` **y de los ficheros sin seguimiento** (ruta y contenido), salvo los de `.aval/`, donde `verify` escribe después de calcular la clave. Así, un fichero nuevo tras `verify` invalida el estado.
+- **`aval verify`** escribe el bundle en `.aval/evidence/<head>.json` y el estado para hooks en `.aval/cache/verify-status.json` (formato de `internal/hook`). La clave es `HEAD` más un hash de `git diff HEAD` **y de los ficheros sin seguimiento** (ruta y contenido), salvo los de `.aval/cache/` y `.aval/evidence/`, donde `verify` escribe después de calcular la clave. Sin estado, el hook de Stop solo deja terminar si el árbol está limpio y HEAD ya está en una rama remota; un commit local sin verificar no escapa. Así, un fichero nuevo tras `verify` invalida el estado.
 - **`aval gate` en CI** (`GITHUB_ACTIONS=true`) ejecuta la verificación **en el mismo proceso** y **nunca reutiliza un bundle del disco**: el código del PR corre en el mismo runner y podría sobrescribir ficheros entre pasos, y `CheckHead` solo compara un SHA que es público.
 - **`aval gate` en local** puede reutilizar el bundle de `verify` si `CheckHead` coincide.
 - **Cierre:** el gate decide, escribe el veredicto y, en GitHub Actions, un resumen en `$GITHUB_STEP_SUMMARY`. El workflow sube el bundle como artefacto.
