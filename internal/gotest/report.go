@@ -21,7 +21,7 @@ type Report struct {
 	Tests    []TestOutcome // grouped by package, each in order of first appearance
 	Warnings []Warning
 	// Other holds what belongs to no package: lines that are not test2json
-	// events and build output no package claimed. At most MaxOutput bytes.
+	// events and build output no package claimed.
 	Other string
 	// ExitCode is go test's exit status when the report comes from Run.
 	ExitCode int
@@ -43,7 +43,7 @@ type Package struct {
 	// that exits non-zero, an invalid -run pattern. No obligation is blamed.
 	FailedOutsideTests bool
 	Output             string // package-level output, compiler errors included
-	Truncated          bool   // Output was cut at MaxOutput bytes
+	Truncated          bool   // Output was cut, see MaxOutput
 }
 
 // TestOutcome is the outcome of one test or subtest.
@@ -54,10 +54,14 @@ type TestOutcome struct {
 	// never ended: killed by the -timeout alarm, by a panic elsewhere, or by
 	// a truncated stream. Tests that never started have no TestOutcome. With
 	// -count > 1 it is the worst of all runs.
-	Status    evidence.Status
-	Bindings  []Binding
-	Output    string // everything but frame lines (=== RUN, --- PASS, ...)
-	Truncated bool   // Output was cut at MaxOutput bytes
+	Status   evidence.Status
+	Bindings []Binding
+	// Output is what the test printed, frame lines (=== RUN, --- FAIL, ...)
+	// excepted, unless it passed: a test's output is dropped once every run
+	// of it ended in pass, so a long run keeps only what explains failures,
+	// skips and hangs.
+	Output    string
+	Truncated bool // Output was cut, see MaxOutput
 }
 
 // Binding ties a test to an obligation.
@@ -95,12 +99,12 @@ type Warning struct {
 
 // Obligations maps each bound ID to the tests that own it, in report order.
 // Subtests that only inherit a binding are left out.
-func (r Report) Obligations() map[string][]TestOutcome {
-	m := make(map[string][]TestOutcome)
+func (r Report) Obligations() map[obligation.ID][]TestOutcome {
+	m := make(map[obligation.ID][]TestOutcome)
 	for _, t := range r.Tests {
 		for _, b := range t.Bindings {
 			if b.Owner == t.Name {
-				m[b.ID.String()] = append(m[b.ID.String()], t)
+				m[b.ID] = append(m[b.ID], t)
 			}
 		}
 	}
@@ -112,26 +116,31 @@ func (r Report) Obligations() map[string][]TestOutcome {
 // fail > not_run > skipped > pass. So a skipped table case marks the
 // obligation skipped even though go test passes its parent.
 //
-// With no bound test the ID never ran: selecting a missing ID passes with
-// "no tests to run", and that is NotRun, never Pass. It is BuildFail instead
-// when every package in the report failed to build, so no test could run.
+// With no bound test the ID did not run: selecting a missing ID passes with
+// "no tests to run", and that is NotRun, never Pass. pkgs names the packages
+// the ID's tests live in, as another run knows them (the gate passes the
+// owners' packages at head when it asks about the base): if any of them
+// failed to build here, the status is BuildFail. A package that failed to
+// build elsewhere in the report never makes it BuildFail.
+//
 // Package-level failures do not change the status; see
 // Package.FailedOutsideTests.
-func (r Report) Status(id obligation.ID) evidence.Status {
+func (r Report) Status(id obligation.ID, pkgs ...string) evidence.Status {
 	var status evidence.Status
 	for _, t := range r.Tests {
 		if slices.ContainsFunc(t.Bindings, func(b Binding) bool { return b.ID == id }) {
 			status = worse(status, t.Status)
 		}
 	}
-	switch {
-	case status != "":
+	if status != "" {
 		return status
-	case len(r.Packages) > 0 && !slices.ContainsFunc(r.Packages, func(p Package) bool { return p.Status != evidence.BuildFail }):
-		return evidence.BuildFail
-	default:
-		return evidence.NotRun
 	}
+	for _, p := range r.Packages {
+		if p.Status == evidence.BuildFail && slices.Contains(pkgs, p.Name) {
+			return evidence.BuildFail
+		}
+	}
+	return evidence.NotRun
 }
 
 // severity ranks test statuses for worse; unknown statuses rank lowest.

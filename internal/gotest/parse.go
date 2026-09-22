@@ -15,9 +15,13 @@ import (
 	"github.com/svallejo-dev/aval/internal/obligation"
 )
 
-// MaxOutput is how many bytes of output each test, each package and
-// Report.Other keep; the rest is dropped and marked as truncated.
-const MaxOutput = 64 << 10
+// MaxOutput is how many bytes of output one test, one package or
+// Report.Other keeps, and MaxReportOutput how many they all keep together.
+// Output past either limit is dropped and marked as truncated.
+const (
+	MaxOutput       = 64 << 10
+	MaxReportOutput = 16 << 20
+)
 
 // maxLine bounds one line of the stream. test2json splits long output lines,
 // so real events stay far below it.
@@ -43,7 +47,9 @@ type event struct {
 // It keys every event by package and test, never by position, so parallel
 // tests and several packages may interleave. It fails only if r does.
 func Parse(r io.Reader) (Report, error) {
-	p := parser{pkgs: map[string]*pkgState{}, builds: map[string]*capture{}, claimed: map[string]bool{}}
+	p := &parser{pkgs: map[string]*pkgState{}, builds: map[string]*capture{}, claimed: map[string]bool{},
+		budget: MaxReportOutput}
+	p.other.budget = &p.budget
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64<<10), maxLine)
 	for sc.Scan() {
@@ -62,6 +68,7 @@ type parser struct {
 	buildOrder []string
 	claimed    map[string]bool // build output some package's FailedBuild named
 	other      capture
+	budget     int // output bytes the report may still keep
 }
 
 type pkgState struct {
@@ -71,6 +78,7 @@ type pkgState struct {
 	tests     map[string]*testState
 	testOrder []*testState
 	bindings  map[string][]Binding // memoized by test name
+	budget    *int
 }
 
 // endStatus maps the actions that end a test to its status.
@@ -98,7 +106,7 @@ func (p *parser) line(b []byte) {
 	case e.Action == "build-output":
 		c, ok := p.builds[e.ImportPath]
 		if !ok {
-			c = &capture{}
+			c = &capture{budget: &p.budget}
 			p.builds[e.ImportPath] = c
 			p.buildOrder = append(p.buildOrder, e.ImportPath)
 		}
@@ -117,7 +125,8 @@ func (p *parser) line(b []byte) {
 func (p *parser) pkg(name string) *pkgState {
 	ps, ok := p.pkgs[name]
 	if !ok {
-		ps = &pkgState{pkg: Package{Name: name}, tests: map[string]*testState{}, bindings: map[string][]Binding{}}
+		ps = &pkgState{pkg: Package{Name: name}, tests: map[string]*testState{}, bindings: map[string][]Binding{},
+			out: capture{budget: &p.budget}, budget: &p.budget}
 		p.pkgs[name] = ps
 		p.pkgOrder = append(p.pkgOrder, ps)
 	}
@@ -152,7 +161,7 @@ func (p *parser) packageEvent(ps *pkgState, e event) {
 func (ps *pkgState) test(name string) *testState {
 	ts, ok := ps.tests[name]
 	if !ok {
-		ts = &testState{name: name}
+		ts = &testState{name: name, out: capture{budget: ps.budget}}
 		ps.tests[name] = ts
 		ps.testOrder = append(ps.testOrder, ts)
 	}
@@ -174,6 +183,9 @@ func (ts *testState) event(e event) {
 	case "pass", "fail", "skip":
 		ts.ended++
 		ts.status = worse(ts.status, endStatus[e.Action])
+		if ts.status == evidence.Pass {
+			ts.out.release()
+		}
 	}
 }
 
@@ -302,23 +314,40 @@ func (w *warner) warn(wa Warning, prefix string) {
 }
 
 // capture keeps the first MaxOutput bytes written to it, cut at a rune
-// boundary.
+// boundary, and no more than its budget allows, when it has one.
 type capture struct {
 	b         strings.Builder
 	truncated bool
+	budget    *int // shared by every capture of a report
 }
 
 func (c *capture) add(s string) {
 	if c.truncated {
 		return
 	}
-	if room := MaxOutput - c.b.Len(); len(s) > room {
+	room := MaxOutput - c.b.Len()
+	if c.budget != nil {
+		room = min(room, *c.budget)
+	}
+	if len(s) > room {
 		for room > 0 && !utf8.RuneStart(s[room]) {
 			room--
 		}
 		s, c.truncated = s[:room], true
 	}
 	c.b.WriteString(s)
+	if c.budget != nil {
+		*c.budget -= len(s)
+	}
+}
+
+// release drops what c kept and returns it to the budget.
+func (c *capture) release() {
+	if c.budget != nil {
+		*c.budget += c.b.Len()
+	}
+	c.b.Reset()
+	c.truncated = false
 }
 
 // Write lets a capture collect a command's standard error. It never fails,
