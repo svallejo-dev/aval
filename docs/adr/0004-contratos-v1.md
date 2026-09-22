@@ -61,6 +61,7 @@ Cada contrato vive en el paquete del concepto que representa, con tipos Go, JSON
 - **Por tanto, cualquier cambio de forma sube la versión** (`schemaVersion` o `version`), incluso añadir un campo opcional, y exige un ADR nuevo.
 - **Es barato:** el bundle lo produce y lo consume el mismo binario en el mismo job, y los manifiestos se validan con la versión de aval fijada en el repo.
 - **aval rechaza versiones que no conoce** con exit 2, en lugar de interpretarlas.
+- **Ratificado por el usuario el 2026-09-22.** Esto sustituye la regla del plan inicial, según la cual añadir campos opcionales mantenía la versión.
 
 ## Consecuencias
 
