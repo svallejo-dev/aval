@@ -1,0 +1,24 @@
+{"Time":"2006-01-02T15:04:05Z","Action":"start","Package":"example.com/fixturemod/fail"}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/fail","Test":"TestOrder"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/fail","Test":"TestOrder","Output":"=== RUN   TestOrder\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/fail","Test":"TestOrder/ORD-F01_rejects_duplicates"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/fail","Test":"TestOrder/ORD-F01_rejects_duplicates","Output":"=== RUN   TestOrder/ORD-F01_rejects_duplicates\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/fail","Test":"TestOrder/ORD-F01_rejects_duplicates","Output":"    order_test.go:17: second Add(\"a\"):\n","OutputType":"error"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/fail","Test":"TestOrder/ORD-F01_rejects_duplicates","Output":"         got: \u003cnil\u003e\n","OutputType":"error-continue"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/fail","Test":"TestOrder/ORD-F01_rejects_duplicates","Output":"        want: duplicate sku\n","OutputType":"error-continue"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/fail","Test":"TestOrder/ORD-F01_rejects_duplicates","Output":"--- FAIL: TestOrder/ORD-F01_rejects_duplicates (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"fail","Package":"example.com/fixturemod/fail","Test":"TestOrder/ORD-F01_rejects_duplicates","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/fail","Test":"TestOrder/ORD-F02_accepts_distinct_skus"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/fail","Test":"TestOrder/ORD-F02_accepts_distinct_skus","Output":"=== RUN   TestOrder/ORD-F02_accepts_distinct_skus\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/fail","Test":"TestOrder/ORD-F02_accepts_distinct_skus","Output":"--- PASS: TestOrder/ORD-F02_accepts_distinct_skus (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/fail","Test":"TestOrder/ORD-F02_accepts_distinct_skus","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/fail","Test":"TestOrder","Output":"--- FAIL: TestOrder (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"fail","Package":"example.com/fixturemod/fail","Test":"TestOrder","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/fail","Test":"TestNoID"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/fail","Test":"TestNoID","Output":"=== RUN   TestNoID\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/fail","Test":"TestNoID","Output":"    order_test.go:34: Len() = 0, want 1\n","OutputType":"error"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/fail","Test":"TestNoID","Output":"--- FAIL: TestNoID (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"fail","Package":"example.com/fixturemod/fail","Test":"TestNoID","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/fail","Output":"FAIL\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/fail","Output":"FAIL\texample.com/fixturemod/fail\t0.000s\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"fail","Package":"example.com/fixturemod/fail","Elapsed":0}

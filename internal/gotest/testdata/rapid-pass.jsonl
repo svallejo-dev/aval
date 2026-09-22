@@ -1,0 +1,13 @@
+{"Time":"2006-01-02T15:04:05Z","Action":"start","Package":"example.com/fixturemod/rapidpass"}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/rapidpass","Test":"TestCounter"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/rapidpass","Test":"TestCounter","Output":"=== RUN   TestCounter\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/rapidpass","Test":"TestCounter/ORD-I01_counter_stays_within_bounds"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/rapidpass","Test":"TestCounter/ORD-I01_counter_stays_within_bounds","Output":"=== RUN   TestCounter/ORD-I01_counter_stays_within_bounds\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/rapidpass","Test":"TestCounter/ORD-I01_counter_stays_within_bounds","Output":"    counter_test.go:28: [rapid] OK, passed 100 tests (0s)\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/rapidpass","Test":"TestCounter/ORD-I01_counter_stays_within_bounds","Output":"--- PASS: TestCounter/ORD-I01_counter_stays_within_bounds (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/rapidpass","Test":"TestCounter/ORD-I01_counter_stays_within_bounds","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/rapidpass","Test":"TestCounter","Output":"--- PASS: TestCounter (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/rapidpass","Test":"TestCounter","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/rapidpass","Output":"PASS\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/rapidpass","Output":"ok  \texample.com/fixturemod/rapidpass\t0.000s\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/rapidpass","Elapsed":0}

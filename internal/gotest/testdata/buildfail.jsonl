@@ -1,0 +1,6 @@
+{"ImportPath":"example.com/fixturemod/buildfail [example.com/fixturemod/buildfail.test]","Action":"build-output","Output":"# example.com/fixturemod/buildfail [example.com/fixturemod/buildfail.test]\n"}
+{"ImportPath":"example.com/fixturemod/buildfail [example.com/fixturemod/buildfail.test]","Action":"build-output","Output":"buildfail/order_test.go:8:13: undefined: Subtotal\n"}
+{"ImportPath":"example.com/fixturemod/buildfail [example.com/fixturemod/buildfail.test]","Action":"build-fail"}
+{"Time":"2006-01-02T15:04:05Z","Action":"start","Package":"example.com/fixturemod/buildfail"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/buildfail","Output":"FAIL\texample.com/fixturemod/buildfail [build failed]\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"fail","Package":"example.com/fixturemod/buildfail","Elapsed":0,"FailedBuild":"example.com/fixturemod/buildfail [example.com/fixturemod/buildfail.test]"}

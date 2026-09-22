@@ -1,0 +1,51 @@
+{"Time":"2006-01-02T15:04:05Z","Action":"start","Package":"example.com/fixturemod/timeout"}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/timeout","Test":"TestQueue"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue","Output":"=== RUN   TestQueue\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"=== RUN   TestQueue/ORD-F08_drains_the_queue\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"panic: test timed out after 1s\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"\trunning tests:\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"\t\tTestQueue (0s)\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"\t\tTestQueue/ORD-F08_drains_the_queue (0s)\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"goroutine N [running]:\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"testing.(*M).startAlarm.func1()\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"\t$GOROOT/src/testing/testing.go:2959 +0x0\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"created by time.goFunc\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"\t$GOROOT/src/time/sleep.go:182 +0x0\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"goroutine N [chan receive]:\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"testing.(*T).Run(0x0, {0x0, 0x0}, 0x0)\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"\t$GOROOT/src/testing/testing.go:2266 +0x0\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"testing.runTests.func1(0x0)\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"\t$GOROOT/src/testing/testing.go:2742 +0x0\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"testing.tRunner(0x0, 0x0)\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"\t$GOROOT/src/testing/testing.go:2193 +0x0\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"testing.runTests({0x0, 0x0}, {0x0, 0x0}, 0x0, {0x0, 0x0, 0x0}, {0x0, 0x0, ...})\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"\t$GOROOT/src/testing/testing.go:2740 +0x0\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"testing.(*M).Run(0x0)\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"\t$GOROOT/src/testing/testing.go:2600 +0x0\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"main.main()\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"\t_testmain.go:46 +0x0\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"goroutine N [chan receive]:\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"testing.(*T).Run(0x0, {0x0, 0x0}, 0x0)\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"\t$GOROOT/src/testing/testing.go:2266 +0x0\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"example.com/fixturemod/timeout.TestQueue(0x0)\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"\t$FIXTUREMOD/timeout/queue_test.go:6 +0x0\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"testing.tRunner(0x0, 0x0)\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"\t$GOROOT/src/testing/testing.go:2193 +0x0\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"created by testing.(*T).Run in goroutine N\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"\t$GOROOT/src/testing/testing.go:2258 +0x0\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"goroutine N [select (no cases)]:\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"example.com/fixturemod/timeout.Drain(...)\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"\t$FIXTUREMOD/timeout/queue.go:8\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"example.com/fixturemod/timeout.TestQueue.func1(0x0)\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"\t$FIXTUREMOD/timeout/queue_test.go:7 +0x0\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"testing.tRunner(0x0, 0x0)\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"\t$GOROOT/src/testing/testing.go:2193 +0x0\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"created by testing.(*T).Run in goroutine N\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Test":"TestQueue/ORD-F08_drains_the_queue","Output":"\t$GOROOT/src/testing/testing.go:2258 +0x0\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/timeout","Output":"FAIL\texample.com/fixturemod/timeout\t0.000s\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"fail","Package":"example.com/fixturemod/timeout","Elapsed":0}

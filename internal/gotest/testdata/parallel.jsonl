@@ -1,0 +1,24 @@
+{"Time":"2006-01-02T15:04:05Z","Action":"start","Package":"example.com/fixturemod/parallel"}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/parallel","Test":"TestDouble"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/parallel","Test":"TestDouble","Output":"=== RUN   TestDouble\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/parallel","Test":"TestDouble/ORD-F30_doubles_one"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/parallel","Test":"TestDouble/ORD-F30_doubles_one","Output":"=== RUN   TestDouble/ORD-F30_doubles_one\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/parallel","Test":"TestDouble/ORD-F30_doubles_one","Output":"=== PAUSE TestDouble/ORD-F30_doubles_one\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pause","Package":"example.com/fixturemod/parallel","Test":"TestDouble/ORD-F30_doubles_one"}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/parallel","Test":"TestDouble/ORD-F31_doubles_zero"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/parallel","Test":"TestDouble/ORD-F31_doubles_zero","Output":"=== RUN   TestDouble/ORD-F31_doubles_zero\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/parallel","Test":"TestDouble/ORD-F31_doubles_zero","Output":"=== PAUSE TestDouble/ORD-F31_doubles_zero\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pause","Package":"example.com/fixturemod/parallel","Test":"TestDouble/ORD-F31_doubles_zero"}
+{"Time":"2006-01-02T15:04:05Z","Action":"cont","Package":"example.com/fixturemod/parallel","Test":"TestDouble/ORD-F30_doubles_one"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/parallel","Test":"TestDouble/ORD-F30_doubles_one","Output":"=== CONT  TestDouble/ORD-F30_doubles_one\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/parallel","Test":"TestDouble/ORD-F30_doubles_one","Output":"--- PASS: TestDouble/ORD-F30_doubles_one (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/parallel","Test":"TestDouble/ORD-F30_doubles_one","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"cont","Package":"example.com/fixturemod/parallel","Test":"TestDouble/ORD-F31_doubles_zero"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/parallel","Test":"TestDouble/ORD-F31_doubles_zero","Output":"=== CONT  TestDouble/ORD-F31_doubles_zero\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/parallel","Test":"TestDouble/ORD-F31_doubles_zero","Output":"--- PASS: TestDouble/ORD-F31_doubles_zero (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/parallel","Test":"TestDouble/ORD-F31_doubles_zero","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/parallel","Test":"TestDouble","Output":"--- PASS: TestDouble (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/parallel","Test":"TestDouble","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/parallel","Output":"PASS\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/parallel","Output":"ok  \texample.com/fixturemod/parallel\t0.000s\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/parallel","Elapsed":0}

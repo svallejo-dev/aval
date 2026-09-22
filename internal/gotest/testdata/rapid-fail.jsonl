@@ -1,0 +1,20 @@
+{"Time":"2006-01-02T15:04:05Z","Action":"start","Package":"example.com/fixturemod/rapidfail"}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/rapidfail","Test":"TestCounter"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/rapidfail","Test":"TestCounter","Output":"=== RUN   TestCounter\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/rapidfail","Test":"TestCounter/ORD-I01_counter_stays_within_bounds"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/rapidfail","Test":"TestCounter/ORD-I01_counter_stays_within_bounds","Output":"=== RUN   TestCounter/ORD-I01_counter_stays_within_bounds\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/rapidfail","Test":"TestCounter/ORD-I01_counter_stays_within_bounds","Output":"    counter_test.go:28: [rapid] failed after 1 tests: Value() = 4, want within [0, 3]\n","OutputType":"error"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/rapidfail","Test":"TestCounter/ORD-I01_counter_stays_within_bounds","Output":"        To reproduce, specify -run=\"TestCounter/ORD-I01_counter_stays_within_bounds\" -rapid.seed=2\n","OutputType":"error-continue"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/rapidfail","Test":"TestCounter/ORD-I01_counter_stays_within_bounds","Output":"        Failed test output:\n","OutputType":"error-continue"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/rapidfail","Test":"TestCounter/ORD-I01_counter_stays_within_bounds","Output":"    counter_test.go:29: [rapid] draw action: \"Inc\"\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/rapidfail","Test":"TestCounter/ORD-I01_counter_stays_within_bounds","Output":"    counter_test.go:29: [rapid] draw action: \"Inc\"\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/rapidfail","Test":"TestCounter/ORD-I01_counter_stays_within_bounds","Output":"    counter_test.go:29: [rapid] draw action: \"Inc\"\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/rapidfail","Test":"TestCounter/ORD-I01_counter_stays_within_bounds","Output":"    counter_test.go:29: [rapid] draw action: \"Inc\"\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/rapidfail","Test":"TestCounter/ORD-I01_counter_stays_within_bounds","Output":"    counter_test.go:22: Value() = 4, want within [0, 3]\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/rapidfail","Test":"TestCounter/ORD-I01_counter_stays_within_bounds","Output":"--- FAIL: TestCounter/ORD-I01_counter_stays_within_bounds (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"fail","Package":"example.com/fixturemod/rapidfail","Test":"TestCounter/ORD-I01_counter_stays_within_bounds","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/rapidfail","Test":"TestCounter","Output":"--- FAIL: TestCounter (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"fail","Package":"example.com/fixturemod/rapidfail","Test":"TestCounter","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/rapidfail","Output":"FAIL\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/rapidfail","Output":"FAIL\texample.com/fixturemod/rapidfail\t0.000s\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"fail","Package":"example.com/fixturemod/rapidfail","Elapsed":0}

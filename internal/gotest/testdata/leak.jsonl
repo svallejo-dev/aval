@@ -1,0 +1,19 @@
+{"Time":"2006-01-02T15:04:05Z","Action":"start","Package":"example.com/fixturemod/leak"}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/leak","Test":"TestWorker"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/leak","Test":"TestWorker","Output":"=== RUN   TestWorker\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/leak","Test":"TestWorker/ORD-O01_worker_stops_on_shutdown"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/leak","Test":"TestWorker/ORD-O01_worker_stops_on_shutdown","Output":"=== RUN   TestWorker/ORD-O01_worker_stops_on_shutdown\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/leak","Test":"TestWorker/ORD-O01_worker_stops_on_shutdown","Output":"--- PASS: TestWorker/ORD-O01_worker_stops_on_shutdown (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/leak","Test":"TestWorker/ORD-O01_worker_stops_on_shutdown","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/leak","Test":"TestWorker","Output":"--- PASS: TestWorker (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/leak","Test":"TestWorker","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/leak","Output":"PASS\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/leak","Output":"goleak: Errors on successful test run: found unexpected goroutines:\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/leak","Output":"[Goroutine N in state chan receive, with example.com/fixturemod/leak.Start.func1 on top of the stack:\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/leak","Output":"example.com/fixturemod/leak.Start.func1()\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/leak","Output":"\t$FIXTUREMOD/leak/worker.go:9 +0x0\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/leak","Output":"created by example.com/fixturemod/leak.Start in goroutine N\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/leak","Output":"\t$FIXTUREMOD/leak/worker.go:9 +0x0\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/leak","Output":"]\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/leak","Output":"FAIL\texample.com/fixturemod/leak\t0.000s\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"fail","Package":"example.com/fixturemod/leak","Elapsed":0}
