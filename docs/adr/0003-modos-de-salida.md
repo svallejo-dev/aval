@@ -11,10 +11,10 @@ A aval lo usan tres tipos de cliente: una persona en una terminal, un log de CI 
 
 ### Tres modos, resueltos en un solo sitio
 
-`internal/ui` resuelve el modo con una función pura (`ui.Resolve`) sobre una entrada explícita: los flags, una función para leer el entorno y si la salida es una terminal. El orden es:
+`internal/ui` resuelve el modo con una función pura (`ui.Resolve`) sobre una entrada explícita: los flags, una función para leer el entorno, si la salida es una terminal y si stdin lo es. El orden es:
 
 1. **`json`** si se pasa `--json`. Gana a todo lo demás, también a `--plain` y a `CI`.
-2. **`plain`** si se pasa `--plain`, si stdout no es una terminal (`os.File.Stat()` sin `os.ModeCharDevice`), si `CI` es verdadero según `strconv.ParseBool` o si `TERM=dumb`.
+2. **`plain`** si se pasa `--plain`, si stdout no es una terminal, si `CI` es verdadero según `strconv.ParseBool` o si `TERM=dumb`. Para saber si algo es una terminal, se consulta al driver con un ioctl (`github.com/charmbracelet/x/term`). Así, `/dev/null`, los pipes y los ficheros no cuentan como terminal.
 3. **`tui`** en cualquier otro caso.
 
 Una variable de entorno cuenta como definida si existe y no está vacía, igual que exige la convención de [NO_COLOR](https://no-color.org).
@@ -23,17 +23,17 @@ Una variable de entorno cuenta como definida si existe y no está vacía, igual 
 
 | | Color | Animaciones | Preguntas |
 |---|---|---|---|
-| `tui` | sí, salvo `NO_COLOR` | sí, salvo `--no-animation` o `AVAL_REDUCED_MOTION` | sí, salvo `--yes` |
+| `tui` | sí, salvo `NO_COLOR` | sí, salvo `--no-animation` o `AVAL_REDUCED_MOTION` | solo si stdin es una terminal y no hay `--yes` |
 | `plain` | no | no | no |
 | `json` | no | no | no |
 
-**Nunca se pregunta sin TTY.** Solo se pregunta en `tui`, y `tui` exige una terminal. Por eso un pipe, un fichero, el CI o un agente nunca se quedan bloqueados esperando una respuesta. `--yes` acepta los valores por defecto también en una terminal.
+**Nunca se pregunta sin TTY.** Solo se pregunta en `tui`, que exige una terminal en stdout, y además stdin tiene que ser una terminal. Por eso un pipe, un fichero, el CI o un agente nunca se quedan bloqueados esperando una respuesta. `--yes` acepta los valores por defecto también en una terminal. Informar de un error nunca pregunta.
 
 ### Los comandos no saben cómo se muestran
 
 Un comando entrega a `ui` un `ui.Result`: el nombre del comando, los datos del envelope JSON y su forma legible como líneas de texto con tono (título, éxito, aviso, error, apagado). El `ui.Printer` lo escribe según el modo:
 
-- **`json`:** el envelope v1 (`schemaVersion`, `command`, `ok`, `data`, `errors`) por stdout. `errors` es siempre un array, nunca `null`.
+- **`json`:** el envelope v1 (`schemaVersion`, `command`, `ok`, `data`, `errors`) de `internal/envelope`, por stdout. `errors` es siempre un array, nunca `null`.
 - **`plain`:** el texto sin tonos y sin cortar líneas, para que los logs se puedan filtrar con grep.
 - **`tui`:** el mismo texto con estilos de Lip Gloss v2. Por ahora la salida es estática; las vistas en vivo con Bubble Tea llegarán en hitos posteriores.
 
@@ -49,12 +49,16 @@ Los errores salen como envelope con `ok: false` por stdout en `json`. En los otr
 
 ### Hooks de agentes sin Charm
 
-Los hooks que ejecutan los agentes corren en cada acción y tienen un presupuesto de latencia de **menos de 50 ms**. No pueden importar `internal/ui` ni ningún paquete `charm.land/*`, ni directa ni indirectamente: escriben su salida con la biblioteca estándar.
+Los hooks que ejecutan los agentes corren en cada acción y tienen un presupuesto de latencia de **menos de 50 ms**. Por eso no pueden importar `internal/ui` ni ningún paquete de Charm, ni directa ni indirectamente.
+
+- **Los hooks vivirán en `internal/hook`.** Escribirán su salida con la biblioteca estándar.
+- **El envelope vive en `internal/envelope`**, que solo usa la biblioteca estándar. Así los hooks emiten el mismo contrato que `--json` sin cargar Charm. `internal/ui` lo importa, y no al revés.
+- **Una regla de golangci-lint lo impone.** La regla `charm-free` de depguard, en `.golangci.yml`, prohíbe `charm.land/` y `github.com/charmbracelet/` en `internal/envelope` e `internal/hook`, tests incluidos. Un import prohibido rompe `make verify` y el CI.
 
 ## Consecuencias
 
 - Cada modo tiene golden files en `internal/ui/testdata` (`go test ./internal/ui -update` los regenera). Los de `tui` se generan con un ancho fijo y el color apagado de forma explícita. En Lip Gloss v2, `Style.Render` no lee el entorno, así que el resultado es igual en cualquier máquina.
 - No se importa `github.com/charmbracelet/colorprofile` directamente, porque eso cambiaría `go.mod`. El color lo decide el tema a partir de `Settings.Color`.
-- Si un hook necesita el envelope, habrá que sacarlo a un paquete sin dependencias de Charm.
-- `/dev/null` también es un dispositivo de caracteres. Cuando lleguen las preguntas, también exigirán que stdin sea una terminal.
+- `github.com/charmbracelet/x/term` pasa a ser una dependencia directa de `internal/ui`. Ya estaba en el grafo de módulos como dependencia indirecta.
+- depguard no debe quedar activado sin reglas. En ese caso aplica su regla por defecto, que solo permite la biblioteca estándar en todo el repositorio.
 - La salida estática todavía no conoce el ancho de la terminal. `tui` solo corta líneas cuando recibe un ancho (`ui.WithWidth`).
