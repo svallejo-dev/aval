@@ -1,10 +1,17 @@
 {
   "items": [
     {
-      "id": "modified-drops-marker",
+      "id": "non-requirement-h3",
       "type": "change",
       "valid": true,
-      "issues": [],
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "refunds/spec.md",
+          "line": 6,
+          "message": "Header \"### Notes\" in ADDED Requirements is not a \"### Requirement:\" header and is ignored by validation. Use \"### Requirement: Notes\" if it should be validated as a requirement."
+        }
+      ],
       "durationMs": 7
     }
   ],

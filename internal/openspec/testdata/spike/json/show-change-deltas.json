@@ -6,9 +6,9 @@
     {
       "spec": "refunds",
       "operation": "ADDED",
-      "description": "Add requirement: The system SHALL reject any refund whose cumulative amount would exceed the order total.",
+      "description": "Add requirement: The system MUST NOT issue a refund whose cumulative amount would exceed the order total.",
       "requirement": {
-        "text": "The system SHALL reject any refund whose cumulative amount would exceed the order total.",
+        "text": "The system MUST NOT issue a refund whose cumulative amount would exceed the order total.",
         "scenarios": [
           {
             "rawText": "- **WHEN** a refund request would bring the refunded total above the order total\n- **THEN** the system rejects the request with a limit error and issues no refund"
@@ -17,7 +17,7 @@
       },
       "requirements": [
         {
-          "text": "The system SHALL reject any refund whose cumulative amount would exceed the order total.",
+          "text": "The system MUST NOT issue a refund whose cumulative amount would exceed the order total.",
           "scenarios": [
             {
               "rawText": "- **WHEN** a refund request would bring the refunded total above the order total\n- **THEN** the system rejects the request with a limit error and issues no refund"
@@ -87,14 +87,14 @@
     {
       "spec": "refunds",
       "operation": "REMOVED",
-      "description": "Remove requirement: **Reason**: Refund notifications move to the notifications service.\n**Migration**: Subscribe to the refund.issued event instead.",
+      "description": "Remove requirement: **Reason**: The gateway now confirms refunds asynchronously through a callback, so the assumption no longer holds.\n**Migration**: Mark refunds completed only when the gateway callback arrives.",
       "requirement": {
-        "text": "**Reason**: Refund notifications move to the notifications service.\n**Migration**: Subscribe to the refund.issued event instead.",
+        "text": "**Reason**: The gateway now confirms refunds asynchronously through a callback, so the assumption no longer holds.\n**Migration**: Mark refunds completed only when the gateway callback arrives.",
         "scenarios": []
       },
       "requirements": [
         {
-          "text": "**Reason**: Refund notifications move to the notifications service.\n**Migration**: Subscribe to the refund.issued event instead.",
+          "text": "**Reason**: The gateway now confirms refunds asynchronously through a callback, so the assumption no longer holds.\n**Migration**: Mark refunds completed only when the gateway callback arrives.",
           "scenarios": []
         }
       ]
@@ -102,10 +102,10 @@
     {
       "spec": "refunds",
       "operation": "RENAMED",
-      "description": "Rename requirement from \"ORD-N01 Old title\" to \"ORD-N01 New title\"",
+      "description": "Rename requirement from \"ORD-S01 Fast refund answer\" to \"ORD-S01 Refund latency under 300 ms\"",
       "rename": {
-        "from": "ORD-N01 Old title",
-        "to": "ORD-N01 New title"
+        "from": "ORD-S01 Fast refund answer",
+        "to": "ORD-S01 Refund latency under 300 ms"
       }
     }
   ],

@@ -1,7 +1,7 @@
 {
   "items": [
     {
-      "id": "modified-drops-marker",
+      "id": "renamed-then-modified",
       "type": "change",
       "valid": true,
       "issues": [],

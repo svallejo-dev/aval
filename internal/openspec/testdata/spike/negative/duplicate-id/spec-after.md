@@ -20,7 +20,7 @@ The system SHALL process a refund request at most once per idempotency key withi
 - **WHEN** a refund request reuses an idempotency key older than 24 hours
 - **THEN** the system treats it as a new request
 
-### Requirement: ORD-N01 New title
+### Requirement: ORD-S01 Refund latency under 300 ms
 The system MUST answer a refund request within 300 ms at p99 under nominal load.
 
 #### Scenario: Nominal load latency
@@ -35,8 +35,8 @@ The system SHALL write exactly one ledger entry, with a negative amount, for eve
 - **WHEN** a refund is issued
 - **THEN** exactly one ledger entry with the refund amount is written
 
-### Requirement: ORD-F02 Refund capped at order total
-The system SHALL reject any refund whose cumulative amount would exceed the order total.
+### Requirement: ORD-N01 Refund never exceeds order total
+The system MUST NOT issue a refund whose cumulative amount would exceed the order total.
 
 #### Scenario: Refund above remaining amount
 - **WHEN** a refund request would bring the refunded total above the order total

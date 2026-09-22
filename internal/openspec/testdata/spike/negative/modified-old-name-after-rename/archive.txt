@@ -1,6 +1,6 @@
 
 Validation errors in change delta specs:
-  ✗ MODIFIED references old name from RENAMED. Use new header for "ORD-N01 Latency budget"
+  ✗ MODIFIED references old name from RENAMED. Use new header for "ORD-S01 Refund latency budget"
 
 Validation failed. Please fix the errors before archiving.
 To skip validation (not recommended), use --no-validate flag.

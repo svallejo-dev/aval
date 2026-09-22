@@ -8,7 +8,7 @@
         {
           "level": "ERROR",
           "path": "refunds/spec.md",
-          "message": "MODIFIED references old name from RENAMED. Use new header for \"ORD-N01 Latency budget\""
+          "message": "MODIFIED references old name from RENAMED. Use new header for \"ORD-S01 Refund latency budget\""
         }
       ],
       "durationMs": 6

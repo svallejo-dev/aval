@@ -1,6 +1,6 @@
 ## ADDED Requirements
 
-### Requirement: [ORD-F03] Refund reason required
+### Requirement: [ORD-F04] Refund reason required
 The system SHALL reject a refund request that carries no reason code.
 
 #### Scenario: Missing reason code

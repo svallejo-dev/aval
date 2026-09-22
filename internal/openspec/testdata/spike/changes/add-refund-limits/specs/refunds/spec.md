@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
-### Requirement: ORD-F02 Refund capped at order total
-The system SHALL reject any refund whose cumulative amount would exceed the order total.
+### Requirement: ORD-N01 Refund never exceeds order total
+The system MUST NOT issue a refund whose cumulative amount would exceed the order total.
 
 #### Scenario: Refund above remaining amount
 - **WHEN** a refund request would bring the refunded total above the order total
@@ -34,11 +34,11 @@ The system SHALL write exactly one ledger entry, with a negative amount, for eve
 
 ## REMOVED Requirements
 
-### Requirement: ORD-A01 Legacy refund email
-**Reason**: Refund notifications move to the notifications service.
-**Migration**: Subscribe to the refund.issued event instead.
+### Requirement: ORD-A01 Gateway confirms refunds at once
+**Reason**: The gateway now confirms refunds asynchronously through a callback, so the assumption no longer holds.
+**Migration**: Mark refunds completed only when the gateway callback arrives.
 
 ## RENAMED Requirements
 
-- FROM: `### Requirement: ORD-N01 Old title`
-- TO: `### Requirement: ORD-N01 New title`
+- FROM: `### Requirement: ORD-S01 Fast refund answer`
+- TO: `### Requirement: ORD-S01 Refund latency under 300 ms`

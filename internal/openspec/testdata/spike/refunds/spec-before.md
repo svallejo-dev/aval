@@ -16,7 +16,7 @@ The system SHALL process a refund request at most once per idempotency key.
 - **WHEN** two refund requests arrive for the same order with different keys
 - **THEN** each request is evaluated independently
 
-### Requirement: ORD-N01 Old title
+### Requirement: ORD-S01 Fast refund answer
 The system MUST answer a refund request within 300 ms at p99 under nominal load.
 
 #### Scenario: Nominal load latency
@@ -31,9 +31,9 @@ The system SHALL write exactly one ledger entry for every refund it issues.
 - **WHEN** a refund is issued
 - **THEN** exactly one ledger entry with the refund amount is written
 
-### Requirement: ORD-A01 Legacy refund email
-The system SHALL send a plain-text email to the customer after each refund.
+### Requirement: ORD-A01 Gateway confirms refunds at once
+The system SHALL treat the payment gateway's refund response as final, on the assumption that the gateway confirms refunds synchronously.
 
-#### Scenario: Refund email sent
-- **WHEN** a refund is issued
-- **THEN** a plain-text email is sent to the customer
+#### Scenario: Gateway answers a refund call
+- **WHEN** the gateway answers a refund call
+- **THEN** the refund is marked completed without waiting for a callback

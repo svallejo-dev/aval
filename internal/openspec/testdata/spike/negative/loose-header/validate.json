@@ -1,11 +1,11 @@
 {
   "items": [
     {
-      "id": "renamed-then-modified",
+      "id": "loose-header",
       "type": "change",
       "valid": true,
       "issues": [],
-      "durationMs": 11
+      "durationMs": 7
     }
   ],
   "summary": {

@@ -3,5 +3,5 @@ version: 1
 obligations:
   - id: ORD-F01
     tests: [TestRefund/ORD-F01_Refund_is_idempotent]
-  - id: ORD-F02
-    tests: [TestRefund/ORD-F02_Refund_capped_at_order_total]
+  - id: ORD-N01
+    tests: [TestRefund/ORD-N01_Refund_never_exceeds_order_total]

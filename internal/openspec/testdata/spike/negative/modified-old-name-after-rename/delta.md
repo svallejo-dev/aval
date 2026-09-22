@@ -1,6 +1,6 @@
 ## MODIFIED Requirements
 
-### Requirement: ORD-N01 New title
+### Requirement: ORD-S01 Refund latency under 300 ms
 The system MUST answer a refund request within 250 ms at p99 under nominal load.
 
 #### Scenario: Nominal load latency
@@ -9,5 +9,5 @@ The system MUST answer a refund request within 250 ms at p99 under nominal load.
 
 ## RENAMED Requirements
 
-- FROM: `### Requirement: ORD-N01 New title`
-- TO: `### Requirement: ORD-N01 Latency budget`
+- FROM: `### Requirement: ORD-S01 Refund latency under 300 ms`
+- TO: `### Requirement: ORD-S01 Refund latency budget`

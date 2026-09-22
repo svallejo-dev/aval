@@ -1,11 +1,11 @@
 {
   "items": [
     {
-      "id": "modified-drops-marker",
+      "id": "2026-09-21-add-refund-limits",
       "type": "change",
       "valid": true,
       "issues": [],
-      "durationMs": 7
+      "durationMs": 4
     }
   ],
   "summary": {

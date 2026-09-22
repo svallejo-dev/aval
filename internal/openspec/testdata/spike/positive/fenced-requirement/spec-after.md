@@ -20,7 +20,7 @@ The system SHALL process a refund request at most once per idempotency key withi
 - **WHEN** a refund request reuses an idempotency key older than 24 hours
 - **THEN** the system treats it as a new request
 
-### Requirement: ORD-S09 Refund latency under 300 ms
+### Requirement: ORD-S01 Refund latency under 300 ms
 The system MUST answer a refund request within 300 ms at p99 under nominal load.
 
 #### Scenario: Nominal load latency
@@ -41,3 +41,14 @@ The system MUST NOT issue a refund whose cumulative amount would exceed the orde
 #### Scenario: Refund above remaining amount
 - **WHEN** a refund request would bring the refunded total above the order total
 - **THEN** the system rejects the request with a limit error and issues no refund
+
+### Requirement: ORD-F08 Refund export uses spec headers
+The system SHALL export each refund policy as a markdown section like the example below.
+
+```markdown
+### Requirement: ORD-F99 Example inside a fence
+```
+
+#### Scenario: Policy exported
+- **WHEN** the refund policy is exported
+- **THEN** each policy becomes a markdown section

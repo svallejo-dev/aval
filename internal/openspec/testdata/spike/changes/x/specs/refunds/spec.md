@@ -1,6 +1,6 @@
 ## ADDED Requirements
 
-### Requirement: ORD-O01 Refund metrics exported
+### Requirement: ORD-F03 Refund metrics exported
 The system SHALL export a refunds_issued_total counter labelled by outcome.
 
 #### Scenario: Refund issued

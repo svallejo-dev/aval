@@ -20,7 +20,7 @@ The system SHALL process a refund request at most once per idempotency key withi
 - **WHEN** a refund request reuses an idempotency key older than 24 hours
 - **THEN** the system treats it as a new request
 
-### Requirement: ORD-S09 Refund latency under 300 ms
+### Requirement: ORD-S01 Refund latency under 300 ms
 The system MUST answer a refund request within 300 ms at p99 under nominal load.
 
 #### Scenario: Nominal load latency
@@ -41,3 +41,10 @@ The system MUST NOT issue a refund whose cumulative amount would exceed the orde
 #### Scenario: Refund above remaining amount
 - **WHEN** a refund request would bring the refunded total above the order total
 - **THEN** the system rejects the request with a limit error and issues no refund
+
+###requirement:ORD-F06 Refund currency matches order
+The system SHALL issue every refund in the currency of the original order.
+
+#### Scenario: Order paid in EUR
+- **WHEN** a refund is issued for an order paid in EUR
+- **THEN** the refund amount is expressed in EUR

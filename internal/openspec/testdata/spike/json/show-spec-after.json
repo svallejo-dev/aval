@@ -35,7 +35,7 @@
       ]
     },
     {
-      "text": "The system SHALL reject any refund whose cumulative amount would exceed the order total.",
+      "text": "The system MUST NOT issue a refund whose cumulative amount would exceed the order total.",
       "scenarios": [
         {
           "rawText": "- **WHEN** a refund request would bring the refunded total above the order total\n- **THEN** the system rejects the request with a limit error and issues no refund"

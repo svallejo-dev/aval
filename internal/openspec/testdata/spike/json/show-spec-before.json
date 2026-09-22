@@ -32,10 +32,10 @@
       ]
     },
     {
-      "text": "The system SHALL send a plain-text email to the customer after each refund.",
+      "text": "The system SHALL treat the payment gateway's refund response as final, on the assumption that the gateway confirms refunds synchronously.",
       "scenarios": [
         {
-          "rawText": "- **WHEN** a refund is issued\n- **THEN** a plain-text email is sent to the customer"
+          "rawText": "- **WHEN** the gateway answers a refund call\n- **THEN** the refund is marked completed without waiting for a callback"
         }
       ]
     }
