@@ -1,0 +1,32 @@
+{"Time":"2006-01-02T15:04:05Z","Action":"start","Package":"example.com/fixturemod/panic"}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/panic","Test":"TestRefund"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/panic","Test":"TestRefund","Output":"=== RUN   TestRefund\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/panic","Test":"TestRefund/ORD-F20_refunds_the_full_amount"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/panic","Test":"TestRefund/ORD-F20_refunds_the_full_amount","Output":"=== RUN   TestRefund/ORD-F20_refunds_the_full_amount\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/panic","Test":"TestRefund/ORD-F20_refunds_the_full_amount","Output":"--- PASS: TestRefund/ORD-F20_refunds_the_full_amount (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"pass","Package":"example.com/fixturemod/panic","Test":"TestRefund/ORD-F20_refunds_the_full_amount","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"run","Package":"example.com/fixturemod/panic","Test":"TestRefund/ORD-F21_rejects_a_negative_amount"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/panic","Test":"TestRefund/ORD-F21_rejects_a_negative_amount","Output":"=== RUN   TestRefund/ORD-F21_rejects_a_negative_amount\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/panic","Test":"TestRefund/ORD-F21_rejects_a_negative_amount","Output":"--- FAIL: TestRefund/ORD-F21_rejects_a_negative_amount (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"fail","Package":"example.com/fixturemod/panic","Test":"TestRefund/ORD-F21_rejects_a_negative_amount","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/panic","Test":"TestRefund","Output":"--- FAIL: TestRefund (0.00s)\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/panic","Test":"TestRefund","Output":"panic: refund: negative amount -1 [recovered, repanicked]\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/panic","Test":"TestRefund","Output":"\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/panic","Test":"TestRefund","Output":"goroutine N [running]:\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/panic","Test":"TestRefund","Output":"testing.tRunner.func1.2({0x0, 0x0})\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/panic","Test":"TestRefund","Output":"\t$GOROOT/src/testing/testing.go:2123 +0x0\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/panic","Test":"TestRefund","Output":"testing.tRunner.func1()\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/panic","Test":"TestRefund","Output":"\t$GOROOT/src/testing/testing.go:2126 +0x0\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/panic","Test":"TestRefund","Output":"panic({0x0, 0x0})\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/panic","Test":"TestRefund","Output":"\t$GOROOT/src/runtime/panic.go:859 +0x0\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/panic","Test":"TestRefund","Output":"example.com/fixturemod/panic.Refund(...)\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/panic","Test":"TestRefund","Output":"\t$FIXTUREMOD/panic/refund.go:11\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/panic","Test":"TestRefund","Output":"example.com/fixturemod/panic.TestRefund.func2(0x0)\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/panic","Test":"TestRefund","Output":"\t$FIXTUREMOD/panic/refund_test.go:13 +0x0\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/panic","Test":"TestRefund","Output":"testing.tRunner(0x0, 0x0)\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/panic","Test":"TestRefund","Output":"\t$GOROOT/src/testing/testing.go:2193 +0x0\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/panic","Test":"TestRefund","Output":"created by testing.(*T).Run in goroutine N\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/panic","Test":"TestRefund","Output":"\t$GOROOT/src/testing/testing.go:2258 +0x0\n"}
+{"Time":"2006-01-02T15:04:05Z","Action":"fail","Package":"example.com/fixturemod/panic","Test":"TestRefund","Elapsed":0}
+{"Time":"2006-01-02T15:04:05Z","Action":"output","Package":"example.com/fixturemod/panic","Output":"FAIL\texample.com/fixturemod/panic\t0.000s\n","OutputType":"frame"}
+{"Time":"2006-01-02T15:04:05Z","Action":"fail","Package":"example.com/fixturemod/panic","Elapsed":0}

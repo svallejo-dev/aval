@@ -20,8 +20,8 @@ Captured with **go1.27.1 darwin/arm64**, `pgregory.net/rapid v1.3.0` and
 
 `fixturemod` is invisible to the root module: it has its own `go.mod` and
 lives under `testdata/`, so `./...`, `go mod tidy` and `make verify` skip it.
-`buildfail/` never compiles by design; vet the rest with
-`go vet ./pass ./fail ./rapidpass ./rapidfail ./leak` from inside `fixturemod/`.
+`buildfail/` never compiles by design; vet the rest from inside `fixturemod/`
+with `go vet $(go list ./... | grep -v buildfail)`.
 
 ## Regenerating
 
@@ -30,10 +30,15 @@ internal/gotest/testdata/regen.sh
 ```
 
 For each scenario it runs `go test -json -count=1 <args>` inside
-`fixturemod/`, checks the exit status (failing scenarios must fail), and
-pipes the stream through `normalize.go`. It sets:
+`fixturemod/`, checks the exit status (failing scenarios must fail), pipes
+the stream through `normalize.go` into a temporary file and only then moves
+it over the fixture, so a failed run never leaves a truncated fixture. It
+sets:
 
-- `GOWORK=off`, `GOFLAGS=` so the caller's environment does not leak in;
+- `GOWORK=off` and `GOFLAGS=-mod=readonly` so the caller's environment does
+  not leak in. `GOFLAGS` must be non-empty: an empty value does not override
+  `go env -w GOFLAGS=...` (checked with `-trimpath` set that way: the
+  fixtures stay identical);
 - `RAPID_NOFAILFILE=1` so rapid writes no fail files into the repo;
 - `RAPID_SEED=1` so the failing state machine shrinks to the same
   counterexample every run.
@@ -53,9 +58,13 @@ what `go test` wrote.
 | clock | `--- PASS: X (0.01s)` | `(0.00s)` |
 | clock | `ok  \t<pkg>\t0.216s`, `FAIL\t<pkg>\t0.190s` | `0.000s` |
 | clock | rapid `passed 100 tests (2.4ms)` | `(0s)` |
+| clock | `-timeout` panic's running tests `\t\tTestQueue (1s)` | `(0s)` |
 | machine | absolute paths to `fixturemod/`, GOROOT, GOMODCACHE | `$FIXTUREMOD`, `$GOROOT`, `$GOMODCACHE` |
-| runtime | goleak `Goroutine 37`, `in goroutine 36` | `Goroutine N`, `in goroutine N` |
-| GOARCH | stack frame offsets `+0x24` | `+0x0` |
+| runtime | `goroutine 35 [`, `in goroutine 36`, goleak `Goroutine 37 in state` | `goroutine N [`, `in goroutine N`, `Goroutine N in state` |
+| runtime, GOARCH | hex in stack traces: arguments `(0x51f60afd8008, {0x10035da1d?, ...})`, offsets `+0x24` | `0x0` (a trailing `?` is dropped too) |
+
+Stack traces also carry GOROOT line numbers (`testing.go:2193`), which change
+with the Go version.
 
 Build events (`build-output`, `build-fail`) carry no `Time`, so they need no
 change.
@@ -70,6 +79,10 @@ change.
 | `rapid-fail.jsonl` | `go test -json -count=1 ./rapidfail` | 1 | same machine with a bug: failure, reproduction hint, shrunk steps |
 | `leak.jsonl` | `go test -json -count=1 ./leak` | 1 | `goleak.VerifyTestMain` failing after every test passed |
 | `buildfail.jsonl` | `go test -json -count=1 ./buildfail` | 1 | test file that does not compile |
+| `timeout.jsonl` | `go test -json -count=1 -timeout 1s ./timeout` | 1 | ID subtest blocked on `select {}` until the alarm panics the binary |
+| `panic.jsonl` | `go test -json -count=1 ./panic` | 1 | ID subtest that panics; later ID subtests and tests never run |
+| `notests.jsonl` | `go test -json -count=1 ./notests` | 0 | package without test files |
+| `parallel.jsonl` | `go test -json -count=1 -cpu 1 -parallel 1 ./parallel` | 0 | two ID subtests calling `t.Parallel`: `pause` and `cont` |
 | `run-selection.jsonl` | `go test -json -count=1 -run '^TestOrder$/^ORD-F01(_\|$)' ./pass` | 0 | precise selection by ID |
 | `run-selection-bare.jsonl` | `... -run '^TestOrder$/^ORD-N01(_\|$)' ./pass` | 0 | the same pattern misses the `#01` duplicate of a bare ID |
 | `run-selection-miss.jsonl` | `... -run '^TestOrder$/^ORD-F99(_\|$)' ./pass` | 0 | selecting an ID no test carries still passes |
@@ -101,19 +114,22 @@ already aggregates them.
 
 ### Event shapes
 
-Every package stream starts with `{"Action":"start","Package":...}` and ends
-with a package-level `pass` or `fail` (no `Test`). Per test:
+A package's test2json events start with `{"Action":"start","Package":...}`
+and end with a package-level `pass`, `fail` or `skip` (no `Test`). The stream
+does not always open with `start`: cmd/go's build events for the package come
+first (`buildfail.jsonl`). Per test:
 `run` → `output` `=== RUN` (frame) → body output → `output` `--- PASS|FAIL|SKIP`
-(frame) → `pass`|`fail`|`skip` with `Elapsed`.
+(frame) → `pass`|`fail`|`skip` with `Elapsed`. A test killed by a timeout or
+a panic breaks this pattern; see below.
 
 `OutputType` values seen:
 
 | `OutputType` | Used for |
 |---|---|
-| `frame` | `=== RUN`, `=== ATTR`, `--- PASS/FAIL/SKIP`, `PASS`, `FAIL`, and the `FAIL\t<pkg>\t...` summary |
+| `frame` | `=== RUN`, `=== ATTR`, `=== PAUSE`, `=== CONT`, `--- PASS/FAIL/SKIP`, `PASS`, `FAIL`, and the `FAIL\t<pkg>\t...` summary |
 | `error` | first line of `t.Error`/`t.Fatal` output |
 | `error-continue` | following lines of the same multi-line error |
-| absent | `t.Log`/`t.Skip` output, package-level output, and the `ok  \t<pkg>\t...` summary |
+| absent | `t.Log`/`t.Skip` output, panic and timeout dumps, package-level output, and the `ok  \t<pkg>\t...` and `?   \t<pkg>\t[no test files]` summaries |
 
 A failing child makes every ancestor `fail` (`TestOrder` in `fail.jsonl`);
 a skipped child leaves its parent `pass` (`TestOrderSkip`).
@@ -129,7 +145,8 @@ immediately **before** its `=== ATTR` frame line:
 ```
 
 - Setting the same key twice emits two events; nothing is deduplicated.
-- Only emitted with `-v` or `-json` (`testing` drops attrs otherwise).
+- *(ad hoc, from `testing.go`: `Attr` returns early when not chatty)* Only
+  emitted with `-v` or `-json`.
 - *(ad hoc)* test2json splits the frame line at the first space after the
   key, so a value keeps its spaces. `testing` rejects keys with whitespace and values
   with newlines through `t.Errorf`.
@@ -209,6 +226,74 @@ Failing (`rapid-fail.jsonl`), on the ID subtest:
 - Not captured: `[rapid] panic after N tests` (with a traceback) and
   `[rapid] flaky test, can not reproduce a failure`.
 
+### Timeout (`timeout.jsonl`)
+
+`TestQueue` and `TestQueue/ORD-F08_drains_the_queue` get a `run` event and
+**nothing else**: no `--- FAIL` frame and no `pass`, `fail` or `skip`. When
+the `-timeout` alarm fires, the panic goes to the test that started last,
+the subtest, with no `OutputType`:
+
+```
+panic: test timed out after 1s
+	running tests:
+		TestQueue (0s)
+		TestQueue/ORD-F08_drains_the_queue (0s)
+
+goroutine N [running]:
+testing.(*M).startAlarm.func1()
+...
+goroutine N [select (no cases)]:
+example.com/fixturemod/timeout.Drain(...)
+...
+```
+
+The dump lists every goroutine. Then only the package fails: a
+`FAIL\t<pkg>\t...` frame and a package `fail` without `FailedBuild`. A test
+with a `run` event but no final event when its package ends was killed. The
+`running tests:` lines name the tests that were killed.
+
+### Panic (`panic.jsonl`)
+
+`ORD-F20` passes. `ORD-F21` panics: its `--- FAIL` frame and `fail` event
+come first, with no error output. The parent's `--- FAIL: TestRefund` frame
+follows, and then the panic, tagged to the **parent** `TestRefund` with no
+`OutputType`:
+
+```
+panic: refund: negative amount -1 [recovered, repanicked]
+
+goroutine N [running]:
+testing.tRunner.func1.2({0x0, 0x0})
+...
+example.com/fixturemod/panic.TestRefund.func2(0x0)
+	$FIXTUREMOD/panic/refund_test.go:13 +0x0
+```
+
+Only the panicking goroutine is dumped. After the dump come `fail` for
+`TestRefund`, the `FAIL` frame and the package `fail`. `ORD-F22` and
+`TestRefundLater/ORD-F23` get **no events at all**, so in the stream they look
+the same as tests that do not exist. Only the stack frame (`TestRefund.func2`)
+ties the panic message to a subtest, and not by name.
+
+### No test files (`notests.jsonl`)
+
+`start`, then one package-level output line `?   \t<pkg>\t[no test files]`
+(no `OutputType`), then a package `skip` with `Elapsed`. There are no `run`
+events.
+
+### Parallel subtests (`parallel.jsonl`)
+
+`t.Parallel` pauses the subtest until its parent returns, and then resumes it.
+Unlike every other action, the `=== PAUSE` frame comes **before** the `pause`
+event. On resume, the `cont` event comes first, then the `=== CONT` frame.
+
+The fixture is captured with `-cpu 1 -parallel 1`, because otherwise the
+order changes from run to run. With default flags, 10 of 40 runs (11 of 40
+with `-parallel 1` alone) printed `ORD-F31`'s `cont` before `ORD-F30`'s
+`--- PASS` and `pass`. With `-cpu 1 -parallel 1`, all 80 runs were identical. In
+real runs, events of parallel tests interleave, so key state by `Test`, never
+by position.
+
 ### `-run` selection
 
 - Tests and subtests the pattern does not select produce **no events**, not
@@ -225,8 +310,8 @@ Failing (`rapid-fail.jsonl`), on the ID subtest:
 
 ### Not captured
 
-- `pause`/`cont` events from `t.Parallel` (their interleaving is not stable).
 - Several packages in one run: events interleave and must be keyed by
   `Package` (and `ImportPath` for build events).
 - `t.ArtifactDir` with `-artifacts`, which emits `artifacts` events with `Path`.
-- Panics, whose output contains goroutine dumps.
+- Panics in goroutines other than the test's own, and `t.Parallel` under
+  default flags (not repeatable, see above).

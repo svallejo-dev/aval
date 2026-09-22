@@ -8,11 +8,13 @@
 // exactly as go test wrote them. Only these values change:
 //
 //   - "Time" becomes a fixed timestamp and "Elapsed" becomes 0.
-//   - Durations in framing and summary output ("(0.01s)", "\t0.216s") and in
-//     rapid's "passed N tests (2.4ms)" become zero.
+//   - Durations in framing and summary output ("(0.01s)", "\t0.216s"), in
+//     rapid's "passed N tests (2.4ms)" and in the -timeout panic's list of
+//     running tests become zero.
 //   - Absolute paths to the fixture module, GOROOT and GOMODCACHE become
 //     $FIXTUREMOD, $GOROOT and $GOMODCACHE.
-//   - Goroutine IDs and program-counter offsets in stack traces become fixed.
+//   - Goroutine IDs and hex values (arguments, frame offsets) in stack traces
+//     become fixed.
 //
 // Every line must be valid JSON before and after normalizing; anything else
 // is an error, so a broken capture is never written as a fixture.
@@ -53,11 +55,18 @@ var rules = []struct {
 	{regexp.MustCompile(`("Output":"(?:ok  |FAIL)\\t[^"\\]+)\\t[0-9]+\.[0-9]+s`), `${1}\t0.000s`},
 	// "[rapid] OK, passed 100 tests (2.462083ms)"
 	{regexp.MustCompile(` tests \([0-9][0-9.hmnsuµ]*\)`), ` tests (0s)`},
-	// goleak: "[Goroutine 37 in state ..." and "created by ... in goroutine 36"
+	// The -timeout panic lists running tests: "\t\tTestQueue (1s)"
+	{regexp.MustCompile(`("Output":"\\t\\t[^ "\\]+) \([0-9][0-9.hmnsuµ]*\)\\n`), `${1} (0s)\n`},
+	// Goroutine IDs in panic dumps ("goroutine 35 [chan receive]:",
+	// "created by testing.(*T).Run in goroutine 1") and goleak reports
+	// ("[Goroutine 37 in state chan receive, ...").
+	{regexp.MustCompile(`goroutine [0-9]+ \[`), `goroutine N [`},
 	{regexp.MustCompile(`Goroutine [0-9]+ in state`), `Goroutine N in state`},
 	{regexp.MustCompile(`in goroutine [0-9]+`), `in goroutine N`},
-	// Stack frame offsets vary with GOARCH: "worker.go:9 +0x24"
-	{regexp.MustCompile(` \+0x[0-9a-f]+\\n`), ` +0x0\n`},
+	// Addresses in stack traces vary with the run and GOARCH: arguments
+	// ("tRunner(0x51f60afd8008, {0x10035da1d?, ...})", where "?" marks a
+	// possibly stale value) and frame offsets ("worker.go:9 +0x24").
+	{regexp.MustCompile(`0x[0-9a-f]+\??`), `0x0`},
 }
 
 func main() {
