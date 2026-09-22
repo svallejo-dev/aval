@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/svallejo-dev/aval/schema/bundle.v1.json",
-  "title": "aval evidence bundle, version 1",
+  "$id": "https://github.com/svallejo-dev/aval/schema/bundle.v2.json",
+  "title": "aval evidence bundle, version 2",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -18,13 +18,13 @@
     "checks",
     "scope",
     "tamper",
-    "override",
+    "approvals",
     "verdict",
     "notCollected"
   ],
   "properties": {
     "schemaVersion": {
-      "const": 1
+      "const": 2
     },
     "repo": {
       "type": "string"
@@ -84,71 +84,11 @@
         "$ref": "#/$defs/finding"
       }
     },
-    "override": {
-      "oneOf": [
-        {
-          "type": "null"
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "actor",
-            "reason",
-            "labeledAt",
-            "lastCommitAt",
-            "valid"
-          ],
-          "properties": {
-            "actor": {
-              "type": "string",
-              "minLength": 1
-            },
-            "reason": {
-              "type": "string"
-            },
-            "labeledAt": {
-              "type": "string",
-              "format": "date-time"
-            },
-            "lastCommitAt": {
-              "type": "string",
-              "format": "date-time"
-            },
-            "valid": {
-              "type": "boolean"
-            },
-            "rejection": {
-              "type": "string",
-              "minLength": 1
-            }
-          },
-          "if": {
-            "properties": {
-              "valid": {
-                "const": true
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "reason": {
-                "minLength": 1
-              }
-            },
-            "not": {
-              "required": [
-                "rejection"
-              ]
-            }
-          },
-          "else": {
-            "required": [
-              "rejection"
-            ]
-          }
-        }
-      ]
+    "approvals": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/approval"
+      }
     },
     "verdict": {
       "type": "object",
@@ -382,6 +322,103 @@
           "type": "string"
         }
       }
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "actor",
+        "commitId",
+        "submittedAt",
+        "valid"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "approval",
+            "override"
+          ]
+        },
+        "actor": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commitId": {
+          "$ref": "#/$defs/sha"
+        },
+        "submittedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "valid": {
+          "type": "boolean"
+        },
+        "rejection": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "valid": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "rejection"
+              ]
+            }
+          },
+          "else": {
+            "required": [
+              "rejection"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "approval"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "reason"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "override"
+              },
+              "valid": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reason"
+            ]
+          }
+        }
+      ]
     }
   }
 }

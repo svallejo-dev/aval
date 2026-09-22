@@ -13,8 +13,10 @@ import (
 
 // SchemaVersion is the bundle schema version this build writes and reads.
 // Any change to the shape of the bundle bumps it (ADR-0004): the schema is
-// closed, so a reader never accepts fields it does not understand.
-const SchemaVersion = 1
+// closed, so a reader never accepts fields it does not understand. Version 2
+// replaced the label-based override with PR reviews bound to the head commit
+// (ADR-0005).
+const SchemaVersion = 2
 
 // Bundle is the evidence for one change: a base..head range of a repository.
 type Bundle struct {
@@ -31,7 +33,7 @@ type Bundle struct {
 	Checks        []Check      `json:"checks"`
 	Scope         []Commit     `json:"scope"`
 	Tamper        []Finding    `json:"tamper"`
-	Override      *Override    `json:"override"`
+	Approvals     []Approval   `json:"approvals"`
 	Verdict       Verdict      `json:"verdict"`
 	// NotCollected lists evidence the gates doc describes but v0 does not
 	// gather yet, e.g. "mutation", "rollback", "slo".
@@ -124,8 +126,8 @@ const (
 	FingerprintChanged FindingKind = "fingerprint_changed" // bound test changed outside its delta
 	TestRemoved        FindingKind = "test_removed"        // bound test disappeared outside its delta
 	SkipAdded          FindingKind = "skip_added"          // t.Skip added to a bound test
-	PolicyEdited       FindingKind = "policy_edited"       // aval.yaml changed in the change itself
-	BaselineEdited     FindingKind = "baseline_edited"     // .aval/baseline.json changed in the change itself
+	PolicyEdited       FindingKind = "policy_edited"       // the change edits aval.yaml, .github/**, CODEOWNERS or .golangci.yml
+	BaselineEdited     FindingKind = "baseline_edited"     // the change edits .aval/baseline.json
 )
 
 // Finding is one tampering signal.
@@ -135,15 +137,26 @@ type Finding struct {
 	Detail string      `json:"detail"`
 }
 
-// Override records an aval:override label, accepted or not. It is valid only
-// when a CODEOWNER applied it, with a reason, after the last commit.
-type Override struct {
-	Actor        string    `json:"actor"`
-	Reason       string    `json:"reason"`
-	LabeledAt    time.Time `json:"labeledAt"`
-	LastCommitAt time.Time `json:"lastCommitAt"`
-	Valid        bool      `json:"valid"`
-	Rejection    string    `json:"rejection,omitempty"` // why an override was not accepted
+// ApprovalKind says what a review grants.
+type ApprovalKind string
+
+// Approval kinds (ADR-0005 §5).
+const (
+	ApprovalHuman    ApprovalKind = "approval" // satisfies approval_missing, nothing else
+	ApprovalOverride ApprovalKind = "override" // turns a block into a warn, keeping the reasons
+)
+
+// Approval records one PR review the gate considered, accepted or not. It is
+// valid only when a CODEOWNER approved the head commit itself; an override
+// also needs an "aval:override <reason>" line in the review body.
+type Approval struct {
+	Kind        ApprovalKind `json:"kind"`
+	Actor       string       `json:"actor"`
+	CommitID    string       `json:"commitId"` // the commit the review was submitted on
+	SubmittedAt time.Time    `json:"submittedAt"`
+	Reason      string       `json:"reason,omitempty"` // overrides only
+	Valid       bool         `json:"valid"`
+	Rejection   string       `json:"rejection,omitempty"` // why a review was not accepted
 }
 
 // Result is the gate's decision.
@@ -177,6 +190,7 @@ func (b Bundle) MarshalJSON() ([]byte, error) {
 	n.Changes = orEmpty(n.Changes)
 	n.Checks = orEmpty(n.Checks)
 	n.Tamper = orEmpty(n.Tamper)
+	n.Approvals = orEmpty(n.Approvals)
 	n.NotCollected = orEmpty(n.NotCollected)
 	n.Verdict.Reasons = orEmpty(n.Verdict.Reasons)
 	n.Obligations = make([]Obligation, len(b.Obligations))
@@ -230,18 +244,9 @@ func (b Bundle) Validate() error {
 			errs = append(errs, fmt.Errorf("commit %s: families must list 2+ families exactly when family is mixed", c.SHA))
 		}
 	}
-	if o := b.Override; o != nil {
-		if o.Valid && o.Rejection != "" {
-			errs = append(errs, errors.New("override: a valid override has no rejection"))
-		}
-		if !o.Valid && o.Rejection == "" {
-			errs = append(errs, errors.New("override: a rejected override needs a rejection reason"))
-		}
-		if o.Valid && o.Reason == "" {
-			errs = append(errs, errors.New("override: a valid override needs a reason"))
-		}
-		if o.Valid && (o.LastCommitAt.IsZero() || !o.LabeledAt.After(o.LastCommitAt)) {
-			errs = append(errs, errors.New("override: valid only when labeled after a known last commit"))
+	for i, a := range b.Approvals {
+		if err := a.validate(b.Head); err != nil {
+			errs = append(errs, fmt.Errorf("approval %d by %s: %w", i, a.Actor, err))
 		}
 	}
 	if len(errs) > 0 {
@@ -275,6 +280,31 @@ func (o Obligation) validate() error {
 		return fmt.Errorf("kind %q does not match the ID's kind letter", o.Kind)
 	}
 	return nil
+}
+
+// validate checks that an approval is consistent and, when valid, bound to
+// the bundle's head commit: a review of an earlier commit never counts.
+func (a Approval) validate(head string) error {
+	var errs []error
+	if a.SubmittedAt.IsZero() {
+		errs = append(errs, errors.New("submittedAt must be set"))
+	}
+	if a.Valid && a.Rejection != "" {
+		errs = append(errs, errors.New("a valid approval has no rejection"))
+	}
+	if !a.Valid && a.Rejection == "" {
+		errs = append(errs, errors.New("a rejected approval needs a rejection reason"))
+	}
+	if a.Kind == ApprovalHuman && a.Reason != "" {
+		errs = append(errs, errors.New("only an override carries a reason"))
+	}
+	if a.Valid && a.Kind == ApprovalOverride && a.Reason == "" {
+		errs = append(errs, errors.New("a valid override needs a reason"))
+	}
+	if a.Valid && a.CommitID != head {
+		errs = append(errs, fmt.Errorf("valid only for the head commit, got %s", a.CommitID))
+	}
+	return errors.Join(errs...)
 }
 
 // CheckHead reports whether the bundle was produced for the given commit.
