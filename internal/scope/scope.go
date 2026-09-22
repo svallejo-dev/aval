@@ -6,7 +6,8 @@
 //
 // A path is seam when any seam glob matches it, whatever else matches too.
 // Otherwise it takes the family of the longest dx or feat glob (counted in
-// runes) that matches it, dx on a tie, and it is other when none does.
+// runes) that matches it, feat on a tie (the stricter family), and it is
+// other when none does.
 //
 // A commit that touches dx and feat paths is mixed, with Families [dx feat].
 // Otherwise it is dx or feat when it touches that family, seam when it
@@ -26,8 +27,8 @@
 // # Merge commits
 //
 // A two-parent merge contributes only what it changed beyond the merge git
-// would have made on its own: the paths of git show --remerge-diff, which
-// needs git 2.36 or newer. Observed with git 2.50 and pinned by the tests:
+// would have made on its own: the paths of git show --remerge-diff. Observed
+// with git 2.50 and pinned by the tests:
 //
 //   - A clean merge of main into the branch lists nothing and is other, also
 //     when both sides changed the same file and git merged it cleanly.
@@ -42,8 +43,22 @@
 // visible, but it misses a dropped change and lists a file that several
 // parents changed even if git merged it cleanly.
 //
-// Every git command runs with GIT_NO_REPLACE_OBJECTS=1: the change under
-// review could plant replace refs to make git read other commits.
+// # What the change cannot steer
+//
+// The files of head must not change the answer, so Classify runs git
+// (2.40 or newer, ErrToolMissing otherwise) with:
+//
+//   - --ignore-submodules=none, so a head .gitmodules with ignore = all
+//     cannot hide gitlink changes;
+//   - --attr-source=<empty tree>, so head .gitattributes cannot pick the
+//     merge drivers --remerge-diff uses, e.g. merge=binary to hide a
+//     dropped change;
+//   - GIT_NO_REPLACE_OBJECTS=1 and GIT_GRAFT_FILE=/dev/null, so replace
+//     refs and grafts cannot rewrite the history.
+//
+// The repository's own .git/config and .git/info are still trusted, and the
+// change's code could rewrite them once it runs: Classify must run before
+// any of it executes, such as its tests (ADR-0005 §1).
 package scope
 
 import (
@@ -68,8 +83,8 @@ var (
 	// refuses before running git.
 	ErrInvalidRange = errors.New("invalid commit range")
 	// ErrToolMissing is wrapped by Classify's error when git is not on PATH
-	// or is older than 2.36. Callers map it to exit code 3.
-	ErrToolMissing = errors.New("scope: git 2.36 or newer is required")
+	// or is older than 2.40. Callers map it to exit code 3.
+	ErrToolMissing = errors.New("scope: git 2.40 or newer is required")
 )
 
 // Classify classifies every commit of base..head in repoRoot, parents first,
@@ -81,14 +96,21 @@ func Classify(ctx context.Context, repoRoot, base, head string, paths manifest.P
 	if err != nil {
 		return nil, err
 	}
-	version, err := git(ctx, repoRoot, "version")
+	g := runner{dir: repoRoot}
+	version, err := g.git(ctx, "version")
 	if err != nil {
 		return nil, err
 	}
 	if err := checkVersion(string(version)); err != nil {
 		return nil, err
 	}
-	out, err := git(ctx, repoRoot, "rev-list", "--reverse", "--topo-order", "--parents", "--end-of-options", rng, "--")
+	// The empty tree has a different ID in SHA-1 and SHA-256 repositories.
+	emptyTree, err := g.git(ctx, "hash-object", "-t", "tree", "--stdin")
+	if err != nil {
+		return nil, err
+	}
+	g.attrSource = strings.TrimSpace(string(emptyTree))
+	out, err := g.git(ctx, "rev-list", "--reverse", "--topo-order", "--parents", "--end-of-options", rng, "--")
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +120,7 @@ func Classify(ctx context.Context, repoRoot, base, head string, paths manifest.P
 		if len(shas) == 0 {
 			continue
 		}
-		files, err := touched(ctx, repoRoot, shas[0], len(shas)-1)
+		files, err := g.touched(ctx, shas[0], len(shas)-1)
 		if err != nil {
 			return nil, err
 		}
@@ -109,7 +131,9 @@ func Classify(ctx context.Context, repoRoot, base, head string, paths manifest.P
 }
 
 // ClassifyPaths returns the family of a commit that touches files and, for
-// a mixed commit only, the families it spans.
+// a mixed commit only, the families it spans. Globs follow doublestar, where
+// a directory glob such as "tools" or "tools/" matches nothing under the
+// directory: that takes "tools/**".
 func ClassifyPaths(paths manifest.Paths, files []string) (evidence.Family, []evidence.Family) {
 	var dx, feat, seam bool
 	for _, f := range files {
@@ -142,16 +166,17 @@ func TouchesSeam(paths manifest.Paths, c evidence.Commit) bool {
 }
 
 // pathFamily returns the family of one path: seam first, then the family
-// of the longest matching dx or feat glob, dx on a tie; other if none.
+// of the longest matching dx or feat glob, feat on a tie; other if none.
 func pathFamily(paths manifest.Paths, file string) evidence.Family {
 	if isSeam(paths, file) {
 		return evidence.FamilySeam
 	}
 	best, bestLen := evidence.FamilyOther, -1
+	// feat goes first: a dx glob must be strictly longer to win.
 	for _, fam := range []struct {
 		family evidence.Family
 		globs  []string
-	}{{evidence.FamilyDX, paths.DX}, {evidence.FamilyFeat, paths.Feat}} {
+	}{{evidence.FamilyFeat, paths.Feat}, {evidence.FamilyDX, paths.DX}} {
 		for _, g := range fam.globs {
 			if n := utf8.RuneCountInString(g); n > bestLen && doublestar.MatchUnvalidated(g, file) {
 				best, bestLen = fam.family, n
@@ -181,7 +206,7 @@ func revRange(base, head string) (string, error) {
 
 // touched lists the paths commit sha, with the given number of parents,
 // touches, as git prints them (sorted). See the package doc for merges.
-func touched(ctx context.Context, dir, sha string, parents int) ([]string, error) {
+func (g runner) touched(ctx context.Context, sha string, parents int) ([]string, error) {
 	var args []string
 	switch {
 	case parents == 2:
@@ -194,7 +219,8 @@ func touched(ctx context.Context, dir, sha string, parents int) ([]string, error
 	if parents >= 2 {
 		args = append(args, "--format=", "--no-color", "--no-ext-diff", "--no-textconv", "--no-show-signature")
 	}
-	out, err := git(ctx, dir, append(args, "--no-renames", "--name-only", "-z", "--end-of-options", sha, "--")...)
+	args = append(args, "--no-renames", "--ignore-submodules=none", "--name-only", "-z", "--end-of-options", sha, "--")
+	out, err := g.git(ctx, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -208,23 +234,34 @@ func touched(ctx context.Context, dir, sha string, parents int) ([]string, error
 }
 
 // checkVersion returns ErrToolMissing unless out, what git version prints,
-// names git 2.36 or newer, the first with --remerge-diff.
+// names git 2.40 or newer: --remerge-diff arrived in 2.36, --attr-source in
+// 2.40.
 func checkVersion(out string) error {
 	v, _ := strings.CutPrefix(strings.TrimSpace(out), "git version ")
 	var major, minor int
-	if _, err := fmt.Sscanf(v, "%d.%d", &major, &minor); err == nil && (major > 2 || major == 2 && minor >= 36) {
+	if _, err := fmt.Sscanf(v, "%d.%d", &major, &minor); err == nil && (major > 2 || major == 2 && minor >= 40) {
 		return nil
 	}
 	return fmt.Errorf("%w: git version says %q", ErrToolMissing, strings.TrimSpace(out))
 }
 
-// git runs git in dir, ignoring replace refs, and returns its stdout. A
+// runner runs git in one repository.
+type runner struct {
+	dir        string
+	attrSource string // tree to read attributes from; empty reads the worktree's
+}
+
+// git runs git, ignoring replace refs and grafts, and returns its stdout. A
 // failure carries git's stderr; a missing git wraps ErrToolMissing and
 // exec.ErrNotFound.
-func git(ctx context.Context, dir string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec // no shell: fixed flags, and revisions follow --end-of-options
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GIT_NO_REPLACE_OBJECTS=1")
+func (g runner) git(ctx context.Context, args ...string) ([]byte, error) {
+	argv := args
+	if g.attrSource != "" {
+		argv = append([]string{"--attr-source=" + g.attrSource}, args...)
+	}
+	cmd := exec.CommandContext(ctx, "git", argv...) //nolint:gosec // no shell: fixed flags, and revisions follow --end-of-options
+	cmd.Dir = g.dir
+	cmd.Env = append(os.Environ(), "GIT_NO_REPLACE_OBJECTS=1", "GIT_GRAFT_FILE="+os.DevNull)
 	out, err := cmd.Output()
 	if ctx.Err() != nil {
 		return nil, fmt.Errorf("git %s: %w", args[0], context.Cause(ctx))

@@ -65,7 +65,7 @@ func TestClassifyPaths(t *testing.T) {
 		{"longest glob wins for dx", []string{"internal/devtools/lint.go"}, dx, nil},
 		{"longest glob wins for feat", []string{"internal/order/testdata/golden.json"}, feat, nil},
 		{"shorter feat glob loses", []string{"internal/testdata/x.json"}, dx, nil},
-		{"tie goes to dx", []string{"docs/api.md"}, dx, nil},
+		{"tie goes to feat", []string{"docs/api.md"}, feat, nil},
 		{"no family", []string{"README.md", "LICENSE"}, other, nil},
 		{"no files", nil, other, nil},
 		{"spaces and unicode", []string{"internal/my dir/ñandú é.go"}, feat, nil},
@@ -78,6 +78,14 @@ func TestClassifyPaths(t *testing.T) {
 				t.Errorf("ClassifyPaths(%q) = %s %v, want %s %v", tt.files, got, families, tt.want, tt.families)
 			}
 		})
+	}
+}
+
+func TestClassifyPathsDirectoryGlobs(t *testing.T) {
+	t.Parallel()
+	dirs := manifest.Paths{DX: []string{"tools", "docs/"}}
+	if got, _ := ClassifyPaths(dirs, []string{"tools/gen.go", "docs/a.md"}); got != other {
+		t.Errorf("directory globs: got %s, want other: they match nothing under the directory", got)
 	}
 }
 
@@ -202,6 +210,11 @@ func TestClassifyMerges(t *testing.T) {
 	r.git("checkout", "HEAD", "--", "Makefile")
 	add(r.commit("drop main's Makefile", nil), dx, nil, "Makefile")
 
+	r.onMain("main readme", map[string]string{"README.md": "our shop\n"})
+	r.git("merge", "-q", "--no-ff", "--no-commit", "main")
+	r.git("mv", "tools/gen.go", "internal/gen.go")
+	add(r.commit("evil rename", nil), mixed, dxFeat, "internal/gen.go", "tools/gen.go")
+
 	base := r.onMain("main license", map[string]string{"LICENSE": "MIT\n"})
 	r.git("switch", "-q", "-c", "side", root)
 	add(r.commit("side", map[string]string{"NOTES": "notes\n"}), other, nil, "NOTES")
@@ -227,7 +240,61 @@ func TestClassifyMerges(t *testing.T) {
 	}
 }
 
-func TestClassifyIgnoresReplaceRefs(t *testing.T) {
+func TestClassifyIgnoresHeadFiles(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	makefile := func(all, lint string) map[string]string {
+		return map[string]string{"Makefile": "all:\n\t" + all + "\n\nlint:\n\t" + lint + "\n"}
+	}
+	root := r.commit("root", makefile("true", "true"))
+	r.commit("head files", map[string]string{
+		".gitattributes": "Makefile merge=binary\n",
+		".gitmodules":    "[submodule \"sub\"]\n\tpath = tools/sub\n\turl = ./sub\n\tignore = all\n",
+	})
+	var want []evidence.Commit
+	gitlink := func(msg string, files map[string]string) string {
+		// git add -A keeps a gitlink whose directory exists, even empty.
+		if err := os.MkdirAll(filepath.Join(r.dir, "tools", "sub"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		r.git("update-index", "--add", "--cacheinfo", "160000,"+r.git("rev-parse", "HEAD")+",tools/sub")
+		return r.commit(msg, files)
+	}
+	want = append(want,
+		evidence.Commit{SHA: gitlink("feat and gitlink", map[string]string{"internal/x.go": "package x\n"}),
+			Family: mixed, Families: dxFeat, Paths: []string{"internal/x.go", "tools/sub"}},
+		evidence.Commit{SHA: gitlink("gitlink only", nil), Family: dx, Paths: []string{"tools/sub"}},
+	)
+
+	// merge=binary would make the remerge conflict and keep the branch's
+	// Makefile, hiding that the merge dropped main's change to it.
+	r.git("switch", "-q", "-c", "topic")
+	r.commit("topic Makefile", makefile("false", "true"))
+	base := r.onMain("main Makefile", makefile("true", "false"))
+	want = append(want, evidence.Commit{SHA: base, Family: dx, Paths: []string{"Makefile"}})
+	if _, err := r.run("merge", "-q", "--no-ff", "--no-commit", "main"); err == nil {
+		t.Fatal("merge under merge=binary: want a conflict")
+	}
+	r.git("checkout", "HEAD", "--", "Makefile")
+	merge := r.commit("drop main's Makefile", map[string]string{"internal/x.go": "package x // v2\n"})
+
+	got, err := Classify(t.Context(), r.dir, root, "main", testPaths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got[1:], want) {
+		t.Errorf("gitlinks under ignore = all, then main:\n got %+v\nwant %+v", got[1:], want)
+	}
+	got, err = Classify(t.Context(), r.dir, base, "topic", testPaths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(got); n != 2 || got[1].SHA != merge || got[1].Family != mixed {
+		t.Errorf("merge under merge=binary: got %+v, want it mixed", got)
+	}
+}
+
+func TestClassifyIgnoresPlantedHistory(t *testing.T) {
 	t.Parallel()
 	r := newRepo(t)
 	root := r.commit("root", map[string]string{"Makefile": "all:\n", "internal/order/order.go": "package order\n"})
@@ -235,7 +302,11 @@ func TestClassifyIgnoresReplaceRefs(t *testing.T) {
 	r.git("switch", "-q", "--detach", root)
 	dxSHA := r.commit("dx", map[string]string{"Makefile": "all: lint\n"})
 	r.git("switch", "-q", "main")
-	r.git("replace", featSHA, dxSHA) // the change asks git to read the dx commit instead
+	r.git("replace", featSHA, dxSHA)      // read the dx commit instead of feat
+	graft := featSHA + " " + dxSHA + "\n" // give feat the dx commit as parent
+	if err := os.WriteFile(filepath.Join(r.dir, ".git", "info", "grafts"), []byte(graft), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	got, err := Classify(t.Context(), r.dir, root, "main", testPaths)
 	if err != nil {
@@ -255,10 +326,10 @@ func TestCheckVersion(t *testing.T) {
 		ok  bool
 	}{
 		{"git version 2.50.1 (Apple Git-155)\n", true},
-		{"git version 2.36.0\n", true},
+		{"git version 2.40.0\n", true},
 		{"git version 2.45.1.windows.1\n", true},
 		{"git version 3.0.0\n", true},
-		{"git version 2.35.8\n", false},
+		{"git version 2.39.5\n", false},
 		{"git version 1.99.0\n", false},
 		{"git version\n", false},
 		{"", false},
