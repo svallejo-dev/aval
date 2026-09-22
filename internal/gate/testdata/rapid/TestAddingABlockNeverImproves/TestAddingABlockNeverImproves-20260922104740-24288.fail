@@ -1,0 +1,47 @@
+# 2026/09/22 10:47:40.339603 [TestAddingABlockNeverImproves] [rapid] draw policy: true
+# 2026/09/22 10:47:40.339607 [TestAddingABlockNeverImproves] [rapid] draw mode: "observe"
+# 2026/09/22 10:47:40.339608 [TestAddingABlockNeverImproves] [rapid] draw default: 0
+# 2026/09/22 10:47:40.339610 [TestAddingABlockNeverImproves] [rapid] draw scope: []evidence.Commit{}
+# 2026/09/22 10:47:40.339612 [TestAddingABlockNeverImproves] [rapid] draw changes: []gate.Change{}
+# 2026/09/22 10:47:40.339613 [TestAddingABlockNeverImproves] [rapid] draw obligations: []evidence.Obligation{}
+# 2026/09/22 10:47:40.339613 [TestAddingABlockNeverImproves] [rapid] draw findings: []openspec.Finding{}
+# 2026/09/22 10:47:40.339614 [TestAddingABlockNeverImproves] [rapid] draw validated: false
+# 2026/09/22 10:47:40.339614 [TestAddingABlockNeverImproves] [rapid] draw tamper: []evidence.Finding{}
+# 2026/09/22 10:47:40.339615 [TestAddingABlockNeverImproves] [rapid] draw undeclared: []string{}
+# 2026/09/22 10:47:40.339616 [TestAddingABlockNeverImproves] [rapid] draw build: []string{}
+# 2026/09/22 10:47:40.339616 [TestAddingABlockNeverImproves] [rapid] draw unbound: []baseline.Test{}
+# 2026/09/22 10:47:40.339617 [TestAddingABlockNeverImproves] [rapid] draw baseline: []baseline.Test{}
+# 2026/09/22 10:47:40.339617 [TestAddingABlockNeverImproves] [rapid] draw lintcfg: false
+# 2026/09/22 10:47:40.339618 [TestAddingABlockNeverImproves] [rapid] draw issues: 0
+# 2026/09/22 10:47:40.339619 [TestAddingABlockNeverImproves] [rapid] draw approvals: []evidence.Approval{evidence.Approval{Kind:"override", Actor:"ana", CommitID:"2222222222222222222222222222222222222222", SubmittedAt:time.Date(1, time.January, 1, 0, 0, 0, 0, time.UTC), Reason:"hotfix", Valid:true, Rejection:""}}
+# 2026/09/22 10:47:40.339638 [TestAddingABlockNeverImproves] [rapid] draw block: 0
+# 2026/09/22 10:47:40.339639 [TestAddingABlockNeverImproves] adding a block: pass → pass, want warn
+# 
+v0.4.8#4172098991612243722
+0x1
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0xccccccccccccd
+0x6b74f03291620
+0x4
+0x0
+0x0
+0x0
+0x0

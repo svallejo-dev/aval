@@ -1,0 +1,140 @@
+# 2026/09/22 10:47:53.012286 [TestDecideIgnoresOrder] [rapid] draw policy: true
+# 2026/09/22 10:47:53.012289 [TestDecideIgnoresOrder] [rapid] draw mode: "observe"
+# 2026/09/22 10:47:53.012290 [TestDecideIgnoresOrder] [rapid] draw default: 0
+# 2026/09/22 10:47:53.012291 [TestDecideIgnoresOrder] [rapid] draw scope: []evidence.Commit{}
+# 2026/09/22 10:47:53.012293 [TestDecideIgnoresOrder] [rapid] draw changes: []gate.Change{gate.Change{ID:"a", Tier:0, BaseTier:0, Premortem:gate.Premortem{Present:false, Items:0, Unmapped:[]string{}}}}
+# 2026/09/22 10:47:53.012298 [TestDecideIgnoresOrder] [rapid] draw obligations: []evidence.Obligation{evidence.Obligation{ID:"ORD-F01", Kind:"F", Source:"", Delta:"added", Characterization:false, Tests:[]string{"TestRefund/ORD-F01"}, Before:"fail", After:"pass", Strength:"strong", Note:""}, evidence.Obligation{ID:"ORD-F01", Kind:"F", Source:"", Delta:"added", Characterization:false, Tests:[]string{"TestRefund/ORD-F01"}, Before:"fail", After:"pass", Strength:"strong", Note:""}, evidence.Obligation{ID:"ORD-F01", Kind:"F", Source:"", Delta:"added", Characterization:false, Tests:[]string{"TestRefund/ORD-F01"}, Before:"fail", After:"pass", Strength:"strong", Note:""}, evidence.Obligation{ID:"ORD-F01", Kind:"F", Source:"", Delta:"added", Characterization:false, Tests:[]string{"TestRefund/ORD-F01"}, Before:"fail", After:"pass", Strength:"strong", Note:""}}
+# 2026/09/22 10:47:53.012305 [TestDecideIgnoresOrder] [rapid] draw findings: []openspec.Finding{openspec.Finding{Severity:"error", Rule:"", Path:"a", Line:0, Message:"m"}, openspec.Finding{Severity:"error", Rule:"", Path:"a", Line:0, Message:"n"}}
+# 2026/09/22 10:47:53.012308 [TestDecideIgnoresOrder] [rapid] draw validated: false
+# 2026/09/22 10:47:53.012308 [TestDecideIgnoresOrder] [rapid] draw tamper: []evidence.Finding{}
+# 2026/09/22 10:47:53.012309 [TestDecideIgnoresOrder] [rapid] draw undeclared: []string{}
+# 2026/09/22 10:47:53.012309 [TestDecideIgnoresOrder] [rapid] draw build: []string{}
+# 2026/09/22 10:47:53.012309 [TestDecideIgnoresOrder] [rapid] draw unbound: []baseline.Test{}
+# 2026/09/22 10:47:53.012310 [TestDecideIgnoresOrder] [rapid] draw baseline: []baseline.Test{}
+# 2026/09/22 10:47:53.012310 [TestDecideIgnoresOrder] [rapid] draw lintcfg: false
+# 2026/09/22 10:47:53.012310 [TestDecideIgnoresOrder] [rapid] draw issues: 0
+# 2026/09/22 10:47:53.012311 [TestDecideIgnoresOrder] [rapid] draw approvals: []evidence.Approval{}
+# 2026/09/22 10:47:53.012312 [TestDecideIgnoresOrder] [rapid] draw scope: []evidence.Commit(nil)
+# 2026/09/22 10:47:53.012312 [TestDecideIgnoresOrder] [rapid] draw changes: []gate.Change{gate.Change{ID:"a", Tier:0, BaseTier:0, Premortem:gate.Premortem{Present:false, Items:0, Unmapped:[]string{}}}}
+# 2026/09/22 10:47:53.012313 [TestDecideIgnoresOrder] [rapid] draw unmapped: []string(nil)
+# 2026/09/22 10:47:53.012313 [TestDecideIgnoresOrder] [rapid] draw obligations: []evidence.Obligation{evidence.Obligation{ID:"ORD-F01", Kind:"F", Source:"", Delta:"added", Characterization:false, Tests:[]string{"TestRefund/ORD-F01"}, Before:"fail", After:"pass", Strength:"strong", Note:""}, evidence.Obligation{ID:"ORD-F01", Kind:"F", Source:"", Delta:"added", Characterization:false, Tests:[]string{"TestRefund/ORD-F01"}, Before:"fail", After:"pass", Strength:"strong", Note:""}, evidence.Obligation{ID:"ORD-F01", Kind:"F", Source:"", Delta:"added", Characterization:false, Tests:[]string{"TestRefund/ORD-F01"}, Before:"fail", After:"pass", Strength:"strong", Note:""}, evidence.Obligation{ID:"ORD-F01", Kind:"F", Source:"", Delta:"added", Characterization:false, Tests:[]string{"TestRefund/ORD-F01"}, Before:"fail", After:"pass", Strength:"strong", Note:""}}
+# 2026/09/22 10:47:53.012318 [TestDecideIgnoresOrder] [rapid] draw findings: []openspec.Finding{openspec.Finding{Severity:"error", Rule:"", Path:"a", Line:0, Message:"n"}, openspec.Finding{Severity:"error", Rule:"", Path:"a", Line:0, Message:"m"}}
+# 2026/09/22 10:47:53.012319 [TestDecideIgnoresOrder] [rapid] draw tamper: []evidence.Finding(nil)
+# 2026/09/22 10:47:53.012319 [TestDecideIgnoresOrder] [rapid] draw undeclared: []string(nil)
+# 2026/09/22 10:47:53.012319 [TestDecideIgnoresOrder] [rapid] draw build: []string(nil)
+# 2026/09/22 10:47:53.012319 [TestDecideIgnoresOrder] [rapid] draw unbound: []baseline.Test(nil)
+# 2026/09/22 10:47:53.012320 [TestDecideIgnoresOrder] [rapid] draw baseline: []baseline.Test(nil)
+# 2026/09/22 10:47:53.012320 [TestDecideIgnoresOrder] [rapid] draw approvals: []evidence.Approval(nil)
+# 2026/09/22 10:47:53.012321 [TestDecideIgnoresOrder] permuted input changed the verdict:
+#  got {Result:block Reasons:[{Code:spec_rule Message:a: error: n [] ID:} {Code:spec_rule Message:a: error: m [] ID:}]}
+# want {Result:block Reasons:[{Code:spec_rule Message:a: error: m [] ID:} {Code:spec_rule Message:a: error: n [] ID:}]}
+# 
+v0.4.8#12930506684358525587
+0x1
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x10000000000000
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0xaaaaaaaaaaaaa
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0xaaaaaaaaaaaaa
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0xaaaaaaaaaaaaa
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0xaaaaaaaaaaaaa
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0xccccccccccccd
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0xccccccccccccd
+0x0
+0x0
+0x0
+0x0
+0x0
+0x1
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x1
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
