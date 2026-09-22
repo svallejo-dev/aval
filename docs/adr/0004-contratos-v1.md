@@ -21,24 +21,45 @@ Cada contrato vive en el paquete del concepto que representa, con tipos Go, JSON
 | **Códigos de salida** | `internal/cli` | 0 OK · 1 verificación o gate fallido · 2 uso (también un manifiesto inválido) · 3 herramienta ausente o con versión distinta |
 | **Bloques gestionados** | `internal/profile` (M4) | Marcadores con versión del perfil: `<!-- aval:begin profile=1 -->` / `# aval:begin profile=1`. Nunca `OPENSPEC:START/END`, porque OpenSpec los borra |
 
+### Una sola fuente de verdad por contrato
+
+- **Validación en tiempo de ejecución:** los manifiestos y el bundle se validan contra su propio JSON Schema embebido. Encima, Go comprueba solo las reglas que un schema no puede expresar.
+- **Sin divergencias:** así Go y el schema no pueden separarse. Un campo ausente o `null` (por ejemplo un `tier` omitido, que valdría 0 y relajaría la política) o un número con decimales en un campo entero se rechazan igual en los dos.
+- **Tests de paridad:** comprueban en ambas direcciones que las dos validaciones coinciden. Cada constante de Go tiene que ser aceptada por el schema.
+
 ### Reglas de los manifiestos
 
-- **Decodificación estricta:** un campo desconocido, un documento vacío o más de un documento YAML son errores. Una errata nunca debe debilitar la política en silencio.
+- **Decodificación estricta:** un campo desconocido, un documento vacío, más de un documento YAML o un fichero que supere el límite de tamaño son errores. Una errata nunca debe debilitar la política en silencio.
 - **Validación completa:** se devuelven todos los problemas juntos, no solo el primero.
-- **Paridad:** la validación en Go y el JSON Schema coinciden. Las únicas excepciones son reglas que solo Go puede comprobar (sintaxis de globs, patrones repetidos entre familias, un solo documento), y el test las nombra.
+- **Reglas que solo comprueba Go:** la sintaxis de los globs y los patrones repetidos, dentro de una familia o entre familias.
 
 ### Reglas del bundle
 
-- **SHAs completos:** `base` y `head` son de 40 caracteres.
+- **SHAs completos:** `base` y `head` son de 40 caracteres, y `generatedAt` es obligatorio.
+- **Listas nunca nulas:** "ningún hallazgo" se escribe `[]`, nunca `null`. El único campo que puede ser `null` es `override`.
 - **Veredicto justificado:** un veredicto `warn` o `block` lleva al menos un motivo.
-- **Override con motivo:** un override sin motivo es inválido.
+- **Fuerza de la evidencia, coherente con los estados:**
+
+  | Fuerza | Requiere |
+  |---|---|
+  | `strong` | Falla en la base y pasa en head |
+  | `weak` | No compila en la base y pasa en head |
+  | `characterization` | Requisito marcado con `**aval**: characterization` y que pasa en head |
+  | `none` | Nada: es la ausencia de evidencia aceptable |
+
+  Falla-antes solo aplica a obligaciones con `delta` `added` o `modified`.
+- **Override:** se registra aunque se rechace. Es válido solo si lo puso un CODEOWNER, con motivo, y después del último commit (`labeledAt` > `lastCommitAt`). Si no es válido, lleva `rejection`.
+- **Commit mixto:** es `mixed` exactamente cuando toca dos o más familias, y las lista en `families`.
+- **Tipos de manipulación:** `fingerprint_changed`, `test_removed`, `skip_added`, `policy_edited`, `baseline_edited`.
+- **La política viene de la base:** el gate lee `aval.yaml` y el baseline del SHA base, nunca del head. En modo `observe` el veredicto se informa sin bloquear; en `enforce`, un `block` bloquea.
 - **Recalcular en el mismo job:** el gate recalcula la evidencia y rechaza un bundle cuyo `head` no coincide con `HEAD` (`CheckHead`).
 - **`notCollected`** declara la evidencia que la v0 aún no reúne (`mutation`, `rollback`, `slo`), para que su ausencia sea explícita y no parezca un pase.
 
 ## Versionado
 
-- **Añadir campos opcionales** mantiene la versión.
-- **Quitar un campo o cambiar su significado** sube la versión (`schemaVersion`, `version`) y obliga a un ADR nuevo.
+- **Los schemas son cerrados** (`additionalProperties: false`): un lector nunca acepta campos que no entiende.
+- **Por tanto, cualquier cambio de forma sube la versión** (`schemaVersion` o `version`), incluso añadir un campo opcional, y exige un ADR nuevo.
+- **Es barato:** el bundle lo produce y lo consume el mismo binario en el mismo job, y los manifiestos se validan con la versión de aval fijada en el repo.
 - **aval rechaza versiones que no conoce** con exit 2, en lugar de interpretarlas.
 
 ## Consecuencias

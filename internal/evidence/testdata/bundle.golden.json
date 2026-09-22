@@ -15,6 +15,7 @@
       "id": "ORD-F01",
       "kind": "F",
       "source": "openspec/specs/refunds/spec.md#ORD-F01 Refund is idempotent",
+      "delta": "added",
       "characterization": false,
       "tests": [
         "TestRefunds/ORD-F01_second_refund_is_a_no-op"
@@ -24,9 +25,37 @@
       "strength": "strong"
     },
     {
+      "id": "ORD-F02",
+      "kind": "F",
+      "source": "openspec/specs/refunds/spec.md#ORD-F02 Refund needs a charge",
+      "delta": "added",
+      "characterization": false,
+      "tests": [
+        "TestRefunds/ORD-F02_unknown_charge"
+      ],
+      "before": "build_fail",
+      "after": "pass",
+      "strength": "weak",
+      "note": "refund.New did not exist at the base"
+    },
+    {
+      "id": "ORD-I01",
+      "kind": "I",
+      "source": "openspec/specs/refunds/spec.md#ORD-I01 Totals never go negative",
+      "delta": "modified",
+      "characterization": true,
+      "tests": [
+        "TestRefunds/ORD-I01_totals"
+      ],
+      "before": "pass",
+      "after": "pass",
+      "strength": "characterization"
+    },
+    {
       "id": "ORD-N01",
       "kind": "N",
       "source": "openspec/specs/refunds/spec.md#ORD-N01 Never refund more than charged",
+      "delta": "added",
       "characterization": false,
       "tests": [
         "TestRefunds/ORD-N01_rejects_excess"
@@ -47,30 +76,52 @@
     {
       "name": "golangci-lint",
       "command": "golangci-lint run --new-from-merge-base=main",
-      "exitCode": 0,
+      "exitCode": 1,
       "durationMs": 9120,
-      "status": "pass"
+      "status": "fail",
+      "artifact": "lint.json"
     }
   ],
   "scope": [
     {
       "sha": "2222222222222222222222222222222222222222",
-      "family": "feat",
+      "family": "mixed",
+      "families": [
+        "dx",
+        "feat"
+      ],
       "paths": [
-        "internal/refund/refund.go",
-        "internal/refund/refund_test.go"
+        ".golangci.yml",
+        "internal/refund/refund.go"
       ]
     }
   ],
-  "tamper": [],
-  "override": null,
+  "tamper": [
+    {
+      "kind": "skip_added",
+      "id": "ORD-N01",
+      "detail": "t.Skip added to TestRefunds/ORD-N01_rejects_excess"
+    }
+  ],
+  "override": {
+    "actor": "@dev",
+    "reason": "hotfix",
+    "labeledAt": "2026-09-21T10:00:00Z",
+    "lastCommitAt": "2026-09-21T11:00:00Z",
+    "valid": false,
+    "rejection": "labeled before the last commit"
+  },
   "verdict": {
     "result": "block",
     "reasons": [
       {
         "code": "fail_before_missing",
-        "message": "test passed at the base and the requirement is not marked characterization",
+        "message": "test passed at the base and the requirement is not characterization",
         "id": "ORD-N01"
+      },
+      {
+        "code": "mixed_commit",
+        "message": "a commit touches dx and feat paths"
       }
     ]
   },
