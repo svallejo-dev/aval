@@ -55,6 +55,8 @@ El gate trabaja sobre un rango `base..head`:
 
 Requiere git ≥ 2.40; con uno más antiguo, exit 3.
 
+**Excepción: los hooks de agente** (`aval hook`) no usan `--attr-source`, que les costaría un `git hash-object` en serie en cada invocación (presupuesto p95 < 50 ms). Leen el árbol de trabajo del propio agente para una clave de caché consultiva, y quien puede plantar un `.gitattributes` también puede escribir a mano el fichero de estado. El gate nunca usa esta excepción.
+
 | Entrada | De dónde sale |
 |---|---|
 | Política | El `aval.yaml` **raíz del SHA base**. Si no existe, el gate corre en `observe` (`no_base_policy`) |
@@ -164,7 +166,9 @@ Las etiquetas no sirven: no se atan a un commit, y la hora de GitHub que podría
 
 Una aprobación es **válida** si cumple tres condiciones:
 1. es el **último review que no sea `COMMENTED`** de ese revisor (como hace GitHub), tiene `state: APPROVED` y **`commit_id` igual al SHA head**. Un `CHANGES_REQUESTED` o `DISMISSED` posterior la anula;
-2. su autor es un **CODEOWNER**: un usuario listado individualmente en el `CODEOWNERS` de la base para el `aval.yaml` raíz, o con `role_name` ∈ {`admin`, `maintain`} (`GET /repos/{o}/{r}/collaborators/{user}/permission`; el campo `permission` no sirve porque reporta `maintain` como `write`);
+2. su autor es un **CODEOWNER**, por una de dos vías (`GET /repos/{o}/{r}/collaborators/{user}/permission`):
+   - listado individualmente en el `CODEOWNERS` de la base para el `aval.yaml` raíz **y** con permiso de escritura (`permission` ∈ {`write`, `admin`}). Es lo que exige GitHub para asignar un code owner, y evita que alguien registre el login de una cuenta renombrada o borrada que siga en el fichero;
+   - o con `role_name` ∈ {`admin`, `maintain`}. Aquí `permission` no sirve, porque reporta `maintain` como `write`;
 3. GitHub ya impide que el autor del PR apruebe su propio PR.
 
 Hay dos tipos:
@@ -172,9 +176,9 @@ Hay dos tipos:
 | Tipo | Requisito extra | Efecto |
 |---|---|---|
 | **Aprobación humana** | Ninguno | Satisface `approval_missing`; nada más |
-| **Excepción (override)** | Una línea `aval:override <motivo>` en el cuerpo del review, con motivo no vacío | Convierte un `block` en `warn`; los motivos se conservan |
+| **Excepción (override)** | Una línea `aval:override <motivo>` en el cuerpo del review, fuera de bloques de código, con motivo no vacío | Convierte **cualquier** `block` en `warn`, también `tamper`, y conserva los motivos. Es la vía para cambiar la política: editar el `aval.yaml` raíz siempre es `tamper`. No satisface `approval_missing`, que sigue visible |
 
-- **Todas las aprobaciones se registran en el bundle,** también las inválidas, con su `rejection`.
+- **Todas las aprobaciones se registran en el bundle,** también las inválidas, con su `rejection`. Un `aval:override` sin motivo es una excepción inválida, no una aprobación.
 - **Un review de un commit anterior no cuenta.** Cuando llega un commit nuevo, hace falta volver a aprobar.
 - **Los equipos de GitHub** exigen un token con `read:org` y quedan fuera de la v0.
 
