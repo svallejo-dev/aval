@@ -1,0 +1,132 @@
+{
+  "changeName": "x",
+  "schemaName": "aval",
+  "planningHome": {
+    "kind": "repo",
+    "root": "<ROOT>",
+    "changesDir": "<ROOT>/openspec/changes",
+    "defaultSchema": "spec-driven"
+  },
+  "changeRoot": "<ROOT>/openspec/changes/x",
+  "artifactPaths": {
+    "proposal": {
+      "outputPath": "proposal.md",
+      "resolvedOutputPath": "<ROOT>/openspec/changes/x/proposal.md",
+      "existingOutputPaths": [
+        "<ROOT>/openspec/changes/x/proposal.md"
+      ]
+    },
+    "specs": {
+      "outputPath": "specs/**/*.md",
+      "resolvedOutputPath": "<ROOT>/openspec/changes/x/specs/**/*.md",
+      "existingOutputPaths": [
+        "<ROOT>/openspec/changes/x/specs/refunds/spec.md"
+      ]
+    },
+    "design": {
+      "outputPath": "design.md",
+      "resolvedOutputPath": "<ROOT>/openspec/changes/x/design.md",
+      "existingOutputPaths": [
+        "<ROOT>/openspec/changes/x/design.md"
+      ]
+    },
+    "tasks": {
+      "outputPath": "tasks.md",
+      "resolvedOutputPath": "<ROOT>/openspec/changes/x/tasks.md",
+      "existingOutputPaths": [
+        "<ROOT>/openspec/changes/x/tasks.md"
+      ]
+    },
+    "premortem": {
+      "outputPath": "premortem.md",
+      "resolvedOutputPath": "<ROOT>/openspec/changes/x/premortem.md",
+      "existingOutputPaths": []
+    },
+    "trace": {
+      "outputPath": "trace.yaml",
+      "resolvedOutputPath": "<ROOT>/openspec/changes/x/trace.yaml",
+      "existingOutputPaths": []
+    }
+  },
+  "isPlanningComplete": false,
+  "isComplete": false,
+  "applyRequires": [
+    "tasks"
+  ],
+  "nextSteps": [
+    "Run openspec instructions premortem --change \"x\" --json before writing that artifact."
+  ],
+  "actionContext": {
+    "mode": "repo-local",
+    "sourceOfTruth": "repo",
+    "planningArtifacts": [
+      "proposal",
+      "specs",
+      "design",
+      "tasks",
+      "premortem",
+      "trace"
+    ],
+    "linkedContext": [],
+    "allowedEditRoots": [
+      "<ROOT>"
+    ],
+    "requiresAffectedAreaSelection": false,
+    "constraints": [
+      "Repo-local change artifacts and implementation edits are scoped to this project."
+    ]
+  },
+  "artifacts": [
+    {
+      "id": "proposal",
+      "outputPath": "proposal.md",
+      "status": "done",
+      "requires": []
+    },
+    {
+      "id": "specs",
+      "outputPath": "specs/**/*.md",
+      "status": "done",
+      "requires": [
+        "proposal"
+      ]
+    },
+    {
+      "id": "design",
+      "outputPath": "design.md",
+      "status": "done",
+      "requires": [
+        "proposal"
+      ]
+    },
+    {
+      "id": "tasks",
+      "outputPath": "tasks.md",
+      "status": "done",
+      "requires": [
+        "specs",
+        "design"
+      ]
+    },
+    {
+      "id": "premortem",
+      "outputPath": "premortem.md",
+      "status": "ready",
+      "requires": [
+        "proposal"
+      ]
+    },
+    {
+      "id": "trace",
+      "outputPath": "trace.yaml",
+      "status": "ready",
+      "requires": [
+        "specs"
+      ]
+    }
+  ],
+  "root": {
+    "path": "<ROOT>",
+    "source": "nearest"
+  }
+}

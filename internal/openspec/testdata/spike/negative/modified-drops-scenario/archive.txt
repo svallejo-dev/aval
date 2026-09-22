@@ -1,0 +1,6 @@
+Task status: No tasks
+
+Specs to update:
+  refunds: update
+refunds MODIFIED failed for header "### Requirement: ORD-F01 Refund is idempotent" - current spec contains scenario(s) not present in the modified block: "Different keys for same order", "Key reused after the window". Refresh the change spec before archiving to avoid dropping scenarios.
+Aborted. No files were changed.

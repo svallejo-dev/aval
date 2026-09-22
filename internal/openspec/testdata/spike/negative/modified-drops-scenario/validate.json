@@ -1,0 +1,36 @@
+{
+  "items": [
+    {
+      "id": "modified-drops-scenario",
+      "type": "change",
+      "valid": false,
+      "issues": [
+        {
+          "level": "ERROR",
+          "path": "refunds/spec.md",
+          "message": "MODIFIED \"ORD-F01 Refund is idempotent\" omits scenario(s) the current spec still has: \"Different keys for same order\", \"Key reused after the window\". Copy them into the MODIFIED block (a MODIFIED requirement replaces the whole block, so archive refuses to drop them)."
+        }
+      ],
+      "durationMs": 6
+    }
+  ],
+  "summary": {
+    "totals": {
+      "items": 1,
+      "passed": 0,
+      "failed": 1
+    },
+    "byType": {
+      "change": {
+        "items": 1,
+        "passed": 0,
+        "failed": 1
+      }
+    }
+  },
+  "version": "1.0",
+  "root": {
+    "path": "<ROOT>",
+    "source": "nearest"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "forked": true,
+  "source": "spec-driven",
+  "sourcePath": "<NPX_CACHE>/node_modules/@fission-ai/openspec/schemas/spec-driven",
+  "sourceLocation": "package",
+  "destination": "aval",
+  "destinationPath": "<ROOT>/openspec/schemas/aval"
+}

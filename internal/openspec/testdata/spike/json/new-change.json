@@ -1,0 +1,12 @@
+{
+  "change": {
+    "id": "add-refund-limits",
+    "path": "<ROOT>/openspec/changes/add-refund-limits",
+    "metadataPath": "<ROOT>/openspec/changes/add-refund-limits/.openspec.yaml",
+    "schema": "spec-driven"
+  },
+  "root": {
+    "path": "<ROOT>",
+    "source": "nearest"
+  }
+}

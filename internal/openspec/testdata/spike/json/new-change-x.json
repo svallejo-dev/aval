@@ -1,0 +1,12 @@
+{
+  "change": {
+    "id": "x",
+    "path": "<ROOT>/openspec/changes/x",
+    "metadataPath": "<ROOT>/openspec/changes/x/.openspec.yaml",
+    "schema": "aval"
+  },
+  "root": {
+    "path": "<ROOT>",
+    "source": "nearest"
+  }
+}
