@@ -2,11 +2,24 @@
 
 exec aval version --plain
 stdout '^aval '
+! stderr .
+
+# Without a terminal on stdout the default mode is plain, never tui.
+exec aval version
+stdout '^aval '
+! stdout '\x1b\['
 
 exec aval version --json
 stdout '"command": "version"'
 stdout '"ok": true'
 stdout '"errors": \[\]'
+
+# --json takes any value strconv.ParseBool accepts, also before a bad flag.
+exec aval version --json=1
+stdout '"ok": true'
+! exec aval version --json=true --nope
+stdout '"code": "usage"'
+! stderr .
 
 ! exec aval version --json --plain
 stdout '"ok": false'

@@ -5,6 +5,8 @@ import (
 	"runtime/debug"
 
 	"github.com/spf13/cobra"
+
+	"github.com/svallejo-dev/aval/internal/ui"
 )
 
 // version is overridden at release time with
@@ -25,16 +27,21 @@ func newVersionCmd(g *globalFlags) *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: runE(func(cmd *cobra.Command, _ []string) error {
 			info := readVersion()
-			out := cmd.OutOrStdout()
-			if g.json {
-				return writeEnvelope(out, "version", info)
-			}
-			line := "aval " + info.Version
+			details := " " + info.Go
 			if info.Commit != "" {
-				line += " (" + info.Commit + ")"
+				details = " (" + info.Commit + ")" + details
 			}
-			if _, err := fmt.Fprintln(out, line+" "+info.Go); err != nil {
-				return fmt.Errorf("write version: %w", err)
+			err := g.printer(cmd).Print(ui.Result{
+				Command: "version",
+				Data:    info,
+				Lines: []ui.Line{{
+					{Text: "aval", Tone: ui.ToneTitle},
+					{Text: " " + info.Version},
+					{Text: details, Tone: ui.ToneMuted},
+				}},
+			})
+			if err != nil {
+				return fmt.Errorf("print version: %w", err)
 			}
 			return nil
 		}),

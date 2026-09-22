@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"github.com/svallejo-dev/aval/internal/ui"
 )
 
 func TestExecute(t *testing.T) {
@@ -31,6 +33,11 @@ func TestExecute(t *testing.T) {
 		{name: "json and plain conflict", args: []string{"version", "--json", "--plain"}, wantCode: ExitUsage, wantStdout: `"code": "usage"`},
 		{name: "extra args", args: []string{"version", "extra"}, wantCode: ExitUsage, wantStderr: `unknown command "extra"`},
 		{name: "json without command", args: []string{"--json"}, wantCode: ExitUsage, wantStdout: `"code": "usage"`},
+		{name: "json=1", args: []string{"version", "--json=1"}, wantCode: ExitOK, wantStdout: `"command": "version"`},
+		{name: "json=true", args: []string{"version", "--json=true"}, wantCode: ExitOK, wantStdout: `"command": "version"`},
+		{name: "json=false is plain", args: []string{"version", "--json=false"}, wantCode: ExitOK, wantStdout: "aval "},
+		{name: "json=1 before a bad flag", args: []string{"version", "--json=1", "--nope"}, wantCode: ExitUsage, wantStdout: `"code": "usage"`},
+		{name: "json=0 before a bad flag", args: []string{"version", "--json=0", "--nope"}, wantCode: ExitUsage, wantStderr: "aval: unknown flag: --nope"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -144,7 +151,7 @@ type decodedEnvelope struct {
 	Command       string          `json:"command"`
 	OK            bool            `json:"ok"`
 	Data          json.RawMessage `json:"data"`
-	Errors        []envelopeError `json:"errors"`
+	Errors        []ui.Issue      `json:"errors"`
 }
 
 func decodeEnvelope(t *testing.T, raw []byte) decodedEnvelope {
@@ -154,4 +161,35 @@ func decodeEnvelope(t *testing.T, raw []byte) decodedEnvelope {
 		t.Fatalf("not a JSON envelope: %v\n%s", err, raw)
 	}
 	return e
+}
+
+func TestBoolFlag(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		args []string
+		want bool
+	}{
+		{args: nil, want: false},
+		{args: []string{"--json"}, want: true},
+		{args: []string{"--json=1"}, want: true},
+		{args: []string{"--json=t"}, want: true},
+		{args: []string{"--json=TRUE"}, want: true},
+		{args: []string{"--json=0"}, want: false},
+		{args: []string{"--json=false"}, want: false},
+		{args: []string{"--json=maybe"}, want: false},
+		{args: []string{"--json", "--json=false"}, want: false},
+		{args: []string{"--json=false", "--json"}, want: true},
+		{args: []string{"--jsonx"}, want: false},
+		{args: []string{"-json"}, want: false},
+		{args: []string{"--", "--json"}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
+			t.Parallel()
+			if got := boolFlag(tt.args, "json"); got != tt.want {
+				t.Errorf("boolFlag(%q, json) = %v, want %v", tt.args, got, tt.want)
+			}
+		})
+	}
 }
