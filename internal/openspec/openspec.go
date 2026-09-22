@@ -87,14 +87,15 @@ type Change struct {
 	Archived bool
 	Manifest *manifest.Change // the change's aval.yaml; nil when absent
 	Deltas   []Delta
+	// findings holds the single-file findings of the delta specs.
+	findings []Finding
 }
 
 // Repo is the OpenSpec tree of a repository.
 type Repo struct {
 	Specs   []Spec   // sorted by capability
 	Changes []Change // active changes, then archived ones, each sorted by directory
-	// findings holds the single-file findings collected while reading the
-	// main specs and the active changes.
+	// findings holds the single-file findings of the main specs.
 	findings []Finding
 }
 
@@ -164,9 +165,7 @@ func (r *Repo) loadChange(ctx context.Context, fsys fs.FS, parent, name string, 
 		}
 		deltas, found := parseDelta(f.capability, f.path, src)
 		ch.Deltas = append(ch.Deltas, deltas...)
-		if !archived {
-			r.findings = append(r.findings, found...)
-		}
+		ch.findings = append(ch.findings, found...)
 	}
 	r.Changes = append(r.Changes, ch)
 	return nil

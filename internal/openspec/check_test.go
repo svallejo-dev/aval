@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path"
 	"regexp"
@@ -39,13 +40,18 @@ func spikeRepo(t *testing.T, name string, delta []byte) fstest.MapFS {
 	}
 }
 
-func check(t *testing.T, fsys fstest.MapFS) []Finding {
+func load(t *testing.T, fsys fstest.MapFS) *Repo {
 	t.Helper()
 	r, err := Load(context.Background(), fsys)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	return r.Check()
+	return r
+}
+
+func check(t *testing.T, fsys fstest.MapFS) []Finding {
+	t.Helper()
+	return load(t, fsys).Check(CheckOptions{})
 }
 
 // brief renders findings as "path:line severity rule".
@@ -83,26 +89,50 @@ func readmeVerdicts(t *testing.T) map[string]string {
 	return out
 }
 
+// archivedRepos is the tree before and after a pull request that archives
+// the case's change: the head has the spec archive wrote and the change in
+// changes/archive/.
+func archivedRepos(t *testing.T, name string) (base, head fstest.MapFS) {
+	t.Helper()
+	base = spikeRepo(t, "unused", nil)
+	delete(base, "openspec/changes/unused/specs/refunds/spec.md")
+	head = maps.Clone(base)
+	head["openspec/specs/refunds/spec.md"] = &fstest.MapFile{Data: fixture(t, name+"/spec-after.md")}
+	head["openspec/changes/archive/2026-09-21-"+path.Base(name)+"/specs/refunds/spec.md"] = &fstest.MapFile{Data: fixture(t, name+"/delta.md")}
+	return base, head
+}
+
 // TestSpikeCases: every negative and positive fixture gets the verdict the
-// README's "aval expects" column gives it, through exactly these findings.
+// README's "aval expects" column gives it, through exactly these findings:
+// while the change is active, and, when archive applied it, once the pull
+// request has archived it.
 func TestSpikeCases(t *testing.T) {
 	t.Parallel()
 
-	const p = "openspec/changes/%s/specs/refunds/spec.md:%d %s %s"
+	const (
+		p    = "openspec/changes/%s/specs/refunds/spec.md:%d %s %s"
+		a    = "openspec/changes/archive/2026-09-21-%s/specs/refunds/spec.md:%d %s %s"
+		spec = "openspec/specs/refunds/spec.md:%d %s %s"
+	)
 	tests := map[string]struct {
-		want []string
-		msg  string // a fact the message must state
+		want     []string
+		msg      string   // a fact the message must state
+		archived []string // findings after the pull request archives the change
 	}{
 		"negative/bracket-id": {want: []string{fmt.Sprintf(p, "bracket-id", 3, SeverityError, RuleInvalidID)},
-			msg: `"[ORD-F04] Refund reason required" must start with an obligation ID`},
+			msg:      `"[ORD-F04] Refund reason required" must start with an obligation ID`,
+			archived: []string{fmt.Sprintf(a, "bracket-id", 3, SeverityError, RuleInvalidID), fmt.Sprintf(spec, 45, SeverityError, RuleInvalidID)}},
 		"negative/duplicate-id": {want: []string{fmt.Sprintf(p, "duplicate-id", 3, SeverityError, RuleDuplicateID)},
-			msg: `ORD-F01 is already defined at openspec/specs/refunds/spec.md:8 as "ORD-F01 Refund is idempotent"`},
+			msg:      `ORD-F01 is already defined at openspec/specs/refunds/spec.md:8 as "ORD-F01 Refund is idempotent"`,
+			archived: []string{fmt.Sprintf(a, "duplicate-id", 3, SeverityError, RuleDuplicateID), fmt.Sprintf(spec, 45, SeverityError, RuleDuplicateID)}},
 		"negative/loose-header": {want: []string{fmt.Sprintf(p, "loose-header", 3, SeverityError, RuleLooseHeader)},
-			msg: `"###requirement:ORD-F06 Refund currency matches order"`},
+			msg:      `"###requirement:ORD-F06 Refund currency matches order"`,
+			archived: []string{fmt.Sprintf(a, "loose-header", 3, SeverityError, RuleLooseHeader), fmt.Sprintf(spec, 45, SeverityError, RuleLooseHeader)}},
 		"negative/modified-case-variant": {want: []string{fmt.Sprintf(p, "modified-case-variant", 3, SeverityError, RuleUnmatchedName)},
 			msg: `ORD-F01 is "ORD-F01 Refund is idempotent" at openspec/specs/refunds/spec.md:8`},
 		"negative/modified-drops-marker": {want: []string{fmt.Sprintf(p, "modified-drops-marker", 3, SeverityWarn, RuleDroppedMarker)},
-			msg: `marker that openspec/specs/refunds/spec.md:30 carries`},
+			msg:      `marker that openspec/specs/refunds/spec.md:30 carries`,
+			archived: []string{fmt.Sprintf(a, "modified-drops-marker", 3, SeverityWarn, RuleDroppedMarker)}},
 		"negative/modified-drops-scenario": {want: []string{fmt.Sprintf(p, "modified-drops-scenario", 3, SeverityError, RuleDroppedScenario)},
 			msg: `still has: "Different keys for same order", "Key reused after the window";`},
 		"negative/modified-old-name-after-rename": {want: []string{fmt.Sprintf(p, "modified-old-name-after-rename", 3, SeverityError, RuleModifiedOldName)},
@@ -110,9 +140,16 @@ func TestSpikeCases(t *testing.T) {
 		"negative/non-requirement-h3": {want: []string{fmt.Sprintf(p, "non-requirement-h3", 6, SeverityError, RuleStrayHeading)},
 			msg: `heading "### Notes" in ## ADDED Requirements`},
 		"negative/renamed-id-change": {want: []string{fmt.Sprintf(p, "renamed-id-change", 4, SeverityError, RuleRenamedID)},
-			msg: `from ORD-S01 to ORD-S09`},
+			msg:      `from ORD-S01 to ORD-S09`,
+			archived: []string{fmt.Sprintf(a, "renamed-id-change", 4, SeverityError, RuleRenamedID)}},
 		"negative/trailing-hash": {want: []string{fmt.Sprintf(p, "trailing-hash", 3, SeverityError, RuleTrailingHash)},
-			msg: `"ORD-N01 Refund never exceeds order total ##"`},
+			msg:      `"ORD-N01 Refund never exceeds order total ##"`,
+			archived: []string{fmt.Sprintf(a, "trailing-hash", 3, SeverityError, RuleTrailingHash), fmt.Sprintf(spec, 38, SeverityError, RuleTrailingHash)}},
+		"negative/h1-in-requirement": {want: []string{fmt.Sprintf(p, "h1-in-requirement", 6, SeverityError, RuleStrayHeading)},
+			msg: `heading "# Aside" in ## ADDED Requirements`},
+		"negative/h1-between-requirements": {want: []string{fmt.Sprintf(p, "h1-between-requirements", 10, SeverityError, RuleStrayHeading)},
+			msg:      `heading "# Receipts" in ## ADDED Requirements`,
+			archived: []string{fmt.Sprintf(a, "h1-between-requirements", 10, SeverityError, RuleStrayHeading), fmt.Sprintf(spec, 52, SeverityError, RuleStrayHeading)}},
 		"positive/c-sharp-name":          {},
 		"positive/fenced-requirement":    {},
 		"positive/renamed-then-modified": {},
@@ -151,6 +188,22 @@ func TestSpikeCases(t *testing.T) {
 			if len(got) > 0 && !strings.Contains(got[0].Message, tt.msg) {
 				t.Errorf("message %q does not contain %q", got[0].Message, tt.msg)
 			}
+
+			if _, err := fs.Stat(spike, name+"/spec-after.md"); err != nil {
+				return // archive refused the change
+			}
+			base, head := archivedRepos(t, name)
+			b, err := Load(context.Background(), base)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got = load(t, head).Check(CheckOptions{Base: b})
+			if !slices.Equal(brief(got), tt.archived) {
+				t.Errorf("findings once archived:\n got %q\nwant %q", brief(got), tt.archived)
+			}
+			if v := verdict(got); v != verdicts[name] {
+				t.Errorf("verdict once archived %s, README expects %s", v, verdicts[name])
+			}
 		})
 	}
 }
@@ -177,8 +230,12 @@ func TestSpikeBaseline(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := r.Check(); len(got) != 0 {
+			if got := r.Check(CheckOptions{}); len(got) != 0 {
 				t.Errorf("unexpected findings: %v", got)
+			}
+			// Archived by the pull request: every delta rule against the base.
+			if got := r.Check(CheckOptions{Base: load(t, before)}); len(got) != 0 {
+				t.Errorf("unexpected findings against the base: %v", got)
 			}
 			if len(r.Changes) != 1 {
 				t.Fatalf("got %d changes, want 1", len(r.Changes))
@@ -221,9 +278,12 @@ func TestCheckRules(t *testing.T) {
 		deltaA = "openspec/changes/c1/specs/a/spec.md"
 		deltaB = "openspec/changes/c2/specs/a/spec.md"
 		old    = "openspec/changes/archive/2026-01-01-old/specs/a/spec.md"
+		newer  = "openspec/changes/archive/2026-02-02-new/specs/a/spec.md"
+		f09    = "### Requirement: ORD-F09 Back\nThe system SHALL back.\n#### Scenario: S9\n- ok\n"
 	)
 	tests := []struct {
 		name  string
+		base  map[string]string // the pull request's base tree; nil for none
 		files map[string]string
 		want  []string
 		msg   string // a fact the first finding's message must state
@@ -356,15 +416,78 @@ func TestCheckRules(t *testing.T) {
 				"## REMOVED Requirements\n+ ### Requirement:  ORD-F02 Two\n"},
 			want: []string{deltaA + ":2 error loose-header", deltaA + ":5 error loose-header"},
 		},
+		{
+			name: "stray headings of every level",
+			files: map[string]string{
+				specA: "## Requirements\n### Requirement: ORD-F01 One\nThe system SHALL one.\n# Aside\n#### Scenario: S1\n- ok\n" +
+					"### Requirement: ORD-F02 Two\nThe system SHALL two.\n#### Scenario: S2\n- ok\n## \n### Requirement: ORD-F03 Past a bare heading\n",
+				deltaA: "## ADDED Requirements\n### Requirement: ORD-F04 Four\nThe system SHALL four.\n### \n#### Scenario: S4\n- ok\n" +
+					"## \n### Requirement: ORD-F05 Five\nThe system SHALL five.\n#### Scenario: S5\n- ok\n##  \n### Requirement: ORD-F06 Hidden\n",
+				deltaB: "# Delta for a\n## REMOVED Requirements\n- `### Requirement: ORD-F02 Two`\n",
+			},
+			want: []string{
+				deltaA + ":4 error stray-heading", deltaA + ":7 error stray-heading", deltaA + ":12 error stray-heading",
+				specA + ":4 error stray-heading", specA + ":11 error stray-heading",
+			},
+			msg: `heading "###" in ## ADDED Requirements is not a "### Requirement:" header`,
+		},
+		{
+			name:  "main spec defines a retired ID",
+			files: map[string]string{specA: f01 + f09, old: "## REMOVED Requirements\n### Requirement: ORD-F09 Gone\n"},
+			want:  []string{specA + ":6 error retired-id"},
+			msg:   `"ORD-F09 Back" reuses ORD-F09, which openspec/changes/archive/2026-01-01-old retired`,
+		},
+		{
+			name: "an ID renamed away is retired, a kept one is not",
+			files: map[string]string{specA: f01, deltaA: added("ORD-F05 Again"), old: "## RENAMED Requirements\n" +
+				"- FROM: `### Requirement: ORD-F05 Five`\n- TO: `### Requirement: ORD-F06 Six`\n" +
+				"- FROM: `### Requirement: ORD-F01 Uno`\n- TO: `### Requirement: ORD-F01 One`\n"},
+			want: []string{deltaA + ":2 error retired-id"},
+		},
+		{
+			name: "rename cycle",
+			files: map[string]string{specA: f01, deltaA: "## RENAMED Requirements\n" +
+				"- FROM: `### Requirement: ORD-F01 Two`\n- TO: `### Requirement: ORD-F01 Three`\n" +
+				"- FROM: `### Requirement: ORD-F01 Three`\n- TO: `### Requirement: ORD-F01 Two`\n"},
+			want: []string{deltaA + ":2 error unmatched-name", deltaA + ":4 error unmatched-name"},
+		},
+		{
+			name: "retired ID reused by a change the pull request archived",
+			base: map[string]string{specA: f01, old: "## REMOVED Requirements\n### Requirement: ORD-F09 Gone\n###requirement: ORD-F08 History\n"},
+			files: map[string]string{specA: f01 + f09, newer: added("ORD-F09 Back"),
+				old: "## REMOVED Requirements\n### Requirement: ORD-F09 Gone\n###requirement: ORD-F08 History\n"},
+			want: []string{newer + ":2 error retired-id", specA + ":6 error retired-id"},
+		},
+		{
+			name: "the same archive without a base is history",
+			files: map[string]string{specA: f01 + f09, newer: added("ORD-F09 Back"),
+				old: "## REMOVED Requirements\n### Requirement: ORD-F09 Gone\n###requirement: ORD-F08 History\n"},
+			want: []string{specA + ":6 error retired-id"},
+		},
+		{
+			name: "MODIFIED archived by the pull request is checked against the base spec",
+			base: map[string]string{specA: f01 + // the base's own duplicate is not the pull request's finding
+				"### Requirement: ORD-F01 Twin\nThe system SHALL twin.\n#### Scenario: T\n- ok\n"},
+			files: map[string]string{specA: strings.ReplaceAll(f01, "S1", "S2"), newer: "## MODIFIED Requirements\n" + strings.ReplaceAll(strings.TrimPrefix(f01, "## Requirements\n"), "S1", "S2")},
+			want:  []string{newer + ":2 error dropped-scenario"},
+			msg:   `still has: "S1"`,
+		},
+	}
+	mapFS := func(files map[string]string) fstest.MapFS {
+		fsys := fstest.MapFS{}
+		for name, data := range files {
+			fsys[name] = &fstest.MapFile{Data: []byte(data)}
+		}
+		return fsys
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			fsys := fstest.MapFS{}
-			for name, data := range tt.files {
-				fsys[name] = &fstest.MapFile{Data: []byte(data)}
+			var opts CheckOptions
+			if tt.base != nil {
+				opts.Base = load(t, mapFS(tt.base))
 			}
-			got := check(t, fsys)
+			got := load(t, mapFS(tt.files)).Check(opts)
 			if !slices.Equal(brief(got), tt.want) {
 				t.Errorf("findings:\n got %q\nwant %q\n%v", brief(got), tt.want, got)
 			}

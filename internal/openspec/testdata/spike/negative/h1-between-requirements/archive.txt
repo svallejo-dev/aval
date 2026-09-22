@@ -1,0 +1,9 @@
+Task status: No tasks
+
+Specs to update:
+  refunds: update
+Applying changes to openspec/specs/refunds/spec.md:
+  + 2 added
+Totals: + 2, ~ 0, - 0, → 0
+Specs updated successfully.
+Change 'h1-between-requirements' archived as '2026-09-22-h1-between-requirements'.

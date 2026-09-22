@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/svallejo-dev/aval/internal/obligation"
 )
 
 // Severity says whether a finding blocks.
@@ -30,7 +32,7 @@ const (
 	RuleStrayHeading    Rule = "stray-heading"     // error: other "###" heading in a requirement section
 	RuleUnpairedRename  Rule = "unpaired-rename"   // error: RENAMED FROM: or TO: without its pair
 	RuleDuplicateID     Rule = "duplicate-id"      // error: ID defined twice
-	RuleRetiredID       Rule = "retired-id"        // error: ADDED reuses an ID an archived change removed
+	RuleRetiredID       Rule = "retired-id"        // error: definition of an ID an archived change removed or renamed away
 	RuleUnknownID       Rule = "unknown-id"        // error: MODIFIED, REMOVED or RENAMED of an undefined ID
 	RuleUnmatchedName   Rule = "unmatched-name"    // error: reference that matches no requirement name exactly
 	RuleRenamedID       Rule = "renamed-id"        // error: RENAMED that changes the ID
@@ -56,83 +58,151 @@ func (q Requirement) finding(s Severity, rule Rule, msg string) Finding {
 	return Finding{Severity: s, Rule: rule, Path: q.Path, Line: q.Line, Message: msg}
 }
 
-// Check applies the ADR-0002 rules to the main specs and the active changes
-// and returns the findings sorted by path and line. Archived changes are
-// history: they only contribute the IDs their REMOVED blocks retired.
-func (r *Repo) Check() []Finding {
-	c := checker{
-		main:    make(map[string]map[string]Requirement),
-		defined: make(map[string]Requirement),
-		retired: make(map[string]string),
-		out:     slices.Clone(r.findings),
-	}
-	for _, ch := range r.Changes {
-		for _, d := range ch.Deltas {
-			if id := d.Requirement.ID.String(); ch.Archived && d.Op == Removed && id != "" && c.retired[id] == "" {
-				c.retired[id] = ch.Dir
-			}
-		}
-	}
-	for _, s := range r.Specs {
-		names := make(map[string]Requirement, len(s.Requirements))
-		for _, q := range s.Requirements {
-			if _, dup := names[q.Name]; !dup {
-				names[q.Name] = q
-			}
-			c.define(q)
-		}
-		c.main[s.Capability] = names
-	}
-	for _, ch := range r.Changes {
-		if ch.Archived {
-			continue
-		}
-		for _, d := range ch.Deltas {
-			if d.Op != Added {
-				continue
-			}
-			c.define(d.Requirement)
-			if dir, ok := c.retired[d.Requirement.ID.String()]; ok {
-				c.add(d.Requirement, SeverityError, RuleRetiredID, "ADDED %q reuses %s, which %s retired; IDs are never reused",
-					d.Requirement.Name, d.Requirement.ID, dir)
-			}
+// CheckOptions is what Check needs besides the tree itself.
+type CheckOptions struct {
+	// Base is the tree at the pull request's base commit, loaded from a
+	// checkout or a git tree of that commit. A change archived in the tree
+	// but not in Base was archived by the pull request itself, together with
+	// its code (ADR-0002): Check applies every delta rule to it against
+	// Base's main specs, which are the specs as they were before the archive.
+	// Rebuilding them from the tree instead would be wrong: a MODIFIED block
+	// replaces the old requirement, so its scenarios and marker are gone.
+	// With a nil Base every archived change is history.
+	Base *Repo
+}
+
+// Check applies the ADR-0002 rules and returns the findings sorted by path
+// and line. The main specs and the active changes are always checked;
+// archived changes are history, which only retires IDs, unless opts.Base
+// shows that the pull request archived them.
+func (r *Repo) Check(opts CheckOptions) []Finding {
+	var active, history, archivedHere []Change
+	inBase := make(map[string]bool)
+	if opts.Base != nil {
+		for _, ch := range opts.Base.Changes {
+			inBase[ch.Dir] = ch.Archived
 		}
 	}
 	for _, ch := range r.Changes {
-		if !ch.Archived {
-			c.references(ch)
+		switch {
+		case !ch.Archived:
+			active = append(active, ch)
+		case opts.Base == nil || inBase[ch.Dir]:
+			history = append(history, ch)
+		default:
+			archivedHere = append(archivedHere, ch)
 		}
 	}
-	slices.SortStableFunc(c.out, func(a, b Finding) int {
+
+	c := newChecker(retirements(slices.Concat(history, archivedHere)))
+	c.out = slices.Clone(r.findings)
+	c.specs(r.Specs, true)
+	c.changes(active)
+	out := c.out
+	if len(archivedHere) > 0 {
+		b := newChecker(retirements(history))
+		b.specs(opts.Base.Specs, false)
+		b.changes(archivedHere)
+		out = append(out, b.out...)
+	}
+	slices.SortStableFunc(out, func(a, b Finding) int {
 		return cmp.Or(strings.Compare(a.Path, b.Path), cmp.Compare(a.Line, b.Line))
 	})
-	return c.out
+	return out
+}
+
+// retirements maps each ID the archived changes retired to the change that
+// retired it: REMOVED blocks, and RENAMED pairs that changed the ID.
+func retirements(archived []Change) map[string]string {
+	retired := make(map[string]string)
+	retire := func(id obligation.ID, dir string) {
+		if !id.IsZero() && retired[id.String()] == "" {
+			retired[id.String()] = dir
+		}
+	}
+	for _, ch := range archived {
+		for _, d := range ch.Deltas {
+			switch {
+			case d.Op == Removed:
+				retire(d.Requirement.ID, ch.Dir)
+			case d.Op == Renamed && !d.To.ID.IsZero() && d.From.ID != d.To.ID:
+				retire(d.From.ID, ch.Dir)
+			}
+		}
+	}
+	return retired
 }
 
 type checker struct {
 	main    map[string]map[string]Requirement // capability → name → main spec requirement
 	defined map[string]Requirement            // ID → its first definition
-	retired map[string]string                 // ID → archived change that removed it
+	retired map[string]string                 // ID → archived change that retired it
 	out     []Finding
+}
+
+func newChecker(retired map[string]string) *checker {
+	return &checker{
+		main:    make(map[string]map[string]Requirement),
+		defined: make(map[string]Requirement),
+		retired: retired,
+	}
 }
 
 func (c *checker) add(q Requirement, s Severity, rule Rule, format string, args ...any) {
 	c.out = append(c.out, q.finding(s, rule, fmt.Sprintf(format, args...)))
 }
 
-// define records q as a definition of its ID; a second one is an error.
-func (c *checker) define(q Requirement) {
+// specs indexes the main specs and records their definitions. report is
+// false for a base tree, whose own problems are not the pull request's.
+func (c *checker) specs(specs []Spec, report bool) {
+	for _, s := range specs {
+		names := make(map[string]Requirement, len(s.Requirements))
+		for _, q := range s.Requirements {
+			if _, dup := names[q.Name]; !dup {
+				names[q.Name] = q
+			}
+			c.define(q, report)
+		}
+		c.main[s.Capability] = names
+	}
+}
+
+// changes checks changes as if they were active: their single-file
+// findings, their definitions and their references.
+func (c *checker) changes(changes []Change) {
+	for _, ch := range changes {
+		c.out = append(c.out, ch.findings...)
+		for _, d := range ch.Deltas {
+			if d.Op == Added {
+				c.define(d.Requirement, true)
+			}
+		}
+	}
+	for _, ch := range changes {
+		c.references(ch)
+	}
+}
+
+// define records q as a definition of its ID. A second definition, or one of
+// a retired ID, is an error when report is set.
+func (c *checker) define(q Requirement, report bool) {
 	if q.ID.IsZero() {
 		return
 	}
-	if first, ok := c.defined[q.ID.String()]; ok {
-		c.add(q, SeverityError, RuleDuplicateID, "%s is already defined at %s:%d as %q", q.ID, first.Path, first.Line, first.Name)
+	id := q.ID.String()
+	if dir, ok := c.retired[id]; ok && report {
+		c.add(q, SeverityError, RuleRetiredID, "%q reuses %s, which %s retired; IDs are never reused", q.Name, q.ID, dir)
+	}
+	if first, ok := c.defined[id]; ok {
+		if report {
+			c.add(q, SeverityError, RuleDuplicateID, "%s is already defined at %s:%d as %q", q.ID, first.Path, first.Line, first.Name)
+		}
 		return
 	}
-	c.defined[q.ID.String()] = q
+	c.defined[id] = q
 }
 
-// references checks what the deltas of an active change refer to.
+// references checks what the deltas of a change refer to.
 func (c *checker) references(ch Change) {
 	renamedTo := make(map[string]map[string]string)   // capability → old name → new name
 	renamedFrom := make(map[string]map[string]string) // capability → new name → old name

@@ -89,6 +89,7 @@ func TestParseSpec(t *testing.T) {
 				`8 "[ORD-F04] Bracket" id= title="" text="The system SHALL d."`,
 				`10 "ORD-F05 Next line\u0085" id=ORD-F05 title="Next line\u0085" text="The system SHALL e."`, // JavaScript's trim keeps U+0085
 			},
+			strays: []int{6}, // not a header for any reader, but it ends the main-spec reader's body
 		},
 		{
 			name: "only the Requirements section",

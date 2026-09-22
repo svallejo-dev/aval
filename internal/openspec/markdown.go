@@ -3,6 +3,7 @@ package openspec
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -42,15 +43,16 @@ var (
 	requirementsTitle = regexp.MustCompile(`^##` + sp + `+` + caseless("Requirements") + sp + `*$`)
 	deltaTitle        = regexp.MustCompile(`^##` + sp + `+(` + dot + `+)$`)
 	topHeading        = regexp.MustCompile(`^##` + sp)
-	level3Heading     = regexp.MustCompile(`^###` + sp + `+` + dot + `+?` + sp + `*$`)
 	anyHeading        = regexp.MustCompile(`^#{1,6}` + sp)
-	sectionEnd        = regexp.MustCompile(`^#{1,3}` + sp)
-	scenarioHeading   = regexp.MustCompile(`^####` + sp + `+`)
-	scenarioEnd       = regexp.MustCompile(`^#{1,4}` + sp)
-	scenarioPrefix    = regexp.MustCompile(`^` + caseless("Scenario:") + sp + `*`)
-	h3Prefix          = regexp.MustCompile(`^###` + sp + `*`)
-	closingHashes     = regexp.MustCompile(`[ \t]+#+[ \t]*$`)
-	metadataLine      = regexp.MustCompile(`^\*\*[^*]+\*\*:`)
+	// upperHeading is a heading of level 1 to 3, bare ones included: OpenSpec's
+	// main-spec reader ends a requirement there.
+	upperHeading    = regexp.MustCompile(`^#{1,3}` + sp)
+	scenarioHeading = regexp.MustCompile(`^####` + sp + `+`)
+	scenarioEnd     = regexp.MustCompile(`^#{1,4}` + sp)
+	scenarioPrefix  = regexp.MustCompile(`^` + caseless("Scenario:") + sp + `*`)
+	h3Prefix        = regexp.MustCompile(`^###` + sp + `*`)
+	closingHashes   = regexp.MustCompile(`[ \t]+#+[ \t]*$`)
+	metadataLine    = regexp.MustCompile(`^\*\*[^*]+\*\*:`)
 	// removedBullet and renameLine are case-sensitive in OpenSpec, unlike
 	// requirementHeader.
 	removedBullet = regexp.MustCompile(`^` + sp + `*[-*+]` + sp + "*`?" +
@@ -133,8 +135,10 @@ type block struct{ header, end int }
 // blocks splits the section lines [from, to) into requirement blocks as
 // OpenSpec's requirement-blocks.js does: a block runs from its header to the
 // next one. (OpenSpec also ends a block at a bare "## " line; requirement
-// stops reading there anyway.) It also returns the level-3 headings that are
-// not requirement headers, which OpenSpec skips or folds into the block above.
+// stops reading there anyway.) It also returns every other heading of level 1
+// to 3: the delta reader skips or folds them into the block above, while the
+// main-spec reader ends the requirement there, so validate and archive, or
+// archive and show, disagree about the requirement.
 func (d *doc) blocks(from, to int) (bs []block, strays []int) {
 	open := -1
 	closeAt := func(end int) {
@@ -148,7 +152,7 @@ func (d *doc) blocks(from, to int) (bs []block, strays []int) {
 		case d.is(i, requirementHeader):
 			closeAt(i)
 			open = i
-		case d.is(i, level3Heading):
+		case d.is(i, upperHeading):
 			strays = append(strays, i)
 		}
 	}
@@ -161,7 +165,7 @@ func (d *doc) blocks(from, to int) (bs []block, strays []int) {
 func (d *doc) requirement(b block, definition bool) (Requirement, []Finding) {
 	m := requirementHeader.FindStringSubmatch(d.lines[b.header])
 	q := d.newRequirement(b.header, m[2])
-	end := d.find(b.header+1, b.end, sectionEnd)
+	end := d.find(b.header+1, b.end, upperHeading)
 	if end < 0 {
 		end = b.end
 	}
@@ -237,13 +241,13 @@ func (d *doc) scenarios(from, to int) []Scenario {
 	return out
 }
 
-// strays reports level-3 headings that are not requirement headers inside a
-// requirement section (ADR-0002, rule 4).
+// strays reports headings of level 1 to 3 that are not requirement headers
+// inside a requirement section (ADR-0002, rule 4).
 func (d *doc) strays(lines []int, section string) []Finding {
 	out := make([]Finding, 0, len(lines))
 	for _, i := range lines {
 		out = append(out, Finding{Severity: SeverityError, Rule: RuleStrayHeading, Path: d.path, Line: i + 1,
-			Message: fmt.Sprintf("heading %q in %s is not a %q header: OpenSpec skips it and archive folds what follows into the requirement above",
+			Message: fmt.Sprintf("heading %q in %s is not a %q header: OpenSpec's readers disagree about where the requirements around it end",
 				trimJS(d.lines[i]), section, strings.TrimSpace(canonicalHeader))})
 	}
 	return out
@@ -289,6 +293,10 @@ func parseSpec(capability, path string, src []byte) (Spec, []Finding) {
 		end = len(d.lines)
 	}
 	bs, strays := d.blocks(start+1, end)
+	if end < len(d.lines) && trimJS(d.lines[end]) == "##" {
+		// A bare "## " ends the section for archive but not for show.
+		strays = append(strays, end)
+	}
 	found := d.strays(strays, "## Requirements")
 	for _, b := range bs {
 		q, f := d.requirement(b, true)
@@ -301,14 +309,20 @@ func parseSpec(capability, path string, src []byte) (Spec, []Finding) {
 // deltaSections are the section titles of a delta spec, in the order
 // OpenSpec's show reports them. OpenSpec compares titles with toLowerCase,
 // which folds only ASCII letters to ASCII.
-var deltaSections = []struct {
+type deltaSection struct {
 	op    Op
 	title *regexp.Regexp
-}{
+}
+
+var deltaSections = []deltaSection{
 	{Added, regexp.MustCompile(`^` + caseless("ADDED Requirements") + `$`)},
 	{Modified, regexp.MustCompile(`^` + caseless("MODIFIED Requirements") + `$`)},
 	{Removed, regexp.MustCompile(`^` + caseless("REMOVED Requirements") + `$`)},
 	{Renamed, regexp.MustCompile(`^` + caseless("RENAMED Requirements") + `$`)},
+}
+
+func isDeltaTitle(title string) bool {
+	return slices.ContainsFunc(deltaSections, func(s deltaSection) bool { return s.title.MatchString(title) })
 }
 
 // parseDelta reads a change's delta spec for capability. Sections with the
@@ -335,6 +349,12 @@ func parseDelta(capability, path string, src []byte) ([]Delta, []Finding) {
 	}
 	var deltas []Delta
 	var found []Finding
+	for i, s := range sections {
+		// A bare "##" heading ends a delta section and hides what follows.
+		if s.title == "" && i > 0 && isDeltaTitle(sections[i-1].title) {
+			found = append(found, d.strays([]int{s.from - 1}, "a delta section")...)
+		}
+	}
 	for _, op := range deltaSections {
 		for _, s := range sections {
 			if !op.title.MatchString(s.title) {

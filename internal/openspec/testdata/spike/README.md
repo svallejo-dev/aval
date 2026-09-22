@@ -40,6 +40,9 @@ a tier-0 example.
 - The absolute path of the temp repo is replaced with `<ROOT>` and the npx cache
   path with `<NPX_CACHE>`.
 - `durationMs` in `validate` output is wall-clock time: tests must ignore it.
+- `negative/h1-in-requirement` and `negative/h1-between-requirements` were
+  captured on 2026-09-22 with the same setup, so their `archive.txt` says
+  `2026-09-22`.
 - **The run date is not normalized.** It appears in `.openspec.yaml`
   (`created: 2026-09-21`) and in every `archive.txt`
   (`archived as '2026-09-21-<change>'`). Tests must ignore or normalize
@@ -58,7 +61,7 @@ a tier-0 example.
 | `refunds/archive.txt` | Output of that archive (stdout and stderr). |
 | `changes/add-refund-limits/` | The change as archived: `proposal.md`, `tasks.md`, `.openspec.yaml` and the delta `specs/refunds/spec.md` with ADDED ORD-N01, MODIFIED ORD-F01 (+1 scenario) and ORD-I01 (keeps the marker), REMOVED ORD-A01, RENAMED `ORD-S01 Fast refund answer` → `ORD-S01 Refund latency under 300 ms`. |
 | `json/` | Captured `--json` outputs (table below). The `*-x*` and `schema-*` files belong to the rejected custom-schema option. |
-| `negative/<case>/` | Cases aval must report (error or warn). Each is applied to `refunds/spec-after.md`: `delta.md` (the change's `specs/refunds/spec.md`), `validate.json` (`validate <case> --type change --strict --json`), `archive.txt` (`archive <case> -y`, stdout and stderr), and `spec-after.md` only when archive rewrote the spec. |
+| `negative/<case>/` | Cases aval must report (error or warn). Each is applied to `refunds/spec-after.md`: `delta.md` (the change's `specs/refunds/spec.md`), `validate.json` (`validate <case> --type change --strict --json`), `archive.txt` (`archive <case> -y`, stdout and stderr), and `spec-after.md` only when archive rewrote the spec. `h1-between-requirements/validate-spec-after.json` is `validate refunds --type spec --strict --json` on that rewritten spec. |
 | `positive/<case>/` | Positive controls with the same layout: OpenSpec and aval both accept them. |
 | `extra-files/` | The files aval manages itself inside `openspec/changes/<id>/` with the built-in `spec-driven` schema: `aval.yaml` (change manifest), `premortem.md`, `trace.yaml`. OpenSpec ignores them (table below). |
 | `changes/x/` | **Reference only (rejected option).** Tier-0 change created with `openspec new change x --schema aval`, with proposal, specs, design and tasks only (no premortem, no trace). Its base spec is `refunds/spec-after.md`. |
@@ -99,6 +102,8 @@ a tier-0 example.
 | `negative/trailing-hash` | valid | applied, header written with ` ##` | **error**: non-canonical header |
 | `negative/loose-header` | valid | applied, `###requirement:ORD-F06 …` written verbatim; `show` on the resulting spec then counts 4 requirements, not 5, and folds ORD-F06's scenario into ORD-N01 | **error**: non-canonical header |
 | `negative/modified-drops-marker` | valid | applied, `**aval**: characterization` lost | **warn**: the characterization marker was dropped |
+| `negative/h1-in-requirement` | valid, no issues | refused, exit 1: `# Aside` ends the requirement for the main-spec reader, so the rebuilt requirement has no scenario (`show` on the change already reports 0 scenarios) | **error**: no heading other than `### Requirement:` in requirement sections |
+| `negative/h1-between-requirements` | valid, no issues | applied: `# Receipts` is written into `## Requirements`. `validate --strict` on the resulting spec still passes (`validate-spec-after.json`), but `show` counts 5 requirements, not 6: ORD-F12 falls under `# Receipts` | **error**: same rule, in the delta and in the resulting main spec |
 | `positive/renamed-then-modified` | valid | applied: S01 renamed and modified | **accept** (MODIFIED uses the new name) |
 | `positive/fenced-requirement` | valid | applied; the `### Requirement: ORD-F99 …` inside a code fence stays body text (`show` counts 5 requirements) | **accept**; ORD-F99 is not an obligation |
 | `positive/c-sharp-name` | valid | applied: `ORD-F07 Refund SDK for C#` keeps its `#` | **accept** |
