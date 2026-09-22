@@ -37,6 +37,38 @@ type parityCase struct {
 
 func repoWith(old, repl string) string { return strings.Replace(validRepo, old, repl, 1) }
 
+// padTo appends a YAML comment so doc is exactly n bytes long.
+func padTo(doc string, n int) string {
+	pad := n - len(doc) - 2 // "#" and the final newline
+	return doc + "#" + strings.Repeat("x", pad) + "\n"
+}
+
+// TestValidateZeroValues exercises the Go rules directly: on the Parse path
+// the schema already rejects these, so only this test notices if a Go rule
+// is removed.
+func TestValidateZeroValues(t *testing.T) {
+	t.Parallel()
+
+	err := Repo{}.Validate()
+	for _, want := range []string{"version: got 0", "context:", "mode:", "openspec.version:", "paths.dx:", "paths.feat:"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("Repo{}.Validate() = %v, want it to mention %q", err, want)
+		}
+	}
+	if err := (Repo{TierDefault: -1}).Validate(); err == nil || !strings.Contains(err.Error(), "tierDefault:") {
+		t.Errorf("negative tierDefault: Validate() = %v, want a tierDefault error", err)
+	}
+	if err := (Change{Version: 1, Tier: -1}).Validate(); err == nil || !strings.Contains(err.Error(), "tier:") {
+		t.Errorf("negative tier: Validate() = %v, want a tier error", err)
+	}
+	if err := (Change{Version: 1, Tier: 4}).Validate(); err == nil || !strings.Contains(err.Error(), "tier:") {
+		t.Errorf("tier 4: Validate() = %v, want a tier error", err)
+	}
+	if err := (Change{Version: 1, Tier: 0}).Validate(); err != nil {
+		t.Errorf("tier 0: Validate() = %v, want nil", err)
+	}
+}
+
 func TestParseRepo(t *testing.T) {
 	t.Parallel()
 
@@ -67,6 +99,8 @@ func TestParseRepo(t *testing.T) {
 		{name: "comments only", yaml: "# nothing here\n", wantErr: "empty document"},
 		{name: "BOM only", yaml: "\xef\xbb\xbf", wantErr: "empty document"},
 		{name: "oversized", yaml: validRepo + "#" + strings.Repeat("x", maxManifestBytes), wantErr: "larger than", skipSchema: true},
+		{name: "exactly at the size limit", yaml: padTo(validRepo, maxManifestBytes), valid: true, skipSchema: true},
+		{name: "null document", yaml: "~\n", wantErr: "empty document"},
 	}
 	sch := compileSchema(t, "aval.v1.json")
 	for _, tt := range tests {
@@ -102,7 +136,7 @@ func TestParseChange(t *testing.T) {
 		{name: "tier out of range", yaml: "version: 1\ntier: 5\n"},
 		{name: "tier missing", yaml: "version: 1\n"},
 		{name: "tier null", yaml: "version: 1\ntier: null\n"},
-		{name: "tier as float", yaml: "version: 1\ntier: 3.7\n"},
+		{name: "tier as float in range", yaml: "version: 1\ntier: 2.5\n"},
 		{name: "unknown field", yaml: "version: 1\ntier: 1\nrisk: high\n"},
 		{name: "missing version", yaml: "tier: 1\n"},
 		{name: "empty owner", yaml: "version: 1\ntier: 1\nowner: \"\"\n"},
