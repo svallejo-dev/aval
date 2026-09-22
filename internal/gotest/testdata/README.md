@@ -20,8 +20,11 @@ Captured with **go1.27.1 darwin/arm64**, `pgregory.net/rapid v1.3.0` and
 
 `fixturemod` is invisible to the root module: it has its own `go.mod` and
 lives under `testdata/`, so `./...`, `go mod tidy` and `make verify` skip it.
-`buildfail/` never compiles by design; vet the rest from inside `fixturemod/`
-with `go vet $(go list ./... | grep -v buildfail)`.
+`buildfail/`, `overlay/b/` and `overlay/d/` never compile by design; vet the
+rest from inside `fixturemod/` with
+`go vet $(go list ./... | grep -v -e buildfail -e overlay/b -e overlay/d)`.
+`hang/` is not captured: aval's cancellation test runs it and cancels the run
+while its test sleeps.
 
 ## Regenerating
 
@@ -86,6 +89,7 @@ change.
 | `run-selection.jsonl` | `go test -json -count=1 -run '^TestOrder$/^ORD-F01(_\|$)' ./pass` | 0 | precise selection by ID |
 | `run-selection-bare.jsonl` | `... -run '^TestOrder$/^ORD-N01(_\|$)' ./pass` | 0 | the same pattern misses the `#01` duplicate of a bare ID |
 | `run-selection-miss.jsonl` | `... -run '^TestOrder$/^ORD-F99(_\|$)' ./pass` | 0 | selecting an ID no test carries still passes |
+| `overlay.jsonl` | `go test -json -count=1 ./overlay/...` | 1 | several packages at the base of a change: `a` passes, `b`'s new test calls a missing function, `c` has no test files, `d`'s new test imports a missing package |
 
 ## Observed facts
 
@@ -308,10 +312,23 @@ by position.
   ` [no tests to run]` to the `ok` summary and exits 0
   (`run-selection-miss.jsonl`). A zero exit does not prove the obligation ran.
 
+### Several packages (`overlay.jsonl`)
+
+- `d`'s setup failure comes first, whole; `b`'s build events come before
+  `a`, `b` and `c` start, and `a`'s tests run last. Each package's events keep
+  the shapes above.
+- A test file importing a package that does not exist (`overlay/d`) is a
+  setup failure: `FAIL\t<pkg> [setup failed]`, and both the build events'
+  `ImportPath` and the package's `FailedBuild` name the **missing** package
+  (`example.com/fixturemod/overlay/mail`), not `d`.
+- `ORD-F41` (`b`) and `ORD-F43` (`d`) never appear; `a`'s `ORD-F40` passes.
+  Only the package a test lives in tells whether its ID did not run because
+  that package did not build.
+
 ### Not captured
 
-- Several packages in one run: events interleave and must be keyed by
-  `Package` (and `ImportPath` for build events).
+- Packages whose test events interleave in one stream: key by `Package`
+  (and `ImportPath` for build events).
 - `t.ArtifactDir` with `-artifacts`, which emits `artifacts` events with `Path`.
 - Panics in goroutines other than the test's own, and `t.Parallel` under
   default flags (not repeatable, see above).

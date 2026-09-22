@@ -60,3 +60,5 @@ capture parallel 0 -cpu 1 -parallel 1 ./parallel
 capture run-selection 0 -run '^TestOrder$/^ORD-F01(_|$)' ./pass
 capture run-selection-bare 0 -run '^TestOrder$/^ORD-N01(_|$)' ./pass
 capture run-selection-miss 0 -run '^TestOrder$/^ORD-F99(_|$)' ./pass
+# Several packages in one run, as at the base of a change: see README.md.
+capture overlay 1 ./overlay/...
