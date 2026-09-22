@@ -162,7 +162,7 @@ Cada regla incumplida añade un `Reason{Code, Message, ID}` al veredicto. Los c�
 
 Códigos **reservados** para hitos posteriores: `contract_breaking` y `contract_lint` (M4), y `change_not_archived` (M3).
 
-**El resultado del veredicto** es `block` si alguna regla bloquea, `warn` si solo hay avisos, y `pass` si no hay motivos, salvo una excepción válida (§5), que rebaja `block` a `warn`.
+**El resultado del veredicto** es `block` si alguna regla bloquea, `warn` si solo hay avisos, y `pass` si no hay motivos. Una excepción válida (§5) rebaja `block` a `warn`.
 
 ### 5. Aprobaciones y excepciones: reviews ligados al SHA
 
@@ -188,7 +188,7 @@ Hay dos tipos:
 
 ### 6. Modos y códigos de salida
 
-- **El modo sale de la política del SHA base.** Cambiarlo en el PR dispara `tamper` y no tiene efecto hasta fusionarse, lo que exige una excepción válida (§5).
+- **El modo sale de la política del SHA base.** Cambiarlo en el PR dispara `tamper` y no tiene efecto hasta fusionarse, lo que en `enforce` exige una excepción válida (§5).
 - **`observe`:** el gate calcula e informa el veredicto y sale con 0.
 - **`enforce`:** sale con 1 si el veredicto es `block`.
 
