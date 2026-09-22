@@ -14,6 +14,7 @@ linters:
     - interfacebloat  # small interfaces
     - bodyclose       # HTTP response bodies are closed
     - depguard        # agent hooks and the envelope stay free of Charm
+    - forbidigo       # only the agent hooks may drop --attr-source
   settings:
     errcheck:
       check-type-assertions: true
@@ -49,10 +50,20 @@ linters:
               desc: internal/ui pulls in Charm; hooks and the envelope must not import it, even indirectly (ADR-0003)
             - pkg: github.com/svallejo-dev/aval/internal/cli
               desc: internal/cli pulls in Charm through internal/ui (ADR-0003)
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: ^git\.WithoutAttrSource$
+          pkg: ^github\.com/svallejo-dev/aval/internal/platform/git$
+          msg: only internal/hook may read head's .gitattributes; everything else keeps --attr-source (ADR-0005 §1)
   exclusions:
     generated: strict
     presets:
       - std-error-handling
+    rules:
+      - path: internal/(hook|platform/git)/
+        linters:
+          - forbidigo
 
 formatters:
   enable:

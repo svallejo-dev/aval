@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -289,21 +291,29 @@ func TestRunErrors(t *testing.T) {
 	tests := []struct {
 		name     string
 		ctx      context.Context
+		stream   bool // Stream instead of Run
 		args     []string
 		exitCode int
 		is       error
 		msg      string
 	}{
-		{"exit status", t.Context(), []string{"rev-parse", "--verify", "--quiet", "nope"}, 1, nil,
+		{"exit status", t.Context(), false, []string{"rev-parse", "--verify", "--quiet", "nope"}, 1, nil,
 			"git rev-parse --verify --quiet nope: exit status 1"},
-		{"stderr", t.Context(), []string{"rev-parse", "--verify", "nope"}, 128, nil,
+		{"stderr", t.Context(), false, []string{"rev-parse", "--verify", "nope"}, 128, nil,
 			"git rev-parse --verify nope: exit status 128: fatal: "},
-		{"canceled", canceled, []string{"status"}, -1, context.Canceled, "context canceled"},
+		{"canceled", canceled, false, []string{"status"}, -1, context.Canceled, "context canceled"},
+		{"Stream", t.Context(), true, []string{"rev-parse", "--verify", "nope"}, 128, nil,
+			"git rev-parse --verify nope: exit status 128: fatal: "},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := r.Run(tt.ctx, nil, tt.args...)
+			var err error
+			if tt.stream {
+				err = r.Stream(tt.ctx, io.Discard, tt.args...)
+			} else {
+				_, err = r.Run(tt.ctx, nil, tt.args...)
+			}
 			var gerr *Error
 			if !errors.As(err, &gerr) {
 				t.Fatalf("Run = %v, want an *Error", err)
@@ -319,6 +329,18 @@ func TestRunErrors(t *testing.T) {
 				t.Errorf("Run = %q, want it to mention %q and no option Run added", err, tt.msg)
 			}
 		})
+	}
+}
+
+// TestEnviron checks the variables that no git test here can observe: a
+// credential prompt and a lazy fetch need a remote.
+func TestEnviron(t *testing.T) {
+	t.Parallel()
+	env := environ()
+	for _, kv := range []string{"GIT_TERMINAL_PROMPT=0", "GIT_NO_LAZY_FETCH=1"} {
+		if !slices.Contains(env, kv) {
+			t.Errorf("environ() lacks %s", kv)
+		}
 	}
 }
 

@@ -10,7 +10,10 @@
 //   - without the repository variables a git hook exports (gitenv.Clean), so
 //     GIT_DIR or GIT_INDEX_FILE cannot point it at another repository;
 //   - with GIT_OPTIONAL_LOCKS=0, so it never takes the index lock only to
-//     refresh the index, a lock the user's own git commands need.
+//     refresh the index, a lock the user's own git commands need;
+//   - with GIT_TERMINAL_PROMPT=0 and GIT_NO_LAZY_FETCH=1, so it never asks
+//     for credentials and a partial clone fails on a missing object instead
+//     of fetching it (git 2.44 or newer; older git ignores the variable).
 //
 // The flags that belong to a subcommand stay with the caller:
 // --ignore-submodules=none on diffs, -z on output that lists paths, and
@@ -47,7 +50,16 @@ var ErrToolMissing = errors.New("git 2.40 or newer is required")
 const waitDelay = 5 * time.Second
 
 // hardening is what every git command gets in its environment.
-var hardening = []string{"GIT_NO_REPLACE_OBJECTS=1", "GIT_GRAFT_FILE=" + os.DevNull, "GIT_OPTIONAL_LOCKS=0"}
+var hardening = []string{
+	"GIT_NO_REPLACE_OBJECTS=1", "GIT_GRAFT_FILE=" + os.DevNull, "GIT_OPTIONAL_LOCKS=0",
+	"GIT_TERMINAL_PROMPT=0", "GIT_NO_LAZY_FETCH=1",
+}
+
+// environ returns the environment every git command runs with: the
+// process's, without the repository variables, and hardening.
+func environ() []string {
+	return append(gitenv.Clean(os.Environ()), hardening...)
+}
 
 // Error reports a git command that failed or could not run. It carries the
 // arguments the caller passed, not the options Runner adds, and never the
@@ -204,7 +216,7 @@ func (r *Runner) run(ctx context.Context, stdin []byte, stdout io.Writer, attrSo
 	argv = append(argv, args...)
 	cmd := exec.CommandContext(ctx, "git", argv...) //nolint:gosec // no shell: callers put revisions and paths from outside after --end-of-options
 	cmd.Dir = r.dir
-	cmd.Env = append(gitenv.Clean(os.Environ()), hardening...)
+	cmd.Env = environ()
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}

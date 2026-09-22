@@ -14,8 +14,8 @@ import (
 // TestLatency runs the built aval 50 times per event in this repository and
 // in a small one, and holds the p95 to ADR-0003's 50 ms. A loaded machine,
 // such as one running the other packages' tests, can push one round over, so
-// it takes up to latencyRounds rounds and passes when any stays within the
-// budget: a real regression is over in all of them. Shared CI runners are
+// the majority of up to three rounds decides: two rounds within the budget
+// pass, two over it fail, and a split takes a third. Shared CI runners are
 // too noisy even for that, so under CI it only catches gross regressions
 // (250 ms): run `go test -run TestLatency -v ./internal/hook` locally.
 func TestLatency(t *testing.T) {
@@ -53,24 +53,25 @@ func TestLatency(t *testing.T) {
 	}
 	for _, tt := range tests {
 		var p95s []time.Duration
-		for range latencyRounds {
+		within, over := 0, 0
+		for within < 2 && over < 2 {
 			p50, p95, out := measure(t, bin, tt.dir, tt.stdin, tt.event)
 			t.Logf("%s: aval hook %s: p50 %v, p95 %v", tt.repo, tt.event, p50, p95)
 			if !strings.Contains(out, tt.want) {
 				t.Fatalf("%s: aval hook %s wrote %q, want %q in it", tt.repo, tt.event, out, tt.want)
 			}
-			if p95s = append(p95s, p95); p95 <= budget {
-				break
+			p95s = append(p95s, p95)
+			if p95 <= budget {
+				within++
+			} else {
+				over++
 			}
 		}
-		if p95 := p95s[len(p95s)-1]; p95 > budget {
-			t.Errorf("%s: aval hook %s: p95 %v in each of %d rounds, over the %v budget", tt.repo, tt.event, p95s, len(p95s), budget)
+		if over == 2 {
+			t.Errorf("%s: aval hook %s: p95 %v in %d rounds, over the %v budget in two", tt.repo, tt.event, p95s, len(p95s), budget)
 		}
 	}
 }
-
-// latencyRounds is how many rounds of 50 runs TestLatency takes at most.
-const latencyRounds = 3
 
 // measure runs bin's hook event in dir 50 times, after 3 runs to warm up
 // caches, and returns the p50 and p95 of the 50 and what the last one wrote.

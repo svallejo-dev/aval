@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,13 @@ func TestCheckVerified(t *testing.T) {
 		return func(t *testing.T, dir string) { writeFiles(t, dir, files) }
 	}
 	edit := files(map[string]string{"a.go": "package a // edited\n"})
+	reedit := files(map[string]string{"a.go": "package a // edited again\n"})
+	// blanked makes git diff show every .go file through a textconv driver
+	// that prints nothing.
+	blanked := func(t *testing.T, dir string) {
+		gitT(t, dir, "config", "diff.blank.textconv", "true")
+		writeFiles(t, dir, map[string]string{".gitattributes": "*.go diff=blank\n"})
+	}
 	untracked := files(map[string]string{"x_test.go": "package a\n\nimport \"testing\"\n\nfunc TestX(t *testing.T) { t.Fatal() }\n"})
 	commit := func(t *testing.T, dir string) { gitT(t, dir, "commit", "-q", "-a", "--allow-empty", "-m", "next") }
 	push := func(t *testing.T, dir string) { gitT(t, dir, "update-ref", "refs/remotes/origin/main", "HEAD") }
@@ -56,6 +64,7 @@ func TestCheckVerified(t *testing.T) {
 		{name: "stale after an untracked file", steps: []step{passed, untracked}, wantBlock: true},
 		{name: "stale after a commit", steps: []step{edit, passed, commit}, wantBlock: true},
 		{name: "stale after a submodule change .gitmodules ignores", steps: []step{ignored, gitlink("1"), commit, passed, gitlink("2")}, wantBlock: true},
+		{name: "stale after an edit a textconv driver hides", steps: []step{blanked, commit, edit, passed, reedit}, wantBlock: true},
 		{name: "fresh after staging", steps: []step{edit, passed, func(t *testing.T, dir string) { gitT(t, dir, "add", "a.go") }}},
 		{name: "fresh after aval's own output", steps: []step{edit, passed, files(map[string]string{".aval/evidence/x.json": "{}"})}},
 		{name: "stale after another untracked .aval file", steps: []step{edit, passed, files(map[string]string{".aval/baseline.json": "{}"})}, wantBlock: true},
@@ -79,6 +88,26 @@ func TestCheckVerified(t *testing.T) {
 				t.Errorf("checkVerified() = %+v, want nil", got)
 			}
 		})
+	}
+}
+
+// TestCheckVerifiedIgnoresExternalDiff sets GIT_EXTERNAL_DIFF to a script
+// that prints the same line for any change, so it cannot run in parallel.
+func TestCheckVerifiedIgnoresExternalDiff(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the external diff is a shell script")
+	}
+	dir := newRepo(t, map[string]string{"a.go": "package a\n"})
+	script := filepath.Join(t.TempDir(), "diff.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho same\n"), 0o700); err != nil { //nolint:gosec // it must be executable
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_EXTERNAL_DIFF", script)
+	writeFiles(t, dir, map[string]string{"a.go": "package a // edited\n"})
+	passed(t, dir)
+	writeFiles(t, dir, map[string]string{"a.go": "package a // edited again\n"})
+	if got := checkVerified(context.Background(), input{Cwd: dir}); got == nil || got.Decision != "block" {
+		t.Errorf("checkVerified() = %+v, want a block: the status is stale", got)
 	}
 }
 

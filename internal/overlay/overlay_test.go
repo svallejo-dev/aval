@@ -380,3 +380,117 @@ func TestPrepareOldGit(t *testing.T) {
 		t.Errorf("err = %v, want ErrToolMissing wrapping git.ErrToolMissing", err)
 	}
 }
+
+// planted builds a repository whose base holds the module svc with package
+// a, and whose head adds files, and returns it and both commits. change,
+// when not nil, runs on head's working tree before it is committed.
+func planted(t *testing.T, files map[string]string, change func(testRepo)) (r testRepo, base, head string) {
+	t.Helper()
+	r = testRepo{t: t, dir: t.TempDir()}
+	r.git("init", "--quiet")
+	write := func(files map[string]string) {
+		for name, content := range files {
+			p := filepath.Join(r.dir, filepath.FromSlash(name))
+			if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		r.git("add", "--all")
+	}
+	write(map[string]string{"svc/go.mod": "module example.com/svc\n", "svc/a/a.go": "package a\n"})
+	r.git("commit", "--quiet", "--message", "base")
+	base = r.git("rev-parse", "HEAD")
+	write(files)
+	if change != nil {
+		change(r)
+	}
+	r.git("commit", "--quiet", "--message", "head")
+	return r, base, r.git("rev-parse", "HEAD")
+}
+
+// prepareClean runs Prepare in r's svc, hands the Worktree to check and
+// then checks that Close leaves nothing behind.
+func prepareClean(t *testing.T, r testRepo, base, head string, check func(*Worktree)) {
+	t.Helper()
+	tmp := t.TempDir()
+	w, err := Prepare(t.Context(), filepath.Join(r.dir, "svc"), base, head, PrepareOptions{TempDir: tmp})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(w)
+	if err := w.Close(); err != nil {
+		t.Error(err)
+	}
+	assertClean(t, r, tmp)
+}
+
+// TestPrepareIgnoresHeadAttributes checks that a .gitattributes head adds
+// under testdata cannot filter what travels: with ident, git would write
+// $Id: <blob> $ into f.txt.
+func TestPrepareIgnoresHeadAttributes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a git repository")
+	}
+	t.Parallel()
+	r, base, head := planted(t, map[string]string{
+		"svc/a/testdata/.gitattributes": "* ident\n",
+		"svc/a/testdata/f.txt":          "$Id$\n",
+	}, nil)
+	prepareClean(t, r, base, head, func(w *Worktree) {
+		got, err := os.ReadFile(filepath.Join(w.moduleDir, "a", "testdata", "f.txt"))
+		if err != nil || string(got) != "$Id$\n" {
+			t.Errorf("f.txt in the worktree = %q, %v; want head's $Id$, unexpanded", got, err)
+		}
+	})
+}
+
+// TestPrepareLiteralPathspecs checks that a copied path is never read as a
+// pathspec: as magic, ":!x_test.go" alone would exclude itself and check
+// out everything else from head, production code included. Glob characters
+// alone, as in svc/[a]/x_test.go, can only reach test files that travel
+// anyway.
+func TestPrepareLiteralPathspecs(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a git repository")
+	}
+	t.Parallel()
+	r, base, head := planted(t, map[string]string{
+		":!x_test.go": "package x\n",
+		"svc/a/a.go":  "package a // head's fix\n",
+	}, nil)
+	prepareClean(t, r, base, head, func(w *Worktree) {
+		if want := []string{":!x_test.go"}; !reflect.DeepEqual(w.Copied, want) {
+			t.Fatalf("Copied = %q, want %q", w.Copied, want)
+		}
+		if got, err := os.ReadFile(filepath.Join(w.moduleDir, "a", "a.go")); err != nil || string(got) != "package a\n" {
+			t.Errorf("a.go in the worktree = %q, %v; want the base's", got, err)
+		}
+	})
+}
+
+// TestPrepareSeesIgnoredSubmodules checks that a head .gitmodules with
+// ignore = all cannot hide a gitlink head adds from the files that stay
+// behind.
+func TestPrepareSeesIgnoredSubmodules(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a git repository")
+	}
+	t.Parallel()
+	r, base, head := planted(t, map[string]string{
+		".gitmodules": "[submodule \"sub\"]\n\tpath = svc/a/sub\n\turl = ./sub\n\tignore = all\n",
+	}, func(r testRepo) {
+		// git add --all keeps a gitlink whose directory exists, even empty.
+		if err := os.MkdirAll(filepath.Join(r.dir, "svc", "a", "sub"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		r.git("update-index", "--add", "--cacheinfo", "160000,"+r.git("rev-parse", "HEAD")+",svc/a/sub")
+	})
+	prepareClean(t, r, base, head, func(w *Worktree) {
+		if want := []string{"svc/a/sub"}; !reflect.DeepEqual(w.uncopied([]string{"example.com/svc/a"}), want) {
+			t.Errorf("uncopied = %q, want %q: the gitlink stays behind", w.uncopied([]string{"example.com/svc/a"}), want)
+		}
+	})
+}

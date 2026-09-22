@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -324,6 +325,73 @@ func TestClassifyIgnoresPlantedHistory(t *testing.T) {
 	want := []evidence.Commit{{SHA: featSHA, Family: feat, Paths: []string{"internal/order/order.go"}}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Classify = %+v, want %+v", got, want)
+	}
+}
+
+// TestTouchedEndOfOptions checks that touched reads its commit as a
+// revision even when it looks like an option: before --end-of-options, this
+// tag would make git diff-tree write a file.
+func TestTouchedEndOfOptions(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.commit("root", map[string]string{"Makefile": "all:\n"})
+	sha := r.commit("feat", map[string]string{"internal/x.go": "package x\n"})
+	r.git("update-ref", "refs/tags/--output=pwned", sha)
+	got, err := touched(t.Context(), git.New(r.dir), "--output=pwned", 1)
+	if err != nil || !reflect.DeepEqual(got, []string{"internal/x.go"}) {
+		t.Errorf("touched(--output=pwned) = %q, %v; want the tagged commit's internal/x.go", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(r.dir, "pwned")); err == nil {
+		t.Error("git diff-tree took the tag as --output and wrote pwned")
+	}
+}
+
+// TestClassifyIgnoresDiffDrivers plants an external diff and a textconv
+// driver for every file. git uses neither for the --name-only lists Classify
+// reads, so --no-ext-diff and --no-textconv are a second guard, and this
+// test holds the answer whichever does the work. It sets GIT_EXTERNAL_DIFF,
+// so it cannot run in parallel.
+func TestClassifyIgnoresDiffDrivers(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the external diff is a shell script")
+	}
+	r := newRepo(t)
+	order := func(a, b string) map[string]string {
+		return map[string]string{"internal/order/order.go": "package order\n\nfunc " + a + "() {}\n\nfunc C() {}\n\nfunc " + b + "() {}\n"}
+	}
+	root := r.commit("root", order("A", "B"))
+	r.git("switch", "-q", "-c", "topic")
+	feat := r.commit("topic", order("A1", "B"))
+	r.onMain("main", order("A", "B1"))
+	if _, err := r.run("merge", "-q", "--no-ff", "--no-commit", "main"); err != nil {
+		t.Fatal(err)
+	}
+	evil := r.commit("evil merge", map[string]string{"tools/gen.go": "package tools\n"})
+
+	marker := filepath.Join(t.TempDir(), "ran")
+	script := filepath.Join(t.TempDir(), "diff.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\ntouch "+marker+"\necho Makefile\n"), 0o700); err != nil { //nolint:gosec // it must be executable
+		t.Fatal(err)
+	}
+	r.git("config", "diff.blank.textconv", "true")
+	if err := os.WriteFile(filepath.Join(r.dir, ".git", "info", "attributes"), []byte("* diff=blank\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_EXTERNAL_DIFF", script)
+
+	got, err := Classify(t.Context(), r.dir, root, "topic", testPaths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := make(map[string][]string, len(got))
+	for _, c := range got {
+		paths[c.SHA] = c.Paths
+	}
+	if !reflect.DeepEqual(paths[feat], []string{"internal/order/order.go"}) || !reflect.DeepEqual(paths[evil], []string{"tools/gen.go"}) {
+		t.Errorf("Classify = %+v, want %s touching internal/order/order.go and the merge %s touching tools/gen.go", got, feat, evil)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("git ran the external diff")
 	}
 }
 
