@@ -44,7 +44,7 @@ Cada contrato vive en el paquete del concepto que representa, con tipos Go, JSON
   | Fuerza | Requiere |
   |---|---|
   | `strong` | Falla en la base y pasa en head |
-  | `weak` | Pasa en head y falla en la base por una causa que quizá no sea la falta del comportamiento: no compila su propio paquete de test, o faltan ficheros que solo existen en head (en ese caso, con `note` obligatoria; ADR-0005 §2) |
+  | `weak` | Pasa en head y falla en la base por una causa que quizá no sea la falta del comportamiento: no compila su propio paquete de test, o head añade o modifica ficheros que no son Go ni están en `testdata/` dentro de un paquete de la obligación (en ese caso, con `note` obligatoria; ADR-0005 §2) |
   | `characterization` | Requisito marcado con `**aval**: characterization` que pasa en la base y en head |
   | `none` | Nada: es la ausencia de evidencia aceptable |
 
