@@ -39,8 +39,8 @@ jobs:
           version: ${{ steps.tools.outputs.golangci }}
 
   # Differential test of internal/openspec against the real OpenSpec CLI
-  # (ADR-0002). It needs Node and downloads OpenSpec with npx, so it stays
-  # out of the ci job. Node is not in .tool-versions: its major is pinned
+  # (ADR-0002). It needs Node and npm, and installs OpenSpec from the npm
+  # registry into aval's cache, so it stays out of the ci job. Node is not in .tool-versions: its major is pinned
   # here, and the OpenSpec version in the test.
   openspec-live:
     name: openspec-live

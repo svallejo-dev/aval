@@ -12,21 +12,31 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
-// fakeRunner stands in for npx and records how it was called.
+const pinnedPackage = `{"name": "@fission-ai/openspec", "version": "1.13.1", "bin": {"openspec": "./bin/openspec.js"}}`
+
+// fakeRunner stands in for npm and node. Its npm install writes pkgJSON as
+// the installed package.json, and node answers with out and err.
 type fakeRunner struct {
 	missing string // the tool LookPath does not find
+	pkgJSON string // "" installs nothing
+	npmOut  output
 	out     output
 	err     error
 
-	ran      bool
+	mu    sync.Mutex
+	calls []call
+}
+
+type call struct {
 	dir      string
 	env      []string
 	cmd      []string
-	deadline time.Duration // how far away the run's deadline was
+	deadline time.Duration // how far away the call's deadline was
 }
 
 func (f *fakeRunner) LookPath(file string) (string, error) {
@@ -37,12 +47,43 @@ func (f *fakeRunner) LookPath(file string) (string, error) {
 }
 
 func (f *fakeRunner) Run(ctx context.Context, dir string, env []string, name string, args ...string) (output, error) {
-	f.ran, f.dir, f.env, f.cmd = true, dir, env, append([]string{name}, args...)
+	c := call{dir: dir, env: env, cmd: append([]string{name}, args...)}
 	if d, ok := ctx.Deadline(); ok {
-		f.deadline = time.Until(d)
+		c.deadline = time.Until(d)
 	}
-	return f.out, f.err
+	f.mu.Lock()
+	f.calls = append(f.calls, c)
+	f.mu.Unlock()
+	if name != "npm" {
+		return f.out, f.err
+	}
+	if f.pkgJSON != "" {
+		pkg := filepath.Join(args[slices.Index(args, "--prefix")+1], "node_modules", "@fission-ai", "openspec")
+		err := errors.Join(
+			os.MkdirAll(filepath.Join(pkg, "bin"), 0o750),
+			os.WriteFile(filepath.Join(pkg, "package.json"), []byte(f.pkgJSON), 0o600),
+			os.WriteFile(filepath.Join(pkg, "bin", "openspec.js"), nil, 0o600),
+		)
+		if err != nil {
+			return output{}, fmt.Errorf("fake npm install: %w", err)
+		}
+	}
+	return f.npmOut, nil
 }
+
+func (f *fakeRunner) commands() [][]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var cmds [][]string
+	for _, c := range f.calls {
+		cmds = append(cmds, c.cmd)
+	}
+	return cmds
+}
+
+// testEnviron is the parent environment of the tests: its npm_config_*
+// variables, in any case, must never reach a child.
+var testEnviron = []string{"PATH=/usr/bin", "npm_config_registry=http://127.0.0.1:9/", "NPM_CONFIG_IGNORE_SCRIPTS=false", "Npm_Config_Dry_Run=true", "HOME=/home/dev"}
 
 // repoRoot creates a repository with an openspec/ directory and returns its
 // path as OpenSpec reports it: absolute and without symlinks.
@@ -81,47 +122,47 @@ func TestValidate(t *testing.T) {
 		name    string
 		root    string // default: root
 		version string
-		run     fakeRunner
+		run     *fakeRunner // default: one that answers nothing
 		passed  bool
 		is      []error // the error wraps each of these; nil for no error
 		msg     string  // the error names this
 	}{
-		{name: "clean", run: fakeRunner{out: output{stdout: captured("json/validate-spec-after.json")}}, passed: true},
-		{name: "INFO fails", run: fakeRunner{out: output{stdout: captured("negative/modified-case-variant/validate.json")}}},
-		{name: "ERROR fails", run: fakeRunner{out: output{stdout: captured("negative/modified-drops-scenario/validate.json"), code: 1}}},
-		{name: "allowed INFO passes", run: fakeRunner{out: output{stdout: info("INFO", skipSpecs)}}, passed: true},
-		{name: "allowed message at another level fails", run: fakeRunner{out: output{stdout: info("WARNING", skipSpecs)}}},
-		{name: "allowed message must match exactly", run: fakeRunner{out: output{stdout: info("INFO", skipSpecs+".")}}},
-		{name: "node missing", run: fakeRunner{missing: "node"}, is: []error{ErrToolMissing, exec.ErrNotFound}, msg: "look up node"},
-		{name: "npx missing", run: fakeRunner{missing: "npx"}, is: []error{ErrToolMissing, exec.ErrNotFound}, msg: "look up npx"},
+		{name: "clean", run: &fakeRunner{out: output{stdout: captured("json/validate-spec-after.json")}}, passed: true},
+		{name: "INFO fails", run: &fakeRunner{out: output{stdout: captured("negative/modified-case-variant/validate.json")}}},
+		{name: "ERROR fails", run: &fakeRunner{out: output{stdout: captured("negative/modified-drops-scenario/validate.json"), code: 1}}},
+		{name: "allowed INFO passes", run: &fakeRunner{out: output{stdout: info("INFO", skipSpecs)}}, passed: true},
+		{name: "allowed message at another level fails", run: &fakeRunner{out: output{stdout: info("WARNING", skipSpecs)}}},
+		{name: "allowed message must match exactly", run: &fakeRunner{out: output{stdout: info("INFO", skipSpecs+".")}}},
+		{name: "node missing", run: &fakeRunner{missing: "node"}, is: []error{ErrToolMissing, exec.ErrNotFound}, msg: "look up node"},
+		{name: "npm missing", run: &fakeRunner{missing: "npm"}, is: []error{ErrToolMissing, exec.ErrNotFound}, msg: "look up npm"},
 		{name: "range version", version: "^1.13.1", msg: `version "^1.13.1" must be exact`},
 		{name: "tag version", version: "latest", msg: `version "latest" must be exact`},
 		{name: "no openspec directory", root: t.TempDir(), is: []error{fs.ErrNotExist}, msg: "has no openspec/ directory"},
 		{name: "openspec is a file", root: withFile, msg: "openspec is not a directory"},
-		{name: "run fails", run: fakeRunner{err: context.DeadlineExceeded}, is: []error{ErrToolFailed, context.DeadlineExceeded}},
+		{name: "run fails", run: &fakeRunner{err: context.DeadlineExceeded}, is: []error{ErrToolFailed, context.DeadlineExceeded}},
 		{
 			name: "another root",
-			run:  fakeRunner{out: output{stdout: []byte(strings.ReplaceAll(string(fixture(t, "json/validate-spec-after.json")), "<ROOT>", "/parent"))}},
+			run:  &fakeRunner{out: output{stdout: []byte(strings.ReplaceAll(string(fixture(t, "json/validate-spec-after.json")), "<ROOT>", "/parent"))}},
 			is:   []error{ErrToolFailed},
 			msg:  `OpenSpec validated "/parent" instead of "` + root + `"`,
 		},
 		{
 			name: "no OpenSpec root",
-			run:  fakeRunner{out: output{stdout: []byte(noRoot), code: 1}},
+			run:  &fakeRunner{out: output{stdout: []byte(noRoot), code: 1}},
 			is:   []error{ErrToolFailed},
 			msg:  "exit status 1: No OpenSpec root found from the current directory. (no_openspec_root)",
 		},
 		{
-			name: "npx cannot fetch the package",
-			run:  fakeRunner{out: output{stderr: []byte("npm error 404 Not Found\n"), code: 1}},
+			name: "OpenSpec crashes",
+			run:  &fakeRunner{out: output{stderr: []byte("SyntaxError: Unexpected token\n"), code: 1}},
 			is:   []error{ErrToolFailed},
-			msg:  "decode validate report: unexpected end of JSON input\nnpm error 404 Not Found",
+			msg:  "decode validate report: unexpected end of JSON input\nSyntaxError: Unexpected token",
 		},
-		{name: "unknown report version", run: fakeRunner{out: output{stdout: []byte(`{"version": "2.0", "items": []}`)}}, is: []error{ErrToolFailed}, msg: `version "2.0"`},
-		{name: "report without items", run: fakeRunner{out: output{stdout: []byte(`{"version": "1.0"}`)}}, is: []error{ErrToolFailed}},
+		{name: "unknown report version", run: &fakeRunner{out: output{stdout: []byte(`{"version": "2.0", "items": []}`)}}, is: []error{ErrToolFailed}, msg: `version "2.0"`},
+		{name: "report without items", run: &fakeRunner{out: output{stdout: []byte(`{"version": "1.0"}`)}}, is: []error{ErrToolFailed}},
 		{
 			name: "failing exit with a passing report",
-			run:  fakeRunner{out: output{stdout: report("[]"), code: 1}},
+			run:  &fakeRunner{out: output{stdout: report("[]"), code: 1}},
 			is:   []error{ErrToolFailed},
 			msg:  "exit status 1 with a passing report",
 		},
@@ -129,8 +170,11 @@ func TestValidate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			run := tt.run
-			got, err := validate(context.Background(), &run, cmp.Or(tt.root, root), cmp.Or(tt.version, "1.13.1"))
+			run := cmp.Or(tt.run, &fakeRunner{})
+			run.pkgJSON = pinnedPackage
+			cache := t.TempDir()
+			v := validator{run: run, cacheDir: cache, environ: testEnviron}
+			got, err := v.validate(context.Background(), cmp.Or(tt.root, root), cmp.Or(tt.version, "1.13.1"))
 
 			for _, target := range tt.is {
 				if !errors.Is(err, target) {
@@ -140,30 +184,150 @@ func TestValidate(t *testing.T) {
 			if wantErr := tt.is != nil || tt.msg != ""; (err != nil) != wantErr {
 				t.Fatalf("validate() error = %v, want error %v", err, wantErr)
 			}
+			ran := run.out.stdout != nil || run.out.stderr != nil || run.err != nil
+			if len(run.calls) != map[bool]int{false: 0, true: 2}[ran] {
+				t.Fatalf("calls = %q", run.commands())
+			}
 			if err != nil {
 				if !strings.Contains(err.Error(), tt.msg) {
 					t.Errorf("error %q does not contain %q", err, tt.msg)
-				}
-				if run.ran != (tt.run.out.stdout != nil || tt.run.out.stderr != nil || tt.run.err != nil) {
-					t.Errorf("npx ran = %v", run.ran)
 				}
 				return
 			}
 			if got.Passed() != tt.passed || got.Root != root {
 				t.Errorf("Passed() = %v, root %q; want %v, %q", got.Passed(), got.Root, tt.passed, root)
 			}
-			want := []string{"npx", "-y", "@fission-ai/openspec@1.13.1", "validate", "--all", "--strict", "--json"}
-			if !slices.Equal(run.cmd, want) || run.dir != root {
-				t.Errorf("ran %q in %s, want %q in %s", run.cmd, run.dir, want, root)
+
+			npm, node := run.calls[0], run.calls[1]
+			wantNpm := []string{"npm", "install", "--prefix", npm.dir, "--no-save", "--ignore-scripts", "--no-audit", "--no-fund",
+				"--registry", "https://registry.npmjs.org/", "@fission-ai/openspec@1.13.1"}
+			if !slices.Equal(npm.cmd, wantNpm) || filepath.Dir(npm.dir) != cache || npm.dir == filepath.Join(cache, "1.13.1") {
+				t.Errorf("npm ran %q in %s, want %q in a new directory of %s", npm.cmd, npm.dir, wantNpm, cache)
 			}
-			wantEnv := []string{"OPENSPEC_TELEMETRY=0", "OPENSPEC_NO_UPDATE_CHECK=1", "npm_config_registry=https://registry.npmjs.org/"}
-			if !slices.Equal(run.env, wantEnv) {
-				t.Errorf("env = %q, want %q", run.env, wantEnv)
+			if want := []string{"PATH=/usr/bin", "HOME=/home/dev"}; !slices.Equal(npm.env, want) {
+				t.Errorf("npm env = %q, want %q", npm.env, want)
 			}
-			if run.deadline <= 0 || run.deadline > runTimeout {
-				t.Errorf("deadline in %v, want within %v", run.deadline, runTimeout)
+			cli := filepath.Join(cache, "1.13.1", "node_modules", "@fission-ai", "openspec", "bin", "openspec.js")
+			wantNode := []string{"node", cli, "validate", "--all", "--strict", "--json"}
+			if !slices.Equal(node.cmd, wantNode) || node.dir != root {
+				t.Errorf("node ran %q in %s, want %q in %s", node.cmd, node.dir, wantNode, root)
+			}
+			wantEnv := []string{"PATH=/usr/bin", "HOME=/home/dev", "OPENSPEC_TELEMETRY=0", "OPENSPEC_NO_UPDATE_CHECK=1"}
+			if !slices.Equal(node.env, wantEnv) {
+				t.Errorf("node env = %q, want %q", node.env, wantEnv)
+			}
+			if npm.deadline <= 0 || npm.deadline > installTimeout || node.deadline <= 0 || node.deadline > runTimeout {
+				t.Errorf("deadlines in %v and %v, want within %v and %v", npm.deadline, node.deadline, installTimeout, runTimeout)
 			}
 		})
+	}
+}
+
+// TestInstall: OpenSpec is installed once per version into the cache, only
+// if npm installed exactly the pinned package, and never half-written.
+func TestInstall(t *testing.T) {
+	t.Parallel()
+
+	root := repoRoot(t)
+	passing := []byte(strings.ReplaceAll(string(fixture(t, "json/validate-spec-after.json")), "<ROOT>", root))
+	pkg := func(name, version, bin string) string {
+		return `{"name": "` + name + `", "version": "` + version + `", "bin": ` + bin + `}`
+	}
+	tests := []struct {
+		name    string
+		pkgJSON string
+		npmOut  output
+		broken  bool // the cache already holds a broken install
+		msg     string
+	}{
+		{name: "bin as a map", pkgJSON: pinnedPackage},
+		{name: "bin as a string", pkgJSON: pkg("@fission-ai/openspec", "1.13.1", `"bin/openspec.js"`)},
+		{name: "another package", pkgJSON: pkg("openspec-evil", "1.13.1", `{"openspec": "./bin/openspec.js"}`),
+			msg: "npm installed something else: package.json names openspec-evil@1.13.1, want @fission-ai/openspec@1.13.1"},
+		{name: "another version", pkgJSON: pkg("@fission-ai/openspec", "1.13.2", `{"openspec": "./bin/openspec.js"}`),
+			msg: "package.json names @fission-ai/openspec@1.13.2"},
+		{name: "bin outside the package", pkgJSON: pkg("@fission-ai/openspec", "1.13.1", `{"openspec": "../../../evil.js"}`),
+			msg: `bin "../../../evil.js" is not a file of the package`},
+		{name: "no openspec bin", pkgJSON: pkg("@fission-ai/openspec", "1.13.1", `{"other": "./bin/openspec.js"}`), msg: `bin "" is not`},
+		{name: "missing bin file", pkgJSON: pkg("@fission-ai/openspec", "1.13.1", `{"openspec": "./bin/gone.js"}`), msg: "bin: "},
+		{name: "npm installs nothing", msg: "read package.json"},
+		{name: "npm fails", pkgJSON: pinnedPackage, npmOut: output{stderr: []byte("npm error code E404\n"), code: 1},
+			msg: "npm install: exit status 1\nnpm error code E404"},
+		{name: "broken cache", pkgJSON: pinnedPackage, broken: true, msg: "holds a broken OpenSpec install, delete it to reinstall"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cache := t.TempDir()
+			if tt.broken {
+				if err := os.MkdirAll(filepath.Join(cache, "1.13.1", "node_modules"), 0o750); err != nil {
+					t.Fatal(err)
+				}
+			}
+			run := &fakeRunner{pkgJSON: tt.pkgJSON, npmOut: tt.npmOut, out: output{stdout: passing}}
+			v := validator{run: run, cacheDir: cache, environ: testEnviron}
+			_, err := v.validate(context.Background(), root, "1.13.1")
+			if tt.msg == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := v.validate(context.Background(), root, "1.13.1"); err != nil {
+					t.Fatal(err)
+				}
+				if cmds := run.commands(); len(cmds) != 3 || cmds[0][0] != "npm" || cmds[1][0] != "node" || cmds[2][0] != "node" {
+					t.Errorf("calls = %q, want one install and two runs", cmds)
+				}
+				return
+			}
+			if !errors.Is(err, ErrToolFailed) || !strings.Contains(err.Error(), tt.msg) {
+				t.Fatalf("error = %v, want ErrToolFailed with %q", err, tt.msg)
+			}
+			for _, c := range run.commands() {
+				if c[0] == "node" {
+					t.Errorf("node ran after a failed install: %q", c)
+				}
+			}
+			entries, err := os.ReadDir(cache)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := map[bool]int{false: 0, true: 1}[tt.broken]; len(entries) != want {
+				t.Errorf("cache holds %d entries, want %d: a failed install must leave nothing", len(entries), want)
+			}
+		})
+	}
+
+	t.Run("concurrent runs", func(t *testing.T) {
+		t.Parallel()
+		cache := t.TempDir()
+		run := &fakeRunner{pkgJSON: pinnedPackage, out: output{stdout: passing}}
+		v := validator{run: run, cacheDir: cache, environ: testEnviron}
+		errs := make(chan error, 8)
+		for range 8 {
+			go func() {
+				_, err := v.validate(context.Background(), root, "1.13.1")
+				errs <- err
+			}()
+		}
+		for range 8 {
+			if err := <-errs; err != nil {
+				t.Error(err)
+			}
+		}
+		entries, err := os.ReadDir(cache)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 1 || entries[0].Name() != "1.13.1" {
+			t.Errorf("cache holds %v, want only 1.13.1", entries)
+		}
+	})
+}
+
+func TestCleanEnv(t *testing.T) {
+	t.Parallel()
+	if got, want := cleanEnv(testEnviron), []string{"PATH=/usr/bin", "HOME=/home/dev"}; !slices.Equal(got, want) {
+		t.Errorf("cleanEnv = %q, want %q", got, want)
 	}
 }
 

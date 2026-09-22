@@ -1,7 +1,7 @@
 package openspec
 
 import (
-	"context"
+	"errors"
 	"io/fs"
 	"maps"
 	"os"
@@ -15,14 +15,14 @@ import (
 // liveVersion is the OpenSpec release the spike fixtures were captured with.
 const liveVersion = "1.13.1"
 
-// TestLive is the live differential test: real OpenSpec, run through npx
-// over each spike repository, must report what the spike captured, and the
+// TestLive is the live differential test: real OpenSpec, installed and run
+// as Validate does, over each spike repository, must report what the spike captured, and the
 // reader must see the requirements, bodies and scenarios its show reports.
 // It needs Node and the network, so it runs only with AVAL_OPENSPEC_LIVE=1
 // (the openspec-live CI job).
 func TestLive(t *testing.T) {
 	if os.Getenv("AVAL_OPENSPEC_LIVE") != "1" {
-		t.Skip("set AVAL_OPENSPEC_LIVE=1 to run OpenSpec " + liveVersion + " through npx")
+		t.Skip("set AVAL_OPENSPEC_LIVE=1 to install and run OpenSpec " + liveVersion)
 	}
 
 	type liveCase struct {
@@ -54,7 +54,7 @@ func TestLive(t *testing.T) {
 		cases = append(cases, c)
 	}
 
-	// Sequential on purpose: concurrent first runs of npx race on its cache.
+	// Sequential: each case also runs show, and the output is easier to read.
 	for _, c := range cases {
 		t.Run(c.change, func(t *testing.T) {
 			root := writeRepo(t, c.fsys)
@@ -116,16 +116,52 @@ func TestLive(t *testing.T) {
 		}
 	})
 
-	t.Run("a repository .npmrc cannot redirect npx", func(t *testing.T) {
-		t.Setenv("npm_config_cache", t.TempDir()) // nothing cached: npx must download
+	t.Run("a fresh install ignores .npmrc and npm_config_ variables", func(t *testing.T) {
 		fsys := maps.Clone(baseline)
 		fsys[".npmrc"] = &fstest.MapFile{Data: []byte("registry=http://127.0.0.1:9/\n")}
-		report, err := Validate(t.Context(), writeRepo(t, fsys), liveVersion)
+		v := validator{
+			run:      execRunner{waitDelay: defaultWaitDelay},
+			cacheDir: t.TempDir(), // nothing installed yet
+			environ:  append(os.Environ(), "npm_config_registry=http://127.0.0.1:9/", "NPM_CONFIG_DRY_RUN=true"),
+		}
+		report, err := v.validate(t.Context(), writeRepo(t, fsys), liveVersion)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !report.Passed() {
 			t.Errorf("report = %+v, want a pass", report)
+		}
+	})
+
+	t.Run("a repository node_modules is never run", func(t *testing.T) {
+		// A committed fake OpenSpec that would pass a broken tree.
+		fake := "require('fs').writeFileSync('fake-ran', '');\n" +
+			"console.log(JSON.stringify({version: '1.0', root: {path: process.cwd()}, items: []}));\n"
+		fsys := spikeRepo(t, "modified-drops-scenario", fixture(t, "negative/modified-drops-scenario/delta.md"))
+		fsys["node_modules/@fission-ai/openspec/package.json"] = &fstest.MapFile{Data: []byte(pinnedPackage)}
+		fsys["node_modules/@fission-ai/openspec/bin/openspec.js"] = &fstest.MapFile{Data: []byte(fake)}
+		fsys["node_modules/.bin/openspec"] = &fstest.MapFile{Data: []byte("#!/usr/bin/env node\n" + fake)}
+		root := writeRepo(t, fsys)
+		report, err := Validate(t.Context(), root, liveVersion)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if report.Passed() {
+			t.Errorf("the broken tree passed: %+v", report)
+		}
+		if _, err := os.Stat(filepath.Join(root, "fake-ran")); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("the repository's OpenSpec ran (stat: %v)", err)
+		}
+	})
+
+	t.Run("a parent root is refused", func(t *testing.T) {
+		parent := writeRepo(t, fstest.MapFS{"openspec/specs/refunds/spec.md": {Data: fixture(t, "refunds/spec-after.md")}})
+		child := filepath.Join(parent, "service")
+		if err := os.Mkdir(child, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Validate(t.Context(), child, liveVersion); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("Validate(child without openspec/) = %v, want fs.ErrNotExist", err)
 		}
 	})
 }
@@ -164,13 +200,15 @@ func writeRepo(t *testing.T, fsys fstest.MapFS) string {
 	return root
 }
 
-// openspecCLI runs one OpenSpec command the way Validate does and returns
-// its stdout.
+// openspecCLI runs one OpenSpec command the way Validate does, with the
+// cached install, and returns its stdout.
 func openspecCLI(t *testing.T, dir string, args ...string) []byte {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), runTimeout)
-	defer cancel()
-	out, err := execRunner{waitDelay: defaultWaitDelay}.Run(ctx, dir, cliEnv, "npx", append([]string{"-y", npmPackage + "@" + liveVersion}, args...)...)
+	v, err := newValidator()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := v.openspec(t.Context(), dir, liveVersion, args...)
 	if err != nil || out.code != 0 {
 		t.Fatalf("openspec %q: exit %d, %v\n%s%s", args, out.code, err, out.stdout, out.stderr)
 	}

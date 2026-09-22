@@ -17,13 +17,14 @@ import (
 )
 
 var (
-	// ErrToolMissing is returned when node or npx is not on PATH. Callers map
+	// ErrToolMissing is returned when node or npm is not on PATH. Callers map
 	// it to exit code 3 (ADR-0004).
-	ErrToolMissing = errors.New("openspec: node and npx are required")
-	// ErrToolFailed is returned when the OpenSpec CLI ran but produced no
-	// validation report aval can use: npx could not fetch the package, the
-	// run timed out, the output has an unknown shape, or OpenSpec validated
-	// another root than the repository.
+	ErrToolMissing = errors.New("openspec: node and npm are required")
+	// ErrToolFailed is returned when aval cannot install or run the pinned
+	// OpenSpec, or OpenSpec produced no validation report aval can use: npm
+	// failed or installed another package, the run timed out, the output has
+	// an unknown shape, or OpenSpec validated another root than the
+	// repository.
 	ErrToolFailed = errors.New("openspec: the OpenSpec CLI failed")
 )
 
@@ -41,10 +42,8 @@ const (
 
 var (
 	exactVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
-	// cliEnv turns off OpenSpec's telemetry and update check, and fetches
-	// the package from the public npm registry: the environment beats any
-	// .npmrc, so a repository cannot redirect the download.
-	cliEnv = []string{"OPENSPEC_TELEMETRY=0", "OPENSPEC_NO_UPDATE_CHECK=1", "npm_config_registry=https://registry.npmjs.org/"}
+	// cliEnv turns off OpenSpec's telemetry and update check.
+	cliEnv = []string{"OPENSPEC_TELEMETRY=0", "OPENSPEC_NO_UPDATE_CHECK=1"}
 )
 
 // allowedInfo lists, word for word, the INFO messages that do not fail
@@ -127,23 +126,52 @@ func (r Report) Findings() []Finding {
 }
 
 // Validate runs `openspec validate --all --strict --json` in repoRoot with
-// OpenSpec at the exact version, through npx: the first run downloads the
-// package from the public npm registry. OpenSpec's telemetry and update
-// check are off. A report with failures is not an error: check
-// Report.Passed. The run is bounded by ctx and by a timeout that covers the
-// download.
+// OpenSpec at the exact version and returns what it found. A report with
+// failures is not an error: check Report.Passed.
+//
+// OpenSpec never comes from the repository: not its node_modules, not its
+// .npmrc. The first run for a version installs @fission-ai/openspec@version
+// with npm from the public registry (https://registry.npmjs.org/) into
+// <user cache dir>/aval/openspec/<version>, with install scripts off and no
+// inherited npm_config_* variables, and checks the installed package's name
+// and version; later runs reuse it. Validate then runs that package's bin
+// with node from repoRoot, telemetry and update check off. Each step is
+// bounded by ctx and by its own timeout.
 //
 // repoRoot must contain openspec/, and OpenSpec must report that it
 // validated repoRoot itself: otherwise it may have picked a parent
 // directory or a configured store, and Validate fails.
 func Validate(ctx context.Context, repoRoot, version string) (Report, error) {
-	return validate(ctx, execRunner{waitDelay: defaultWaitDelay}, repoRoot, version)
+	v, err := newValidator()
+	if err != nil {
+		return Report{}, err
+	}
+	return v.validate(ctx, repoRoot, version)
+}
+
+// validator installs and runs OpenSpec. Its fields are the seams tests replace.
+type validator struct {
+	run      runner
+	cacheDir string   // one directory per installed OpenSpec version
+	environ  []string // the environment children inherit, before cleanEnv
+}
+
+func newValidator() (validator, error) {
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		return validator{}, fmt.Errorf("%w: %w", ErrToolFailed, err)
+	}
+	return validator{
+		run:      execRunner{waitDelay: defaultWaitDelay},
+		cacheDir: filepath.Join(cache, "aval", "openspec"),
+		environ:  os.Environ(),
+	}, nil
 }
 
 // runner is the seam between Validate and the operating system.
 type runner interface {
 	LookPath(file string) (string, error)
-	// Run runs name in dir with env added to the environment. A non-zero
+	// Run runs name in dir with exactly env as its environment. A non-zero
 	// exit is not an error; err means the command could not run or finish.
 	Run(ctx context.Context, dir string, env []string, name string, args ...string) (output, error)
 }
@@ -153,7 +181,7 @@ type output struct {
 	code           int
 }
 
-func validate(ctx context.Context, run runner, repoRoot, version string) (Report, error) {
+func (v validator) validate(ctx context.Context, repoRoot, version string) (Report, error) {
 	if !exactVersion.MatchString(version) {
 		return Report{}, fmt.Errorf("openspec: version %q must be exact, like 1.13.1", version)
 	}
@@ -161,16 +189,14 @@ func validate(ctx context.Context, run runner, repoRoot, version string) (Report
 	if err != nil {
 		return Report{}, err
 	}
-	for _, tool := range []string{"node", "npx"} {
-		if _, err := run.LookPath(tool); err != nil {
+	for _, tool := range []string{"node", "npm"} {
+		if _, err := v.run.LookPath(tool); err != nil {
 			return Report{}, fmt.Errorf("%w: %w", ErrToolMissing, err)
 		}
 	}
-	ctx, cancel := context.WithTimeout(ctx, runTimeout)
-	defer cancel()
-	out, err := run.Run(ctx, root, cliEnv, "npx", "-y", npmPackage+"@"+version, "validate", "--all", "--strict", "--json")
+	out, err := v.openspec(ctx, root, version, "validate", "--all", "--strict", "--json")
 	if err != nil {
-		return Report{}, fmt.Errorf("%w: %w", ErrToolFailed, err)
+		return Report{}, err
 	}
 	report, err := parseReport(out.stdout)
 	switch {
@@ -182,6 +208,21 @@ func validate(ctx context.Context, run runner, repoRoot, version string) (Report
 		return Report{}, fmt.Errorf("%w: exit status %d with a passing report%s", ErrToolFailed, out.code, withStderr(out.stderr))
 	}
 	return report, nil
+}
+
+// openspec runs the installed OpenSpec CLI with args in dir.
+func (v validator) openspec(ctx context.Context, dir, version string, args ...string) (output, error) {
+	cli, err := v.install(ctx, version)
+	if err != nil {
+		return output{}, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, runTimeout)
+	defer cancel()
+	out, err := v.run.Run(ctx, dir, append(cleanEnv(v.environ), cliEnv...), "node", append([]string{cli}, args...)...)
+	if err != nil {
+		return output{}, fmt.Errorf("%w: %w", ErrToolFailed, err)
+	}
+	return out, nil
 }
 
 // canonicalRoot resolves repoRoot the way OpenSpec reports it, absolute and
@@ -247,7 +288,7 @@ func withStderr(stderr []byte) string {
 
 // execRunner runs commands with os/exec. waitDelay bounds how long Run
 // waits for the output pipes once the process has exited or been killed:
-// npx starts node as a child that can keep them open.
+// npm and node can leave child processes that keep them open.
 type execRunner struct {
 	waitDelay time.Duration
 }
@@ -263,7 +304,7 @@ func (execRunner) LookPath(file string) (string, error) {
 func (r execRunner) Run(ctx context.Context, dir string, env []string, name string, args ...string) (output, error) {
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // validate passes a fixed command and a version checked by exactVersion
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = env
 	stdout, stderr := &capped{max: maxStdoutBytes}, &capped{max: maxStderrBytes}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	cmd.WaitDelay = r.waitDelay
