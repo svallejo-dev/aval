@@ -23,7 +23,7 @@ import (
 const encoding = "aval-testsource-2"
 
 // fingerprint hashes what pd's test depends on, as the package doc lists.
-func (p *pkg) fingerprint(pd pending, testdata string) string {
+func (p *pkg) fingerprint(pd pending) string {
 	var enclosing []*info
 	for _, n := range pd.stack {
 		switch n.(type) {
@@ -45,7 +45,7 @@ func (p *pkg) fingerprint(pd pending, testdata string) string {
 			b.WriteString("," + strconv.Itoa(len(s)) + ":" + s)
 		}
 	}
-	section(encoding, string(pd.d.Kind), pd.file.ast.Name.Name, pd.file.constraint, testdata)
+	section(encoding, string(pd.d.Kind), pd.file.ast.Name.Name, pd.file.constraint)
 	section(digests(enclosing)...)
 	section(digests(bound)...)
 	section(digests(helpers)...)
@@ -142,38 +142,39 @@ func imports(infos []*info) []string {
 	return slices.Sorted(maps.Keys(set))
 }
 
-// testdata hashes the names and contents of the package's testdata tree, or
-// returns "" when it has none.
-func (p *pkg) testdata() (string, error) {
+// testdata returns the hex SHA-256 of the content of each file in the
+// package's testdata tree, or nil when it has none. Other than regular files
+// are recorded by their type.
+func (p *pkg) testdata() (map[string]string, error) {
 	root := path.Join(p.dir, "testdata")
 	fi, err := fs.Stat(p.fsys, root)
 	if errors.Is(err, fs.ErrNotExist) || err == nil && !fi.IsDir() {
-		return "", nil
+		return nil, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("hash %s: %w", root, err)
+		return nil, fmt.Errorf("hash %s: %w", root, err)
 	}
-	h := sha256.New()
+	files := map[string]string{}
 	err = fs.WalkDir(p.fsys, root, func(name string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		switch {
+		case err != nil || d.IsDir():
 			return err
-		}
-		fmt.Fprintf(h, "%q %s\n", strings.TrimPrefix(name, root), d.Type())
-		if !d.Type().IsRegular() {
+		case !d.Type().IsRegular():
+			files[name] = d.Type().String()
 			return nil
 		}
 		data, err := fs.ReadFile(p.fsys, name)
 		if err != nil {
 			return fmt.Errorf("read: %w", err)
 		}
-		fmt.Fprintf(h, "%d\n", len(data))
-		h.Write(data)
+		sum := sha256.Sum256(data)
+		files[name] = hex.EncodeToString(sum[:])
 		return nil
 	})
 	if err != nil {
-		return "", fmt.Errorf("hash %s: %w", root, err)
+		return nil, fmt.Errorf("hash %s: %w", root, err)
 	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	return files, nil
 }
 
 // Known GOOS and GOARCH values, as in go/build.

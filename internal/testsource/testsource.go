@@ -1,7 +1,8 @@
 // Package testsource reads Go test source, without compiling or running it,
 // to find where obligation IDs are declared and to fingerprint everything the
 // bound tests depend on, so the gate can tell when a bound test was edited,
-// removed, disabled or skipped outside the delta of its obligation (ADR-0004).
+// removed, disabled or skipped, or its test data rewritten, outside the delta
+// of its obligation (ADR-0004).
 //
 // # Declarations
 //
@@ -37,9 +38,7 @@
 //     with their methods; Test, Benchmark, Fuzz and Example functions are never
 //     helpers), plus its TestMain and init functions;
 //   - the imports those files use for the names the code above qualifies, and
-//     their blank and dot imports;
-//   - the content of the package's testdata tree, so rewriting a golden file,
-//     or adding one, changes every fingerprint of the package.
+//     their blank and dot imports.
 //
 // Code is hashed through a canonical encoding of its syntax tree (see encoder):
 // reformatting, commenting or moving it keeps the fingerprint, changing any
@@ -50,6 +49,21 @@
 // by a name guessed from its path. Production code is not included: changing
 // it is what a change is for. Fingerprints are only comparable between scans
 // by the same aval build.
+//
+// # Test data
+//
+// Test data is not part of the fingerprint, since any file may be read by any
+// test of the package and adding one must not flag the others. Instead,
+// Declaration.Testdata holds the content hash of every file in the package's
+// testdata tree, and Compare reports a file that existed at base and was
+// modified or removed at head.
+//
+// # Gaps left to the runtime checks
+//
+// Three dependencies are knowingly left out; the gate's runtime checks (M2)
+// cover them: helpers in other packages (only the import path is hashed),
+// unnamed imports whose package name is not the one their path suggests, and
+// data files outside testdata.
 //
 // # Skips
 //
@@ -98,6 +112,11 @@ type Declaration struct {
 	Fingerprint string // hex SHA-256 of the bound test and what it depends on
 	Line        int    // line of the string literal that carries the ID
 	Skips       bool   // the bound code or a function around it calls Skip
+
+	// Testdata maps each file of the package's testdata tree, as a slash path
+	// relative to the scanned directory, to the hex SHA-256 of its content.
+	// It is shared by the package's declarations: do not modify it.
+	Testdata map[string]string
 }
 
 // Scan parses every _test.go file under dir and returns the obligation IDs
@@ -284,7 +303,7 @@ func (p *pkg) declarations() ([]Declaration, error) {
 	}
 	out := make([]Declaration, 0, len(found))
 	for _, pd := range found {
-		pd.d.Fingerprint = p.fingerprint(pd, testdata)
+		pd.d.Fingerprint, pd.d.Testdata = p.fingerprint(pd), testdata
 		pd.d.Skips = p.skipped(pd)
 		out = append(out, pd.d)
 	}

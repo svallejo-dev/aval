@@ -20,6 +20,11 @@ import (
 //     or the ID gained a declaration, in the same file or another one;
 //   - test_removed: a declaration of the ID has no counterpart in head.
 //
+// A testdata file of the package of one of the ID's declarations that exists
+// at base and was modified or removed at head is a fingerprint_changed too;
+// an added file never is, so a new golden file for a new obligation does not
+// flag the others.
+//
 // Declarations of an ID are paired one by one, and only within the same
 // directory and top-level test function: moving a test to another package or
 // function is a removal plus a new declaration. Within those, pairing goes
@@ -83,6 +88,28 @@ func compareID(id string, base, head []Declaration) []evidence.Finding {
 	for j, h := range head {
 		if !used[j] {
 			add(evidence.FingerprintChanged, "%s declared again outside its delta", h)
+		}
+	}
+	reported := map[string]bool{}
+	for i, b := range base {
+		if pair[i] < 0 {
+			continue
+		}
+		after := head[pair[i]].Testdata
+		for _, name := range slices.Sorted(maps.Keys(b.Testdata)) {
+			sum, ok := after[name]
+			if reported[name] || ok && sum == b.Testdata[name] {
+				continue
+			}
+			reported[name] = true
+			verb := "modified"
+			if !ok {
+				verb = "removed"
+			}
+			out = append(out, evidence.Finding{
+				Kind: evidence.FingerprintChanged, ID: id,
+				Detail: fmt.Sprintf("testdata %s %s outside the delta of %s", name, verb, id),
+			})
 		}
 	}
 	return out
