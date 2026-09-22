@@ -100,6 +100,7 @@ Cada commit de `base..head` se clasifica por sus rutas con los globs `paths.dx`,
 | "Evil merge" | Las que introduce el propio merge |
 | Resolución de conflicto | Los ficheros resueltos |
 | Resolución que descarta cambios de una rama | Esos ficheros |
+| Merge octopus (más de dos padres) | `--remerge-diff` no lo soporta: se usa `--cc`, que da los ficheros que el propio merge cambia pero **no** los cambios descartados. Límite conocido de la v0 |
 
 ### 4. Reglas y códigos de motivo
 
@@ -107,7 +108,7 @@ Cada regla incumplida añade un `Reason{Code, Message, ID}` al veredicto. Los c�
 
 | Código | Cuándo | Tier | Efecto |
 |---|---|---|---|
-| `spec_rule` | Un hallazgo de severidad error de `openspec.Check` en head **que no existía en la base**, emparejando por regla, ruta e ID, sin número de línea | 0–3 | block |
+| `spec_rule` | Un hallazgo de severidad error de `openspec.Check` en head **que no existía en la base**, emparejando por regla, ruta y mensaje, sin número de línea. La ruta de un change archivado en el PR se normaliza a la del change activo en la base, para que moverlo no convierta sus hallazgos en nuevos | 0–3 | block |
 | `openspec_invalid` | `Validate` falla (todo INFO es fallo salvo la allowlist de ADR-0002) | 0–3, si el PR toca `openspec/` | block |
 | `open_question` | Una obligación **O** ADDED o MODIFIED. Eliminar una O para resolverla no bloquea | 1–3 | block |
 | `unverified` | Una obligación F/N/I ADDED o MODIFIED sin test vinculado | 1–3 | block |
