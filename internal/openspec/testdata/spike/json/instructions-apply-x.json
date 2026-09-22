@@ -1,0 +1,37 @@
+{
+  "changeName": "x",
+  "changeDir": "<ROOT>/openspec/changes/x",
+  "schemaName": "aval",
+  "contextFiles": {
+    "proposal": [
+      "<ROOT>/openspec/changes/x/proposal.md"
+    ],
+    "specs": [
+      "<ROOT>/openspec/changes/x/specs/refunds/spec.md"
+    ],
+    "design": [
+      "<ROOT>/openspec/changes/x/design.md"
+    ],
+    "tasks": [
+      "<ROOT>/openspec/changes/x/tasks.md"
+    ]
+  },
+  "progress": {
+    "total": 1,
+    "complete": 0,
+    "remaining": 1
+  },
+  "tasks": [
+    {
+      "id": "1",
+      "description": "1.1 Export the counter and verify with the metrics test",
+      "done": false
+    }
+  ],
+  "state": "ready",
+  "instruction": "Read context files, work through pending tasks, mark complete as you go.\nPause if you hit blockers or need clarification.",
+  "root": {
+    "path": "<ROOT>",
+    "source": "nearest"
+  }
+}

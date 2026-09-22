@@ -1,0 +1,116 @@
+{
+  "id": "add-refund-limits",
+  "title": "add-refund-limits",
+  "deltaCount": 5,
+  "deltas": [
+    {
+      "spec": "refunds",
+      "operation": "ADDED",
+      "description": "Add requirement: The system MUST NOT issue a refund whose cumulative amount would exceed the order total.",
+      "requirement": {
+        "text": "The system MUST NOT issue a refund whose cumulative amount would exceed the order total.",
+        "scenarios": [
+          {
+            "rawText": "- **WHEN** a refund request would bring the refunded total above the order total\n- **THEN** the system rejects the request with a limit error and issues no refund"
+          }
+        ]
+      },
+      "requirements": [
+        {
+          "text": "The system MUST NOT issue a refund whose cumulative amount would exceed the order total.",
+          "scenarios": [
+            {
+              "rawText": "- **WHEN** a refund request would bring the refunded total above the order total\n- **THEN** the system rejects the request with a limit error and issues no refund"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "spec": "refunds",
+      "operation": "MODIFIED",
+      "description": "Modify requirement: The system SHALL process a refund request at most once per idempotency key within a 24-hour window.",
+      "requirement": {
+        "text": "The system SHALL process a refund request at most once per idempotency key within a 24-hour window.",
+        "scenarios": [
+          {
+            "rawText": "- **WHEN** a refund request arrives with an idempotency key already processed\n- **THEN** the system returns the original refund result without issuing a new refund"
+          },
+          {
+            "rawText": "- **WHEN** two refund requests arrive for the same order with different keys\n- **THEN** each request is evaluated independently"
+          },
+          {
+            "rawText": "- **WHEN** a refund request reuses an idempotency key older than 24 hours\n- **THEN** the system treats it as a new request"
+          }
+        ]
+      },
+      "requirements": [
+        {
+          "text": "The system SHALL process a refund request at most once per idempotency key within a 24-hour window.",
+          "scenarios": [
+            {
+              "rawText": "- **WHEN** a refund request arrives with an idempotency key already processed\n- **THEN** the system returns the original refund result without issuing a new refund"
+            },
+            {
+              "rawText": "- **WHEN** two refund requests arrive for the same order with different keys\n- **THEN** each request is evaluated independently"
+            },
+            {
+              "rawText": "- **WHEN** a refund request reuses an idempotency key older than 24 hours\n- **THEN** the system treats it as a new request"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "spec": "refunds",
+      "operation": "MODIFIED",
+      "description": "Modify requirement: The system SHALL write exactly one ledger entry, with a negative amount, for every refund it issues.",
+      "requirement": {
+        "text": "The system SHALL write exactly one ledger entry, with a negative amount, for every refund it issues.",
+        "scenarios": [
+          {
+            "rawText": "- **WHEN** a refund is issued\n- **THEN** exactly one ledger entry with the refund amount is written"
+          }
+        ]
+      },
+      "requirements": [
+        {
+          "text": "The system SHALL write exactly one ledger entry, with a negative amount, for every refund it issues.",
+          "scenarios": [
+            {
+              "rawText": "- **WHEN** a refund is issued\n- **THEN** exactly one ledger entry with the refund amount is written"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "spec": "refunds",
+      "operation": "REMOVED",
+      "description": "Remove requirement: **Reason**: The gateway now confirms refunds asynchronously through a callback, so the assumption no longer holds.\n**Migration**: Mark refunds completed only when the gateway callback arrives.",
+      "requirement": {
+        "text": "**Reason**: The gateway now confirms refunds asynchronously through a callback, so the assumption no longer holds.\n**Migration**: Mark refunds completed only when the gateway callback arrives.",
+        "scenarios": []
+      },
+      "requirements": [
+        {
+          "text": "**Reason**: The gateway now confirms refunds asynchronously through a callback, so the assumption no longer holds.\n**Migration**: Mark refunds completed only when the gateway callback arrives.",
+          "scenarios": []
+        }
+      ]
+    },
+    {
+      "spec": "refunds",
+      "operation": "RENAMED",
+      "description": "Rename requirement from \"ORD-S01 Fast refund answer\" to \"ORD-S01 Refund latency under 300 ms\"",
+      "rename": {
+        "from": "ORD-S01 Fast refund answer",
+        "to": "ORD-S01 Refund latency under 300 ms"
+      }
+    }
+  ],
+  "root": {
+    "path": "<ROOT>",
+    "source": "nearest"
+  }
+}

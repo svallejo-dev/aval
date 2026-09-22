@@ -1,0 +1,102 @@
+{
+  "changeName": "add-refund-limits",
+  "schemaName": "spec-driven",
+  "planningHome": {
+    "kind": "repo",
+    "root": "<ROOT>",
+    "changesDir": "<ROOT>/openspec/changes",
+    "defaultSchema": "spec-driven"
+  },
+  "changeRoot": "<ROOT>/openspec/changes/add-refund-limits",
+  "artifactPaths": {
+    "proposal": {
+      "outputPath": "proposal.md",
+      "resolvedOutputPath": "<ROOT>/openspec/changes/add-refund-limits/proposal.md",
+      "existingOutputPaths": [
+        "<ROOT>/openspec/changes/add-refund-limits/proposal.md"
+      ]
+    },
+    "specs": {
+      "outputPath": "specs/**/*.md",
+      "resolvedOutputPath": "<ROOT>/openspec/changes/add-refund-limits/specs/**/*.md",
+      "existingOutputPaths": [
+        "<ROOT>/openspec/changes/add-refund-limits/specs/refunds/spec.md"
+      ]
+    },
+    "design": {
+      "outputPath": "design.md",
+      "resolvedOutputPath": "<ROOT>/openspec/changes/add-refund-limits/design.md",
+      "existingOutputPaths": []
+    },
+    "tasks": {
+      "outputPath": "tasks.md",
+      "resolvedOutputPath": "<ROOT>/openspec/changes/add-refund-limits/tasks.md",
+      "existingOutputPaths": [
+        "<ROOT>/openspec/changes/add-refund-limits/tasks.md"
+      ]
+    }
+  },
+  "isPlanningComplete": false,
+  "isComplete": false,
+  "applyRequires": [
+    "tasks"
+  ],
+  "nextSteps": [
+    "Run openspec instructions design --change \"add-refund-limits\" --json before writing that artifact."
+  ],
+  "actionContext": {
+    "mode": "repo-local",
+    "sourceOfTruth": "repo",
+    "planningArtifacts": [
+      "proposal",
+      "specs",
+      "design",
+      "tasks"
+    ],
+    "linkedContext": [],
+    "allowedEditRoots": [
+      "<ROOT>"
+    ],
+    "requiresAffectedAreaSelection": false,
+    "constraints": [
+      "Repo-local change artifacts and implementation edits are scoped to this project."
+    ]
+  },
+  "artifacts": [
+    {
+      "id": "proposal",
+      "outputPath": "proposal.md",
+      "status": "done",
+      "requires": []
+    },
+    {
+      "id": "specs",
+      "outputPath": "specs/**/*.md",
+      "status": "done",
+      "requires": [
+        "proposal"
+      ]
+    },
+    {
+      "id": "design",
+      "outputPath": "design.md",
+      "status": "ready",
+      "requires": [
+        "proposal"
+      ]
+    },
+    {
+      "id": "tasks",
+      "outputPath": "tasks.md",
+      "status": "done",
+      "requires": [
+        "specs",
+        "design"
+      ]
+    }
+  ],
+  "root": {
+    "path": "<ROOT>",
+    "source": "nearest"
+  }
+}

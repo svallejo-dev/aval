@@ -1,0 +1,36 @@
+{
+  "items": [
+    {
+      "id": "modified-old-name-after-rename",
+      "type": "change",
+      "valid": false,
+      "issues": [
+        {
+          "level": "ERROR",
+          "path": "refunds/spec.md",
+          "message": "MODIFIED references old name from RENAMED. Use new header for \"ORD-S01 Refund latency budget\""
+        }
+      ],
+      "durationMs": 6
+    }
+  ],
+  "summary": {
+    "totals": {
+      "items": 1,
+      "passed": 0,
+      "failed": 1
+    },
+    "byType": {
+      "change": {
+        "items": 1,
+        "passed": 0,
+        "failed": 1
+      }
+    }
+  },
+  "version": "1.0",
+  "root": {
+    "path": "<ROOT>",
+    "source": "nearest"
+  }
+}

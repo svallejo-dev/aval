@@ -1,0 +1,37 @@
+{
+  "items": [
+    {
+      "id": "non-requirement-h3",
+      "type": "change",
+      "valid": true,
+      "issues": [
+        {
+          "level": "INFO",
+          "path": "refunds/spec.md",
+          "line": 6,
+          "message": "Header \"### Notes\" in ADDED Requirements is not a \"### Requirement:\" header and is ignored by validation. Use \"### Requirement: Notes\" if it should be validated as a requirement."
+        }
+      ],
+      "durationMs": 7
+    }
+  ],
+  "summary": {
+    "totals": {
+      "items": 1,
+      "passed": 1,
+      "failed": 0
+    },
+    "byType": {
+      "change": {
+        "items": 1,
+        "passed": 1,
+        "failed": 0
+      }
+    }
+  },
+  "version": "1.0",
+  "root": {
+    "path": "<ROOT>",
+    "source": "nearest"
+  }
+}

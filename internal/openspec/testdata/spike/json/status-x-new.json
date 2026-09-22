@@ -1,0 +1,140 @@
+{
+  "changeName": "x",
+  "schemaName": "aval",
+  "planningHome": {
+    "kind": "repo",
+    "root": "<ROOT>",
+    "changesDir": "<ROOT>/openspec/changes",
+    "defaultSchema": "spec-driven"
+  },
+  "changeRoot": "<ROOT>/openspec/changes/x",
+  "artifactPaths": {
+    "proposal": {
+      "outputPath": "proposal.md",
+      "resolvedOutputPath": "<ROOT>/openspec/changes/x/proposal.md",
+      "existingOutputPaths": []
+    },
+    "specs": {
+      "outputPath": "specs/**/*.md",
+      "resolvedOutputPath": "<ROOT>/openspec/changes/x/specs/**/*.md",
+      "existingOutputPaths": []
+    },
+    "design": {
+      "outputPath": "design.md",
+      "resolvedOutputPath": "<ROOT>/openspec/changes/x/design.md",
+      "existingOutputPaths": []
+    },
+    "tasks": {
+      "outputPath": "tasks.md",
+      "resolvedOutputPath": "<ROOT>/openspec/changes/x/tasks.md",
+      "existingOutputPaths": []
+    },
+    "premortem": {
+      "outputPath": "premortem.md",
+      "resolvedOutputPath": "<ROOT>/openspec/changes/x/premortem.md",
+      "existingOutputPaths": []
+    },
+    "trace": {
+      "outputPath": "trace.yaml",
+      "resolvedOutputPath": "<ROOT>/openspec/changes/x/trace.yaml",
+      "existingOutputPaths": []
+    }
+  },
+  "isPlanningComplete": false,
+  "isComplete": false,
+  "applyRequires": [
+    "tasks"
+  ],
+  "nextSteps": [
+    "Run openspec instructions proposal --change \"x\" --json before writing that artifact."
+  ],
+  "actionContext": {
+    "mode": "repo-local",
+    "sourceOfTruth": "repo",
+    "planningArtifacts": [
+      "proposal",
+      "specs",
+      "design",
+      "tasks",
+      "premortem",
+      "trace"
+    ],
+    "linkedContext": [],
+    "allowedEditRoots": [
+      "<ROOT>"
+    ],
+    "requiresAffectedAreaSelection": false,
+    "constraints": [
+      "Repo-local change artifacts and implementation edits are scoped to this project."
+    ]
+  },
+  "artifacts": [
+    {
+      "id": "proposal",
+      "outputPath": "proposal.md",
+      "status": "ready",
+      "requires": []
+    },
+    {
+      "id": "specs",
+      "outputPath": "specs/**/*.md",
+      "status": "blocked",
+      "requires": [
+        "proposal"
+      ],
+      "missingDeps": [
+        "proposal"
+      ]
+    },
+    {
+      "id": "design",
+      "outputPath": "design.md",
+      "status": "blocked",
+      "requires": [
+        "proposal"
+      ],
+      "missingDeps": [
+        "proposal"
+      ]
+    },
+    {
+      "id": "tasks",
+      "outputPath": "tasks.md",
+      "status": "blocked",
+      "requires": [
+        "specs",
+        "design"
+      ],
+      "missingDeps": [
+        "specs",
+        "design"
+      ]
+    },
+    {
+      "id": "premortem",
+      "outputPath": "premortem.md",
+      "status": "blocked",
+      "requires": [
+        "proposal"
+      ],
+      "missingDeps": [
+        "proposal"
+      ]
+    },
+    {
+      "id": "trace",
+      "outputPath": "trace.yaml",
+      "status": "blocked",
+      "requires": [
+        "specs"
+      ],
+      "missingDeps": [
+        "specs"
+      ]
+    }
+  ],
+  "root": {
+    "path": "<ROOT>",
+    "source": "nearest"
+  }
+}

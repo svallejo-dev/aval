@@ -1,0 +1,9 @@
+Task status: No tasks
+
+Specs to update:
+  refunds: update
+Applying changes to openspec/specs/refunds/spec.md:
+  ~ 1 modified
+Totals: + 0, ~ 1, - 0, → 0
+Specs updated successfully.
+Change 'modified-drops-marker' archived as '2026-09-21-modified-drops-marker'.

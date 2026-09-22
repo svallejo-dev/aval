@@ -1,0 +1,7 @@
+# Maintained by `aval feat trace`. Do not edit by hand.
+version: 1
+obligations:
+  - id: ORD-F01
+    tests: [TestRefund/ORD-F01_Refund_is_idempotent]
+  - id: ORD-N01
+    tests: [TestRefund/ORD-N01_Refund_never_exceeds_order_total]

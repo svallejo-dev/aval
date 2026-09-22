@@ -1,0 +1,10 @@
+Task status: No tasks
+
+Specs to update:
+  refunds: update
+Applying changes to openspec/specs/refunds/spec.md:
+  ~ 1 modified
+  → 1 renamed
+Totals: + 0, ~ 1, - 0, → 1
+Specs updated successfully.
+Change 'renamed-then-modified' archived as '2026-09-21-renamed-then-modified'.

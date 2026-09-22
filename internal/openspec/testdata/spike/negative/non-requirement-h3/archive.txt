@@ -1,0 +1,13 @@
+Task status: No tasks
+
+Specs to update:
+  refunds: update
+
+Validation errors in rebuilt spec for refunds (will not write changes):
+  ✗ Requirement must have at least one scenario
+  ⚠ Requirement must have at least one scenario. Scenarios must use level-4 headers. Convert bullet lists into:
+#### Scenario: Short name
+- **WHEN** ...
+- **THEN** ...
+- **AND** ...
+Aborted. No files were changed.
