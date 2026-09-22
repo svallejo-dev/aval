@@ -25,6 +25,10 @@ aval verify        ejecuta verificadores y genera la evidencia
 aval gate          decide y devuelve el exit code para CI
 ```
 
+## Contribuir
+
+Modelo de ramas, commits y releases: [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Licencia
 
 [MIT](LICENSE)
