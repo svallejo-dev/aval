@@ -56,6 +56,20 @@ Aplica solo a las obligaciones **F, N e I** con delta `added` o `modified`:
 
 Las obligaciones F, N e I **sin** delta que tengan tests vinculados se ejecutan en head **aisladas**: un `go test -run '^TestX$/^(ID1|ID2)([_#]|$)'` por Test. Así los subtests hermanos y los Tests anteriores no pueden alterar su estado compartido (huecos aceptados de `testsource`). Tienen que pasar.
 
+### 3b. Clasificación de commits (scope)
+
+Cada commit de `base..head` se clasifica por las rutas que toca, con los globs `paths.dx`, `paths.feat` y `paths.seam` de la política del **SHA base**. Si una ruta encaja en varias familias, gana `seam`; después, el glob más específico (el más largo).
+
+| Rutas del commit | Familia |
+|---|---|
+| Solo `dx` (más `seam` u otras) | `dx` |
+| Solo `feat` (más `seam` u otras) | `feat` |
+| `dx` **y** `feat` | `mixed`, con `families` → bloquea (`mixed_commit`) |
+| Solo `seam` | `seam` |
+| Ninguna familia | `other` (no bloquea) |
+
+**Commits de merge:** se clasifican solo con las rutas de su *combined diff* (`git show --cc --name-only`), es decir, lo que el merge cambia respecto a **todos** sus padres. Un merge limpio de `main` en la rama no aporta rutas y es `other`. Un "evil merge", que introduce cambios propios, se clasifica por esos cambios.
+
 ### 4. Reglas y códigos de motivo
 
 Cada regla que no se cumple añade un `Reason{Code, Message, ID}` al veredicto. Los códigos son estables: los scripts y el resumen de CI dependen de ellos.
