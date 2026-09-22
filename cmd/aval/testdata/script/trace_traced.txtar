@@ -1,0 +1,79 @@
+# aval trace passes when every obligation that needs a test has one, from the
+# repository root or any directory below it, and fails as usage elsewhere.
+# The root holds openspec/specs or openspec/changes: a Go package named
+# openspec on the way up is not one.
+
+cd repo
+exec aval trace --plain
+stdout '^Root .*[/\\]repo$'
+stdout '^ORD-F01 +F +traced +Refund is idempotent +openspec/specs/refunds/spec.md:5 +refund/refund_test.go:6$'
+stdout '^ORD-N01 +N +traced +Refund never exceeds the total +openspec/specs/refunds/spec.md:12 +refund/refund_test.go:8, refund/refund_test.go:9$'
+stdout '^ORD-S01 +S +untested +Fast refund answer +openspec/specs/refunds/spec.md:19 +-$'
+stdout '^✓ 2 obligations traced, 1 untested$'
+! stdout 'Orphans'
+! stderr .
+
+cd internal/openspec
+exec aval trace --json
+stdout '"ok": true'
+stdout '"root": ".*repo"'
+stdout '"id": "ORD-F01"'
+stdout '"name": "ORD-F01 refunds once"'
+stdout '"findings": \[\]'
+stdout '"errors": \[\]'
+
+cd $WORK
+! exec aval trace --json
+stdout '"code": "usage"'
+! exec aval trace --plain
+stderr '^aval: no openspec/specs/ or openspec/changes/ directory in .* or above it'
+! exec aval trace --plain --dir nowhere
+stderr '^aval: nowhere has no openspec/specs/ or openspec/changes/ directory$'
+! exec aval trace --plain --dir repo/internal
+stderr 'has no openspec/specs/ or openspec/changes/ directory$'
+
+-- repo/go.mod --
+module example.com/shop
+
+go 1.22
+-- repo/openspec/specs/refunds/spec.md --
+# refunds Specification
+
+## Requirements
+
+### Requirement: ORD-F01 Refund is idempotent
+The system SHALL process a refund at most once per key.
+
+#### Scenario: Duplicate key
+- **WHEN** a refund arrives with a processed key
+- **THEN** the first result is returned
+
+### Requirement: ORD-N01 Refund never exceeds the total
+The system SHALL NOT refund more than the order total.
+
+#### Scenario: Too much
+- **WHEN** the amount exceeds the total
+- **THEN** the refund is rejected
+
+### Requirement: ORD-S01 Fast refund answer
+The system MUST answer within 300 ms at p99.
+
+#### Scenario: Nominal load
+- **WHEN** the load is nominal
+- **THEN** p99 stays below 300 ms
+-- repo/internal/openspec/openspec.go --
+package openspec
+-- repo/refund/refund_test.go --
+package refund
+
+import "testing"
+
+func TestRefund(t *testing.T) {
+	t.Run("ORD-F01 refunds once", func(t *testing.T) {})
+	for _, tt := range []struct{ name string }{
+		{name: "ORD-N01 caps at the total"},
+		{name: "ORD-N01 caps at zero"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {})
+	}
+}

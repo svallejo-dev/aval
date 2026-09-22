@@ -1,0 +1,35 @@
+# When go test cannot even set up, as with openspec/ at the root and the
+# go.mod in a subdirectory, no test ran: the trace fails instead of passing.
+
+[!exec:go] skip 'needs the go command'
+
+cd repo
+! exec aval trace --run-tests --plain
+stdout '^ORD-F01 +F +traced +not_run '
+stdout '^build_fail +\./\.\.\. +pattern \./\.\.\.: directory prefix \. does not contain main module'
+! stdout '✓'
+stderr '^aval: trace failed: 1 package build failure$'
+
+-- repo/backend/go.mod --
+module example.com/shop
+
+go 1.22
+-- repo/openspec/specs/refunds/spec.md --
+# refunds Specification
+
+## Requirements
+
+### Requirement: ORD-F01 Refund is idempotent
+The system SHALL process a refund at most once per key.
+
+#### Scenario: Duplicate key
+- **WHEN** a refund arrives with a processed key
+- **THEN** the first result is returned
+-- repo/backend/refund/refund_test.go --
+package refund
+
+import "testing"
+
+func TestRefund(t *testing.T) {
+	t.Run("ORD-F01 refunds once", func(t *testing.T) {})
+}

@@ -1,0 +1,74 @@
+# Every test bound to an ID at run time needs a declaration in the source:
+# a name built at run time is undeclared, even for an S obligation that only
+# warns, and even next to a static declaration of the same ID.
+
+[!exec:go] skip 'needs the go command'
+
+cd slo
+! exec aval trace --run-tests --plain
+stdout '^ORD-S01 +S +untested +pass +Fast refund answer '
+stdout '^undeclared_runtime +ORD-S01 +example.com/slo/refund +TestRefund/ORD-S01_load_1 ran bound to it'
+stderr '^aval: trace failed: 1 undeclared runtime binding$'
+
+cd ../sibling
+! exec aval trace --run-tests --plain
+stdout '^ORD-F10 +F +traced +pass +Refund is logged +openspec/specs/refunds/spec.md:5 +refund/refund_test.go:9 pass$'
+stdout '^undeclared_runtime +ORD-F10 +example.com/sibling/refund +TestRefund/ORD-F10_dyn_1 '
+! stdout 'ORD-F10_static ran'
+stderr '^aval: trace failed: 1 undeclared runtime binding$'
+
+-- slo/go.mod --
+module example.com/slo
+
+go 1.22
+-- slo/openspec/specs/refunds/spec.md --
+# refunds Specification
+
+## Requirements
+
+### Requirement: ORD-S01 Fast refund answer
+The system MUST answer within 300 ms at p99.
+
+#### Scenario: Nominal load
+- **WHEN** the load is nominal
+- **THEN** p99 stays below 300 ms
+-- slo/refund/refund_test.go --
+package refund
+
+import (
+	"fmt"
+	"testing"
+)
+
+func TestRefund(t *testing.T) {
+	t.Run(fmt.Sprintf("ORD-S01 load %d", 1), func(t *testing.T) {})
+}
+-- sibling/go.mod --
+module example.com/sibling
+
+go 1.22
+-- sibling/openspec/specs/refunds/spec.md --
+# refunds Specification
+
+## Requirements
+
+### Requirement: ORD-F10 Refund is logged
+The system SHALL log every refund.
+
+#### Scenario: Refund issued
+- **WHEN** a refund is issued
+- **THEN** it is logged
+-- sibling/refund/refund_test.go --
+package refund
+
+import (
+	"fmt"
+	"testing"
+)
+
+func TestRefund(t *testing.T) {
+	t.Run("ORD-F10 static", func(t *testing.T) {})
+	for i := 1; i < 2; i++ {
+		t.Run(fmt.Sprintf("ORD-F10 dyn %d", i), func(t *testing.T) {})
+	}
+}

@@ -25,19 +25,29 @@ type globalFlags struct {
 }
 
 // printer resolves the output settings once cobra has parsed the flags and
-// returns a printer for cmd's streams. The mode follows stdout, where results go.
+// returns a printer for cmd's streams.
 func (g *globalFlags) printer(cmd *cobra.Command) *ui.Printer {
-	stdout := cmd.OutOrStdout()
-	s := ui.Resolve(ui.Input{
-		Getenv:         os.Getenv,
+	stdout, stderr := cmd.OutOrStdout(), cmd.ErrOrStderr()
+	out, errs := g.settings(os.Getenv, ui.IsTerminal(stdout), ui.IsTerminal(stderr), ui.IsTerminal(cmd.InOrStdin()))
+	return ui.NewPrinter(out, stdout, stderr, ui.WithStderr(errs))
+}
+
+// settings resolves the output settings of stdout, where results go, and of
+// stderr, where failures go: each follows its own stream (ADR-0003), and
+// reporting a failure never prompts.
+func (g *globalFlags) settings(getenv func(string) string, stdoutTerminal, stderrTerminal, stdinTerminal bool) (stdout, stderr ui.Settings) {
+	in := ui.Input{
+		Getenv:         getenv,
 		JSON:           g.json,
 		Plain:          g.plain,
 		Yes:            g.yes,
 		NoAnimation:    g.noAnimation,
-		OutputTerminal: ui.IsTerminal(stdout),
-		StdinTerminal:  ui.IsTerminal(cmd.InOrStdin()),
-	})
-	return ui.NewPrinter(s, stdout, cmd.ErrOrStderr())
+		OutputTerminal: stdoutTerminal,
+		StdinTerminal:  stdinTerminal,
+	}
+	stdout = ui.Resolve(in)
+	in.OutputTerminal, in.StdinTerminal = stderrTerminal, false
+	return stdout, ui.Resolve(in)
 }
 
 func newRootCmd(stdout, stderr io.Writer) *cobra.Command {
@@ -72,7 +82,7 @@ func newRootCmd(stdout, stderr io.Writer) *cobra.Command {
 	pf.BoolVar(&g.noAnimation, "no-animation", false, "disable animations")
 	root.MarkFlagsMutuallyExclusive("json", "plain")
 
-	root.AddCommand(newVersionCmd(&g))
+	root.AddCommand(newVersionCmd(&g), newTraceCmd(&g))
 	return root
 }
 

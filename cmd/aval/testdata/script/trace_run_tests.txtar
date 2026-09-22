@@ -1,0 +1,61 @@
+# With --run-tests, aval trace runs go test and shows each bound test's
+# outcome; an obligation whose test fails fails the trace.
+
+[!exec:go] skip 'needs the go command'
+
+cd repo
+! exec aval trace --run-tests --plain
+stdout '^ID +KIND +STATUS +RUN +TITLE +SPEC +TESTS$'
+stdout '^ORD-F01 +F +traced +pass +Refund is idempotent +openspec/specs/refunds/spec.md:5 +refund/refund_test.go:6 pass$'
+stdout '^ORD-N01 +N +traced +fail +Refund never exceeds the total +openspec/specs/refunds/spec.md:12 +refund/refund_test.go:11 fail$'
+stderr '^aval: trace failed: 1 failing obligation$'
+
+! exec aval trace --run-tests --json
+stdout '"ranTests": true'
+stdout '"runtime": "fail"'
+stdout '"runtime": "pass"'
+
+-- repo/go.mod --
+module example.com/shop
+
+go 1.22
+-- repo/openspec/specs/refunds/spec.md --
+# refunds Specification
+
+## Requirements
+
+### Requirement: ORD-F01 Refund is idempotent
+The system SHALL process a refund at most once per key.
+
+#### Scenario: Duplicate key
+- **WHEN** a refund arrives with a processed key
+- **THEN** the first result is returned
+
+### Requirement: ORD-N01 Refund never exceeds the total
+The system SHALL NOT refund more than the order total.
+
+#### Scenario: Too much
+- **WHEN** the amount exceeds the total
+- **THEN** the refund is rejected
+-- repo/refund/refund.go --
+package refund
+
+// Refund returns how much of amount is refunded on an order of total.
+func Refund(amount, total int) int { return amount }
+-- repo/refund/refund_test.go --
+package refund
+
+import "testing"
+
+func TestRefund(t *testing.T) {
+	t.Run("ORD-F01 refunds once", func(t *testing.T) {
+		if got := Refund(5, 10); got != 5 {
+			t.Fatalf("Refund(5, 10) = %d, want 5", got)
+		}
+	})
+	t.Run("ORD-N01 caps at the total", func(t *testing.T) {
+		if got := Refund(20, 10); got > 10 {
+			t.Fatalf("Refund(20, 10) = %d, want at most 10", got)
+		}
+	})
+}
