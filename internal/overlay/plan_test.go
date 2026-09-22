@@ -21,9 +21,7 @@ func id(t *testing.T, s string) obligation.ID {
 
 func TestStrength(t *testing.T) {
 	t.Parallel()
-	const (
-		pass, fail, buildFail = evidence.Pass, evidence.Fail, evidence.BuildFail
-	)
+	const pass, fail, buildFail = evidence.Pass, evidence.Fail, evidence.BuildFail
 	tests := []struct {
 		before, after evidence.Status
 		char          bool
@@ -50,31 +48,27 @@ func TestStrength(t *testing.T) {
 
 func TestPattern(t *testing.T) {
 	t.Parallel()
-	f01, f02, f03 := id(t, "ORD-F01"), id(t, "ORD-F02"), id(t, "ORD-F03")
+	f01 := id(t, "ORD-F01")
 	tests := []struct {
-		name   string
-		owners []owner
-		want   string
+		name  string
+		names []string
+		want  string
 	}{
-		{"one ID, as gotest selects it", []owner{{f01, "TestOrder/ORD-F01_rejects"}}, gotest.RunPattern("TestOrder", f01)},
-		{
-			"IDs under one path share it, duplicates once",
-			[]owner{{f01, "TestOrder/ORD-F01_x"}, {f01, "TestOrder/ORD-F01_x#01"}, {f02, "TestOrder/ORD-F02"}},
-			`^TestOrder$/^(ORD-F01|ORD-F02)([_#]|$)`,
-		},
+		{"as gotest selects it", []string{"TestOrder/ORD-F01_rejects"}, gotest.RunPattern("TestOrder", f01)},
+		{"duplicates once", []string{"TestOrder/ORD-F01_x", "TestOrder/ORD-F01_x#01", "TestOrder/ORD-F01"}, `^TestOrder$/^ORD-F01([_#]|$)`},
 		{
 			"deeper levels, suites and fake levels from a / in a name",
-			[]owner{{f01, "TestSuite/TestX/ORD-F01_x"}, {f02, "TestSuite/happy_path/ORD-F02_in/out"}},
-			`^TestSuite$/^TestX$/^ORD-F01([_#]|$)|^TestSuite$/^happy_path$/^ORD-F02([_#]|$)`,
+			[]string{"TestSuite/TestX/ORD-F01_x", "TestSuite/happy_path/ORD-F01_in/out"},
+			`^TestSuite$/^TestX$/^ORD-F01([_#]|$)|^TestSuite$/^happy_path$/^ORD-F01([_#]|$)`,
 		},
 		{
 			"bound by attr: the exact name, quoted",
-			[]owner{{f03, "TestOrder/dup_(sku)#01"}, {f03, "TestOrder/ORD-F01_carries_another_ID"}},
-			`^TestOrder$/^dup_\(sku\)#01$|^TestOrder$/^ORD-F01_carries_another_ID$`,
+			[]string{"TestOrder/dup_(sku)#01", "TestOrder/ORD-F02_carries_another_ID"},
+			`^TestOrder$/^dup_\(sku\)#01$|^TestOrder$/^ORD-F02_carries_another_ID$`,
 		},
 	}
 	for _, tt := range tests {
-		if got := (plannedRun{owners: tt.owners}).pattern(); got != tt.want {
+		if got := pattern(f01, tt.names); got != tt.want {
 			t.Errorf("%s: pattern = %q, want %q", tt.name, got, tt.want)
 		}
 	}
@@ -83,20 +77,19 @@ func TestPattern(t *testing.T) {
 func TestNewPlan(t *testing.T) {
 	t.Parallel()
 	f01, f02 := id(t, "ORD-F01"), id(t, "ORD-F02")
-	p, err := newPlan([]Target{
-		{ID: f01, Tests: []string{"TestA/ORD-F01", "TestB/x/ORD-F01"}, Packages: []string{"m/a"}},
-		{ID: f02, Tests: []string{"TestA/ORD-F02"}, Packages: []string{"m/b", "m/a"}},
+	plan, err := newPlan([]Target{
+		{ID: f01, Tests: []string{"TestA/ORD-F01", "TestB/x/ORD-F01", "TestA/ORD-F01_y"}, Packages: []string{"m/a"}},
+		{ID: f02, Tests: []string{"TestA/ORD-F02"}, Packages: []string{"m/b"}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got []plannedRun
-	for _, r := range p.runs {
-		got = append(got, plannedRun{test: r.test, pkgs: r.pkgs})
+	want := [][]plannedRun{
+		{{"TestA", `^TestA$/^ORD-F01([_#]|$)`}, {"TestB", `^TestB$/^x$/^ORD-F01([_#]|$)`}},
+		{{"TestA", `^TestA$/^ORD-F02([_#]|$)`}}, // a run of its own: siblings stay apart
 	}
-	want := []plannedRun{{test: "TestA", pkgs: []string{"m/a", "m/b"}}, {test: "TestB", pkgs: []string{"m/a"}}}
-	if !reflect.DeepEqual(got, want) || !reflect.DeepEqual(p.targets[0].tops, []string{"TestA", "TestB"}) {
-		t.Errorf("runs = %+v, tops = %q; want %+v and [TestA TestB]", got, p.targets[0].tops, want)
+	if len(plan) != 2 || !reflect.DeepEqual(plan[0].runs, want[0]) || !reflect.DeepEqual(plan[1].runs, want[1]) {
+		t.Errorf("plan = %+v, want runs %+v", plan, want)
 	}
 }
 
@@ -114,12 +107,12 @@ func TestRunRejectsTargets(t *testing.T) {
 		"ID in two places": {valid, valid},
 	}
 	for name, targets := range tests {
-		// No git runs: the directory does not exist.
-		if _, err := Run(t.Context(), "missing", "main", "HEAD", targets, Options{}); !errors.Is(err, ErrInvalidTarget) {
+		// Validation comes first: this worktree was never prepared.
+		if _, err := new(Worktree).Run(t.Context(), targets, RunOptions{}); !errors.Is(err, ErrInvalidTarget) {
 			t.Errorf("%s: err = %v, want ErrInvalidTarget", name, err)
 		}
 	}
-	if res, err := Run(t.Context(), "missing", "main", "HEAD", nil, Options{}); err != nil || !reflect.DeepEqual(res, Result{}) {
+	if res, err := new(Worktree).Run(t.Context(), nil, RunOptions{}); err != nil || !reflect.DeepEqual(res, Result{}) {
 		t.Errorf("no targets: Run = %+v, %v; want a zero Result", res, err)
 	}
 }
@@ -127,23 +120,58 @@ func TestRunRejectsTargets(t *testing.T) {
 func TestParseChanges(t *testing.T) {
 	t.Parallel()
 	out := "M\x00a/b_test.go\x00A\x00a/testdata/x y.txt\x00D\x00a/old_test.go\x00M\x00a/b.go\x00" +
-		"T\x00testdata/link\x00A\x00a/testdata.go\x00D\x00c/testdata/d/e\x00"
-	copied, removed, err := parseChanges([]byte(out))
+		"T\x00testdata/link\x00A\x00a/testdata.go\x00D\x00c/testdata/d/e\x00A\x00a/fixtures/in.txt\x00" +
+		"D\x00a/gone.txt\x00M\x00go.mod\x00A\x00n/n.go\x00"
+	got, err := parseChanges([]byte(out))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"a/b_test.go", "a/testdata/x y.txt", "testdata/link"}; !reflect.DeepEqual(copied, want) {
-		t.Errorf("copied = %q, want %q", copied, want)
+	want := changeSet{
+		copy:   []string{"a/b_test.go", "a/testdata/x y.txt", "testdata/link"},
+		remove: []string{"a/old_test.go", "c/testdata/d/e"},
+		others: []string{"a/fixtures/in.txt", "go.mod"},
+		newGo:  []string{"a/testdata.go", "n/n.go"},
 	}
-	if want := []string{"a/old_test.go", "c/testdata/d/e"}; !reflect.DeepEqual(removed, want) {
-		t.Errorf("removed = %q, want %q", removed, want)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("parseChanges = %+v, want %+v", got, want)
 	}
-	if c, r, err := parseChanges(nil); c != nil || r != nil || err != nil {
-		t.Errorf("no changes: %q, %q, %v", c, r, err)
+	if got, err := parseChanges(nil); !reflect.DeepEqual(got, changeSet{}) || err != nil {
+		t.Errorf("no changes: %+v, %v", got, err)
 	}
 	for _, bad := range []string{"M\x00a_test.go", "R100\x00a_test.go\x00"} {
-		if _, _, err := parseChanges([]byte(bad)); err == nil {
+		if _, err := parseChanges([]byte(bad)); err == nil {
 			t.Errorf("parseChanges(%q) = nil error", bad)
+		}
+	}
+}
+
+func TestOwnBuild(t *testing.T) {
+	t.Parallel()
+	for failed, want := range map[string]bool{
+		"m/p [m/p.test]":      true, // its test files do not compile
+		"m/p_test [m/p.test]": true, // nor its external tests
+		"m/p":                 true,
+		"":                    true,
+		"example.com/dep":     false, // a missing module
+		"m/q":                 false, // another package
+		"m/q [m/p.test]":      false,
+		"m/p [m/q.test]":      false,
+	} {
+		if got := ownBuild(gotest.Package{Name: "m/p", FailedBuild: failed}); got != want {
+			t.Errorf("ownBuild(FailedBuild %q) = %v, want %v", failed, got, want)
+		}
+	}
+}
+
+func TestSupported(t *testing.T) {
+	t.Parallel()
+	for v, want := range map[string]bool{
+		"git version 2.40.0": true, "git version 2.50.1 (Apple Git-155)": true,
+		"git version 2.45.1.windows.1": true, "git version 3.0.0": true,
+		"git version 2.39.5": false, "git version 1.99.0": false, "hub version 2.14": false,
+	} {
+		if got := supported(v); got != want {
+			t.Errorf("supported(%q) = %v, want %v", v, got, want)
 		}
 	}
 }

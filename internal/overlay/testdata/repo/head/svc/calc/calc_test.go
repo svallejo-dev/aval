@@ -20,6 +20,6 @@ func TestSuite(t *testing.T) {
 		})
 	})
 	t.Run("TestOther", func(t *testing.T) {
-		t.Error("a sibling of the selected test ran")
+		t.Log("a sibling the base runs must not select")
 	})
 }

@@ -14,9 +14,9 @@ import (
 	"github.com/svallejo-dev/aval/internal/evidence"
 )
 
-// goEnv keeps the developer's workspace, flags and toolchain out of the
-// runs in the fixture module.
-var goEnv = []string{"GOWORK=off", "GOFLAGS=-mod=readonly", "GOTOOLCHAIN=local"}
+// goEnv keeps the developer's workspace, flags, toolchain and proxy out of
+// the runs in the fixture module.
+var goEnv = []string{"GOWORK=off", "GOFLAGS=-mod=readonly", "GOTOOLCHAIN=local", "GOPROXY=off"}
 
 // testRepo is a git repository built for one test, out of the developer's
 // git configuration.
@@ -40,7 +40,8 @@ func (r testRepo) git(args ...string) string {
 }
 
 // fixtureRepo commits testdata/repo/base and then testdata/repo/head, and
-// returns the repository and both commits.
+// returns the repository and both commits. The index is rebuilt from the
+// files each time, so a rename that only changes case is one on macOS too.
 func fixtureRepo(t *testing.T) (r testRepo, base, head string) {
 	t.Helper()
 	r = testRepo{t: t, dir: t.TempDir()}
@@ -60,6 +61,7 @@ func fixtureRepo(t *testing.T) (r testRepo, base, head string) {
 		if err := os.CopyFS(r.dir, os.DirFS(filepath.Join("testdata", "repo", tree))); err != nil {
 			t.Fatal(err)
 		}
+		r.git("rm", "-r", "--quiet", "--cached", "--ignore-unmatch", ".")
 		r.git("add", "--all")
 		r.git("commit", "--quiet", "--message", tree)
 		return r.git("rev-parse", "HEAD")
@@ -67,7 +69,7 @@ func fixtureRepo(t *testing.T) (r testRepo, base, head string) {
 	return r, commit("base"), commit("head")
 }
 
-// assertClean checks that Run left no worktree and nothing in tmp behind.
+// assertClean checks that no worktree and nothing in tmp is left behind.
 func assertClean(t *testing.T, r testRepo, tmp string) {
 	t.Helper()
 	if n := strings.Count("\n"+r.git("worktree", "list", "--porcelain"), "\nworktree "); n != 1 {
@@ -99,6 +101,16 @@ func TestRun(t *testing.T) {
 	if err := os.WriteFile(hook, []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil { //nolint:gosec // a hook must be executable
 		t.Fatal(err)
 	}
+	tmp := t.TempDir()
+
+	w, err := Prepare(t.Context(), filepath.Join(r.dir, "svc"), "HEAD~1", "HEAD", PrepareOptions{TempDir: tmp})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Head's tests run now and may rewrite the working tree: Run must not care.
+	if err := os.WriteFile(filepath.Join(r.dir, "svc", "calc", "calc_test.go"), []byte("package calc\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	targets := []Target{
 		target(t, "ORD-F01", "TestSpec/ORD-F01_adds_two_numbers", "calc", false),
 		target(t, "ORD-F02", "TestSpec/ORD-F02_doubles", "money", false),
@@ -108,65 +120,78 @@ func TestRun(t *testing.T) {
 		target(t, "ORD-F06", "TestBanner/ORD-F06_matches_the_golden_file", "banner", true),
 		target(t, "ORD-F08", "TestSuite/TestAdd/ORD-F08_adds_many", "calc", false),
 		target(t, "ORD-F09", "TestGhost/ORD-F09_is_nowhere", "calc", false),
+		target(t, "ORD-F10", "TestShout/ORD-F10_shouts_the_fixture", "reader", false),
+		target(t, "ORD-F12", "TestLoud/ORD-F12_is_loud", "casing", false),
+		target(t, "ORD-F13", "TestDep/ORD-F13_uses_the_new_module", "deps", false),
+		target(t, "ORD-F14", "TestUses/ORD-F14_greets_through_the_new_package", "uses", false),
+		target(t, "ORD-F18", "TestLevel/ORD-F18_starts_at_level_zero", "shared", false),
+		target(t, "ORD-F19", "TestLevel/ORD-F19_raises_the_level_while_f_runs", "shared", false),
 	}
-	tmp := t.TempDir()
-
-	res, err := Run(t.Context(), filepath.Join(r.dir, "svc"), "HEAD~1", "HEAD", targets, Options{Env: goEnv, TempDir: tmp})
-	if err != nil {
-		t.Fatal(err)
+	res, err := w.Run(t.Context(), targets, RunOptions{Env: goEnv})
+	if cerr := w.Close(); err != nil || cerr != nil {
+		t.Fatalf("Run: %v; Close: %v", err, cerr)
 	}
 	assertClean(t, r, tmp)
+	if _, err := w.Run(t.Context(), targets, RunOptions{}); !errors.Is(err, ErrClosed) || w.Close() != nil {
+		t.Errorf("Run after Close = %v, want ErrClosed; a second Close must do nothing", err)
+	}
 
-	if res.Base != base || res.Head != head {
-		t.Errorf("Base, Head = %s, %s; want %s, %s", res.Base, res.Head, base, head)
+	if w.Base != base || w.Head != head {
+		t.Errorf("Base, Head = %s, %s; want %s, %s", w.Base, w.Head, base, head)
 	}
-	wantCopied := []string{
-		"svc/banner/banner_test.go", "svc/banner/testdata/want.txt", "svc/calc/calc_test.go",
-		"svc/hang/hang_test.go", "svc/legacy/legacy_test.go", "svc/money/money_test.go", "svc/tax/tax_test.go",
+	var wantCopied []string
+	for _, pkg := range []string{"banner", "banner/testdata/want.txt", "calc", "casing", "deps", "gitty", "hang", "legacy", "money", "reader", "shared", "tax", "uses"} {
+		if !strings.Contains(pkg, ".") {
+			pkg += "/" + pkg + "_test.go"
+		}
+		wantCopied = append(wantCopied, "svc/"+pkg)
 	}
-	if !reflect.DeepEqual(res.Copied, wantCopied) || !reflect.DeepEqual(res.Removed, []string{"svc/tax/old_test.go"}) {
-		t.Errorf("Copied = %q, Removed = %q; want %q and [svc/tax/old_test.go]", res.Copied, res.Removed, wantCopied)
+	if want := []string{"svc/casing/Casing_test.go", "svc/tax/old_test.go"}; !reflect.DeepEqual(w.Copied, wantCopied) || !reflect.DeepEqual(w.Removed, want) {
+		t.Errorf("Copied = %q, Removed = %q; want %q and %q", w.Copied, w.Removed, wantCopied, want)
+	}
+	if want := []string{"svc/reader/fixtures/in.txt"}; !reflect.DeepEqual(res.Uncopied, want) {
+		t.Errorf("Uncopied = %q, want %q", res.Uncopied, want)
 	}
 
 	want := map[string]struct {
 		before   evidence.Status
 		strength evidence.Strength
+		note     string
 	}{
-		"ORD-F01": {evidence.Fail, evidence.Strong},        // head's fix is not copied
-		"ORD-F02": {evidence.BuildFail, evidence.Weak},     // Double does not exist at the base
-		"ORD-F03": {evidence.Pass, evidence.None},          // nothing new, and not declared so
-		"ORD-F04": {evidence.Pass, evidence.Characterized}, // nothing new, as declared
-		"ORD-F05": {evidence.Fail, evidence.Strong},        // renamed away: old_test.go is gone
-		"ORD-F06": {evidence.Pass, evidence.Characterized}, // the testdata came along
-		"ORD-F08": {evidence.Fail, evidence.Strong},        // selected two levels down
-		"ORD-F09": {evidence.NotRun, evidence.None},        // selects nothing
+		"ORD-F01": {evidence.Fail, evidence.Strong, ""},                                                  // head's fix is not copied
+		"ORD-F02": {evidence.BuildFail, evidence.Weak, ""},                                               // its own test build fails
+		"ORD-F03": {evidence.Pass, evidence.None, ""},                                                    // nothing new, and not declared so
+		"ORD-F04": {evidence.Pass, evidence.Characterized, ""},                                           // nothing new, as declared
+		"ORD-F05": {evidence.Fail, evidence.Strong, ""},                                                  // renamed away: old_test.go is gone
+		"ORD-F06": {evidence.Pass, evidence.Characterized, ""},                                           // the testdata came along
+		"ORD-F08": {evidence.Fail, evidence.Strong, ""},                                                  // selected two levels down
+		"ORD-F09": {evidence.NotRun, evidence.None, ""},                                                  // selects nothing
+		"ORD-F10": {evidence.Fail, evidence.Weak, "head-only files: svc/reader/fixtures/in.txt"},         // the fixture stayed behind
+		"ORD-F12": {evidence.Fail, evidence.Strong, ""},                                                  // Casing_test.go became casing_test.go
+		"ORD-F13": {evidence.BuildFail, evidence.None, "in example.com/dep: land new dependencies"},      // a module the base lacks
+		"ORD-F14": {evidence.BuildFail, evidence.Weak, "in example.com/svc/helper, a package head adds"}, // new production code
+		"ORD-F18": {evidence.Pass, evidence.None, ""},                                                    // ORD-F19's leak stays in its own run
+		"ORD-F19": {evidence.Fail, evidence.Strong, ""},
 	}
-	if len(res.Obligations) != len(targets) {
-		t.Fatalf("got %d obligations, want %d", len(res.Obligations), len(targets))
+	if len(res.Obligations) != len(targets) || len(res.Runs) != len(targets) {
+		t.Fatalf("got %d obligations and %d runs, want %d of each", len(res.Obligations), len(res.Runs), len(targets))
 	}
 	for i, o := range res.Obligations {
 		w := want[o.ID.String()]
-		if o.ID != targets[i].ID || o.Before != w.before || o.After != evidence.Pass || o.Strength != w.strength {
-			t.Errorf("obligation %d = %+v, want %s before=%s strength=%s", i, o, targets[i].ID, w.before, w.strength)
+		if o.ID != targets[i].ID || o.Before != w.before || o.After != evidence.Pass || o.Strength != w.strength ||
+			(w.note == "") != (o.Note == "") || !strings.Contains(o.Note, w.note) {
+			t.Errorf("obligation %d = %+v, want %s before=%s strength=%s note ~%q", i, o, targets[i].ID, w.before, w.strength, w.note)
 		}
 	}
-
-	var tests []string
 	for _, run := range res.Runs {
-		tests = append(tests, run.Test)
 		for _, to := range run.Report.Tests {
-			if to.Name == "TestSuite/TestOther" {
-				t.Errorf("run %s ran %s", run.Test, to.Name)
+			if to.Name == "TestSuite/TestOther" || strings.HasPrefix(to.Name, "TestLevel/") && !strings.Contains(to.Name, run.ID.String()) {
+				t.Errorf("the run for %s ran %s", run.ID, to.Name)
 			}
 		}
 	}
-	if want := []string{"TestSpec", "TestGreet", "TestTax", "TestBanner", "TestSuite", "TestGhost"}; !reflect.DeepEqual(tests, want) {
-		t.Fatalf("runs = %q, want %q", tests, want)
-	}
-	spec := res.Runs[0].Options
-	if spec.Run != `^TestSpec$/^(ORD-F01|ORD-F02)([_#]|$)` || spec.Count != 1 ||
-		!reflect.DeepEqual(spec.Packages, []string{"example.com/svc/calc", "example.com/svc/money"}) {
-		t.Errorf("TestSpec run options = %+v", spec)
+	if o := res.Runs[0].Options; o.Run != `^TestSpec$/^ORD-F01([_#]|$)` || o.Count != 1 || !reflect.DeepEqual(o.Packages, []string{"example.com/svc/calc"}) {
+		t.Errorf("ORD-F01's run options = %+v", o)
 	}
 }
 
@@ -183,6 +208,10 @@ func TestRunCanceled(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 		defer cancel()
 		started, tmp := filepath.Join(t.TempDir(), "started"), t.TempDir()
+		w, err := Prepare(ctx, dir, "HEAD~1", "HEAD", PrepareOptions{TempDir: tmp})
+		if err != nil {
+			t.Fatal(err)
+		}
 		go func() {
 			for ctx.Err() == nil {
 				if _, err := os.Stat(started); err == nil {
@@ -191,45 +220,48 @@ func TestRunCanceled(t *testing.T) {
 				time.Sleep(10 * time.Millisecond)
 			}
 		}()
-		opts := Options{Env: append([]string{"AVAL_OVERLAY_STARTED=" + started}, goEnv...), TempDir: tmp}
-		if _, err := Run(ctx, dir, "HEAD~1", "HEAD", targets, opts); !errors.Is(err, context.Canceled) {
+		opts := RunOptions{Env: append([]string{"AVAL_OVERLAY_STARTED=" + started}, goEnv...)}
+		if _, err := w.Run(ctx, targets, opts); !errors.Is(err, context.Canceled) {
 			t.Errorf("err = %v, want context.Canceled", err)
+		}
+		if err := w.Close(); err != nil {
+			t.Error(err)
 		}
 		assertClean(t, r, tmp)
 	})
-	t.Run("before Run", func(t *testing.T) {
+	t.Run("before Prepare", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 		tmp := t.TempDir()
-		if _, err := Run(ctx, dir, "HEAD~1", "HEAD", targets, Options{TempDir: tmp}); !errors.Is(err, context.Canceled) {
-			t.Errorf("err = %v, want context.Canceled", err)
+		if w, err := Prepare(ctx, dir, "HEAD~1", "HEAD", PrepareOptions{TempDir: tmp}); !errors.Is(err, context.Canceled) || w != nil {
+			t.Errorf("Prepare = %v, %v; want nil and context.Canceled", w, err)
 		}
 		assertClean(t, r, tmp)
 	})
 }
 
-func TestRunRevisions(t *testing.T) {
+func TestPrepareRevisions(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds a git repository")
 	}
 	t.Parallel()
 	r, _, _ := fixtureRepo(t)
-	targets := []Target{target(t, "ORD-F01", "TestSpec/ORD-F01_adds_two_numbers", "calc", false)}
+	dir := filepath.Join(r.dir, "svc")
 	for _, rev := range []string{"nope", "-h", "", "HEAD^{tree}"} {
-		if _, err := Run(t.Context(), r.dir, rev, "HEAD", targets, Options{}); !errors.Is(err, ErrRevision) {
+		if _, err := Prepare(t.Context(), dir, rev, "HEAD", PrepareOptions{}); !errors.Is(err, ErrRevision) {
 			t.Errorf("base %q: err = %v, want ErrRevision", rev, err)
 		}
 	}
 	var gerr *GitError
-	if _, err := Run(t.Context(), t.TempDir(), "HEAD~1", "HEAD", targets, Options{}); !errors.As(err, &gerr) || errors.Is(err, ErrRevision) {
+	if _, err := Prepare(t.Context(), t.TempDir(), "HEAD~1", "HEAD", PrepareOptions{}); !errors.As(err, &gerr) || errors.Is(err, ErrRevision) {
 		t.Errorf("outside a repository: err = %v, want a *GitError", err)
 	}
 }
 
 // TestRunEnv checks that RUNNER_TEMP holds the worktree and that a git
-// hook's repository variables do not leak into the worktree's commands:
-// with the repository checked out at the base, they would stage head's
-// tests in its index.
+// hook's repository variables reach neither aval's git nor the tests at the
+// base: with the repository checked out at the base, the overlay would stage
+// head's tests in its index, and ORD-F11's git add its own file.
 func TestRunEnv(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds a git repository and runs go test")
@@ -240,13 +272,21 @@ func TestRunEnv(t *testing.T) {
 	t.Setenv("RUNNER_TEMP", tmp)
 	t.Setenv("GIT_DIR", filepath.Join(r.dir, ".git"))
 	t.Setenv("GIT_INDEX_FILE", filepath.Join(r.dir, ".git", "index"))
-	targets := []Target{target(t, "ORD-F01", "TestSpec/ORD-F01_adds_two_numbers", "calc", false)}
+	targets := []Target{
+		target(t, "ORD-F01", "TestSpec/ORD-F01_adds_two_numbers", "calc", false),
+		target(t, "ORD-F11", "TestGit/ORD-F11_stages_in_its_own_repository", "gitty", false),
+	}
 
-	res, err := Run(t.Context(), filepath.Join(r.dir, "svc"), base, head, targets, Options{Env: goEnv})
+	w, err := Prepare(t.Context(), filepath.Join(r.dir, "svc"), base, head, PrepareOptions{})
+	var res Result
+	if err == nil {
+		res, err = w.Run(t.Context(), targets, RunOptions{Env: goEnv})
+		err = errors.Join(err, w.Close())
+	}
 	_ = os.Unsetenv("GIT_DIR")
 	_ = os.Unsetenv("GIT_INDEX_FILE")
-	if err != nil || len(res.Obligations) != 1 || res.Obligations[0].Strength != evidence.Strong {
-		t.Errorf("Run = %+v, %v; want ORD-F01 strong", res.Obligations, err)
+	if err != nil || len(res.Obligations) != 2 || res.Obligations[0].Strength != evidence.Strong || res.Obligations[1].Before != evidence.Pass {
+		t.Errorf("Run = %+v, %v; want ORD-F01 strong and ORD-F11 passing", res.Obligations, err)
 	}
 	if st := r.git("status", "--porcelain"); st != "" {
 		t.Errorf("the repository changed:\n%s", st)
@@ -254,10 +294,9 @@ func TestRunEnv(t *testing.T) {
 	assertClean(t, r, tmp)
 }
 
-func TestRunGitMissing(t *testing.T) {
+func TestPrepareGitMissing(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
-	targets := []Target{target(t, "ORD-F01", "TestSpec/ORD-F01_x", "calc", false)}
-	_, err := Run(t.Context(), t.TempDir(), "HEAD~1", "HEAD", targets, Options{})
+	_, err := Prepare(t.Context(), t.TempDir(), "HEAD~1", "HEAD", PrepareOptions{})
 	var gerr *GitError
 	if !errors.Is(err, ErrToolMissing) || !errors.Is(err, exec.ErrNotFound) || !errors.As(err, &gerr) {
 		t.Errorf("err = %v, want ErrToolMissing wrapping a *GitError and exec.ErrNotFound", err)

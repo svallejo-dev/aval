@@ -10,56 +10,42 @@ import (
 	"github.com/svallejo-dev/aval/internal/obligation"
 )
 
-// plan is the validated targets, grouped into one go test run per
-// top-level test.
-type plan struct {
-	targets []plannedTarget
-	runs    []plannedRun
-}
-
+// plannedTarget is a validated target and its runs.
 type plannedTarget struct {
 	Target
-	tops []string // the top-level tests of Tests, deduplicated
+	runs []plannedRun // one per top-level test of Tests, in order of first appearance
 }
 
 type plannedRun struct {
-	test   string
-	owners []owner  // the tests to select, from every target with one under test
-	pkgs   []string // the union of those targets' packages
+	test    string // the top-level test
+	pattern string // the -run pattern that selects the target's tests under it
 }
 
-// owner is a test that owns an obligation at head.
-type owner struct {
-	id   obligation.ID
-	name string
-}
-
-func newPlan(targets []Target) (plan, error) {
-	var p plan
+func newPlan(targets []Target) ([]plannedTarget, error) {
+	plan := make([]plannedTarget, 0, len(targets))
 	seen := make(map[obligation.ID]bool, len(targets))
 	for _, t := range targets {
 		if err := t.validate(); err != nil {
-			return plan{}, err
+			return nil, err
 		}
 		if seen[t.ID] {
-			return plan{}, fmt.Errorf("%w: %s appears twice", ErrInvalidTarget, t.ID)
+			return nil, fmt.Errorf("%w: %s appears twice", ErrInvalidTarget, t.ID)
 		}
 		seen[t.ID] = true
-		pt := plannedTarget{Target: t}
+		var tops []string
+		names := make(map[string][]string)
 		for _, name := range t.Tests {
 			top, _, _ := strings.Cut(name, "/")
-			pt.tops = appendNew(pt.tops, top)
-			i := slices.IndexFunc(p.runs, func(r plannedRun) bool { return r.test == top })
-			if i < 0 {
-				i = len(p.runs)
-				p.runs = append(p.runs, plannedRun{test: top})
-			}
-			p.runs[i].owners = appendNew(p.runs[i].owners, owner{t.ID, name})
-			p.runs[i].pkgs = appendNew(p.runs[i].pkgs, t.Packages...)
+			tops = appendNew(tops, top)
+			names[top] = appendNew(names[top], name)
 		}
-		p.targets = append(p.targets, pt)
+		pt := plannedTarget{Target: t}
+		for _, top := range tops {
+			pt.runs = append(pt.runs, plannedRun{test: top, pattern: pattern(t.ID, names[top])})
+		}
+		plan = append(plan, pt)
 	}
-	return p, nil
+	return plan, nil
 }
 
 func (t Target) validate() error {
@@ -88,55 +74,30 @@ func (t Target) validate() error {
 	return nil
 }
 
-// pattern returns the -run pattern that selects the run's owners and what
-// runs under them, and nothing else: one alternative per path, each level
-// quoted and anchored. The level that carries the ID matches it with any
-// "_..." or "#NN" suffix, so duplicates run too, and IDs under the same
-// path share it: ^TestSuite$/^TestX$/^(ORD-F01|ORD-F02)([_#]|$). An owner
-// bound only by an aval.req attr is selected by its exact name.
-func (r plannedRun) pattern() string {
-	type path struct {
-		levels string   // quoted and anchored, joined by "/"
-		ids    []string // quoted IDs one level down; none selects levels exactly
-	}
-	var paths []path
-	for _, o := range r.owners {
-		levels, id := o.selector()
-		i := slices.IndexFunc(paths, func(p path) bool { return p.levels == levels && (len(p.ids) > 0) == (id != "") })
-		if i < 0 {
-			i = len(paths)
-			paths = append(paths, path{levels: levels})
-		}
-		if id != "" {
-			paths[i].ids = appendNew(paths[i].ids, id)
-		}
-	}
-	alts := make([]string, len(paths))
-	for i, p := range paths {
-		switch len(p.ids) {
-		case 0:
-			alts[i] = p.levels
-		case 1:
-			alts[i] = p.levels + "/^" + p.ids[0] + "([_#]|$)"
-		default:
-			alts[i] = p.levels + "/^(" + strings.Join(p.ids, "|") + ")([_#]|$)"
-		}
+// pattern returns the -run pattern that selects the tests named, which own
+// id, what runs under them, and nothing else: one alternative per name,
+// each level quoted and anchored. The level that carries id matches it with
+// any "_..." or "#NN" suffix, so duplicates run too:
+// ^TestSuite$/^TestX$/^ORD-F01([_#]|$). A test bound only by an aval.req
+// attr is selected by its exact name.
+func pattern(id obligation.ID, names []string) string {
+	var alts []string
+	for _, name := range names {
+		alts = appendNew(alts, selector(id, name))
 	}
 	return strings.Join(alts, "|")
 }
 
-// selector splits the owner's name at the outermost level that carries its
-// ID: the levels above it, quoted and anchored, and the quoted ID. With no
-// such level, the attr case, levels is the whole name and id is "".
-func (o owner) selector() (levels, id string) {
-	var quoted []string
-	for level := range strings.SplitSeq(o.name, "/") {
-		if got, ok := obligation.FromTestSegment(level); ok && got == o.id {
-			return strings.Join(quoted, "/"), regexp.QuoteMeta(o.id.String())
+// selector selects name down to its outermost level that carries id.
+func selector(id obligation.ID, name string) string {
+	var levels []string
+	for level := range strings.SplitSeq(name, "/") {
+		if got, ok := obligation.FromTestSegment(level); ok && got == id {
+			return strings.Join(append(levels, "^"+regexp.QuoteMeta(id.String())+"([_#]|$)"), "/")
 		}
-		quoted = append(quoted, "^"+regexp.QuoteMeta(level)+"$")
+		levels = append(levels, "^"+regexp.QuoteMeta(level)+"$")
 	}
-	return strings.Join(quoted, "/"), ""
+	return strings.Join(levels, "/")
 }
 
 // appendNew appends the values of vs that s does not hold yet.
