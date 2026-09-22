@@ -3,6 +3,7 @@ package testsource
 import (
 	"fmt"
 	"maps"
+	"path"
 	"slices"
 	"strings"
 
@@ -15,23 +16,26 @@ import (
 // and MODIFIED deltas, whose tests are expected to change:
 //
 //   - skip_added: a bound test skips in head and did not in base;
-//   - fingerprint_changed: a bound test's code changed, or the ID gained a
-//     declaration, in the same file or another one;
+//   - fingerprint_changed: a bound test or something it depends on changed,
+//     or the ID gained a declaration, in the same file or another one;
 //   - test_removed: a declaration of the ID has no counterpart in head.
 //
-// Declarations of an ID are paired one by one: first by fingerprint, so moving
-// a test is not a change, then by file and test function, then in order. A
-// copy of an ID declared in another file therefore never hides the removal,
-// edit or skip of another copy. IDs first declared in head bound no test
-// before and are ignored. The result is sorted by ID and never nil.
-func Compare(base, head []Declaration, changed map[string]bool) []evidence.Finding {
+// Declarations of an ID are paired one by one, and only within the same
+// directory and top-level test function: moving a test to another package or
+// function is a removal plus a new declaration. Within those, pairing goes
+// first by fingerprint, so moving a test inside its package is not a change,
+// then by file, then in order. A copy of an ID declared elsewhere therefore
+// never hides the removal, edit or skip of another copy. IDs first declared
+// in head bound no test before and are ignored. The result is sorted by ID and
+// never nil.
+func Compare(base, head []Declaration, changed map[obligation.ID]bool) []evidence.Finding {
 	bases, heads := byID(base), byID(head)
 	ids := slices.SortedFunc(maps.Keys(bases), func(a, b obligation.ID) int {
 		return strings.Compare(a.String(), b.String())
 	})
 	out := []evidence.Finding{}
 	for _, id := range ids {
-		if !changed[id.String()] {
+		if !changed[id] {
 			out = append(out, compareID(id.String(), bases[id], heads[id])...)
 		}
 	}
@@ -41,7 +45,7 @@ func Compare(base, head []Declaration, changed map[string]bool) []evidence.Findi
 // pairings are tried in order; each pairs what the previous ones left.
 var pairings = []func(b, h Declaration) bool{
 	func(b, h Declaration) bool { return b.Fingerprint == h.Fingerprint },
-	func(b, h Declaration) bool { return b.File == h.File && b.Test == h.Test },
+	func(b, h Declaration) bool { return b.File == h.File },
 	func(Declaration, Declaration) bool { return true },
 }
 
@@ -54,7 +58,7 @@ func compareID(id string, base, head []Declaration) []evidence.Finding {
 	for _, same := range pairings {
 		for i, b := range base {
 			for j, h := range head {
-				if pair[i] < 0 && !used[j] && same(b, h) {
+				if pair[i] < 0 && !used[j] && b.Test == h.Test && path.Dir(b.File) == path.Dir(h.File) && same(b, h) {
 					pair[i], used[j] = j, true
 				}
 			}
@@ -73,7 +77,7 @@ func compareID(id string, base, head []Declaration) []evidence.Finding {
 		case head[pair[i]].Skips && !b.Skips:
 			add(evidence.SkipAdded, "test bound to %s skips now", head[pair[i]])
 		case head[pair[i]].Fingerprint != b.Fingerprint:
-			add(evidence.FingerprintChanged, "test bound to %s changed outside its delta", head[pair[i]])
+			add(evidence.FingerprintChanged, "test bound to %s, or what it depends on, changed outside its delta", head[pair[i]])
 		}
 	}
 	for j, h := range head {

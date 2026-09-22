@@ -1,35 +1,63 @@
 // Package testsource reads Go test source, without compiling or running it,
-// to find where obligation IDs are declared and to fingerprint the test code
-// bound to each one, so the gate can tell when a bound test was edited,
-// removed or skipped outside the delta of its obligation (ADR-0004).
+// to find where obligation IDs are declared and to fingerprint everything the
+// bound tests depend on, so the gate can tell when a bound test was edited,
+// removed, disabled or skipped outside the delta of its obligation (ADR-0004).
+//
+// # Declarations
 //
 // Scan finds two kinds of declaration in the top-level functions of _test.go
 // files. A Subtest is a Run call with two arguments whose first one is a
 // string literal starting with an obligation ID followed by a space, a tab or
-// the end: t.Run("ORD-F01 title", func(t *testing.T) {…}), or s.Run in a
-// suite. A TableEntry is an entry of a table that a range loop runs with
-// t.Run(tt.<field>, …), or t.Run(<key>, …) over a map; its name is the string
-// literal keyed by <field> (name, desc, title or any other), the first string
-// literal of an unkeyed entry, or the map key. The table is the composite
-// literal in the range clause, else the last one assigned to that identifier
-// before the loop in the same function, else a package-level var of the same
-// file. Not found: names built at run time, tables from helpers or other
-// files, unkeyed entries whose name is not their first string, index loops
-// (for i := range tests) and IDs bound with t.Attr.
+// the end: t.Run("ORD-F01 title", …), or s.Run in a suite. A TableEntry is an
+// entry of a table that a range loop runs with t.Run(tt.<field>, …), or
+// t.Run(<key>, …) over a map; its name is the string literal keyed by <field>
+// (name, desc, title or any other), the first string literal of an unkeyed
+// entry, or the map key. The table is the composite literal in the range
+// clause, else the last one assigned to that identifier before the loop in the
+// same function, else a package-level var of the package's test files. Not
+// found: names built at run time, tables returned by helpers, unkeyed entries
+// whose name is not their first string, index loops (for i := range tests)
+// and IDs bound with t.Attr.
 //
-// A fingerprint is the hex SHA-256 of the kind, the file's //go:build
-// expression and the canonical encoding (see canon) of the bound code: for a
-// Subtest the whole Run call, name and function literal included (a named
-// function is not followed); for a TableEntry the entry and the body of the
-// loop that runs it, so editing the shared runner changes every entry.
-// Reformatting, commenting or moving that code keeps the fingerprint; changing
-// any of its tokens, or excluding the file from the build, changes it. Helpers
-// and setup outside the bound code are not included. Fingerprints are only
-// comparable between scans by the same aval build.
+// # Fingerprints
 //
-// Declaration.Skips reports a Skip, Skipf or SkipNow call in the bound code,
-// nested subtests included, or directly in a function around it outside its
-// other subtests: a t.Skip at the top of a Test skips all its subtests. Which
+// A fingerprint is the hex SHA-256 of, in order:
+//
+//   - the declaration kind, the package clause, the file's //go:build
+//     expression and its GOOS/GOARCH file name suffix (x_plan9_test.go);
+//   - the enclosing chain: the top-level function and every function literal
+//     around the declaration, with each statement that only calls Run left
+//     out, so adding a sibling subtest changes nothing while an early return,
+//     a shadowing assignment, a testing.Short guard or a wrapping if false
+//     changes every declaration below it;
+//   - the bound code: for a Subtest the whole Run call, for a TableEntry the
+//     entry and the body of the loop that runs it;
+//   - the helpers: every top-level declaration of the package's _test.go files
+//     that the code above names, transitively (functions, vars, consts, types
+//     with their methods; Test, Benchmark, Fuzz and Example functions are never
+//     helpers), plus its TestMain and init functions;
+//   - the imports those files use for the names the code above qualifies, and
+//     their blank and dot imports;
+//   - the content of the package's testdata tree, so rewriting a golden file,
+//     or adding one, changes every fingerprint of the package.
+//
+// Code is hashed through a canonical encoding of its syntax tree (see encoder):
+// reformatting, commenting or moving it keeps the fingerprint, changing any
+// token changes it. A table's entries are left out of every encoding but
+// their own, so adding an entry changes no other fingerprint. Helpers are
+// matched by name without type information: a local variable that shadows a
+// helper's name still pulls the helper in, and an unnamed import is matched
+// by a name guessed from its path. Production code is not included: changing
+// it is what a change is for. Fingerprints are only comparable between scans
+// by the same aval build.
+//
+// # Skips
+//
+// Declaration.Skips reports a Skip, Skipf or SkipNow call on a *testing.T, B
+// or F or testing.TB parameter, in the bound code (a named function passed to
+// Run included) or directly in a function around it outside its other
+// subtests. Parameters are looked up by name; skips inside helpers are not
+// reported as such, but a new helper call changes the fingerprint. Which
 // entries a skip in a table's loop affects is decided at run time, so it marks
 // every entry of that table.
 package testsource
@@ -38,12 +66,12 @@ import (
 	"cmp"
 	"fmt"
 	"go/ast"
-	"go/build/constraint"
 	"go/parser"
 	"go/token"
 	"go/types"
 	"io/fs"
 	"os"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -63,10 +91,11 @@ const (
 // Declaration is one place where a test binds itself to an obligation.
 type Declaration struct {
 	ID          obligation.ID
+	Name        string // the subtest name as written, e.g. "ORD-F01 refunds once"
 	File        string // slash-separated, relative to the scanned directory
 	Test        string // enclosing top-level function: TestRefund, or (*Suite).TestRefund
 	Kind        Kind
-	Fingerprint string // hex SHA-256 of the bound code, see the package doc
+	Fingerprint string // hex SHA-256 of the bound test and what it depends on
 	Line        int    // line of the string literal that carries the ID
 	Skips       bool   // the bound code or a function around it calls Skip
 }
@@ -76,140 +105,248 @@ type Declaration struct {
 // and vendor directories and names starting with "." or "_". A file that does
 // not parse is an error that names its file and line.
 func Scan(dir string) ([]Declaration, error) {
-	fsys := os.DirFS(dir)
-	var decls []Declaration
-	err := fs.WalkDir(fsys, ".", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		name := d.Name()
-		hidden := strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")
-		if d.IsDir() {
-			if path != "." && (hidden || name == "testdata" || name == "vendor") {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if hidden || !strings.HasSuffix(name, "_test.go") {
-			return nil
-		}
-		src, err := fs.ReadFile(fsys, path)
-		if err != nil {
-			return fmt.Errorf("read: %w", err)
-		}
-		found, err := scanFile(path, src)
-		decls = append(decls, found...)
-		return err
-	})
-	if err != nil {
+	s := &scanner{fsys: os.DirFS(dir), fset: token.NewFileSet(), pkgs: map[[2]string]*pkg{}}
+	if err := fs.WalkDir(s.fsys, ".", s.visit); err != nil {
 		return nil, fmt.Errorf("scan %s: %w", dir, err)
 	}
+	var decls []Declaration
+	for _, p := range s.pkgs {
+		found, err := p.declarations()
+		if err != nil {
+			return nil, fmt.Errorf("scan %s: %w", dir, err)
+		}
+		decls = append(decls, found...)
+	}
 	slices.SortStableFunc(decls, func(a, b Declaration) int {
-		return cmp.Or(strings.Compare(a.File, b.File), cmp.Compare(a.Line, b.Line))
+		return cmp.Or(strings.Compare(a.File, b.File), cmp.Compare(a.Line, b.Line), strings.Compare(a.Name, b.Name))
 	})
 	return decls, nil
 }
 
-// fileScan collects the declarations of one file.
-type fileScan struct {
-	fset  *token.FileSet
-	file  *ast.File
-	build string // the //go:build expression, or ""
-	decls []Declaration
+type scanner struct {
+	fsys fs.FS
+	fset *token.FileSet
+	pkgs map[[2]string]*pkg // by directory and package name
 }
 
-func scanFile(path string, src []byte) ([]Declaration, error) {
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, src, parser.ParseComments|parser.SkipObjectResolution)
+func (s *scanner) visit(rel string, d fs.DirEntry, err error) error {
 	if err != nil {
-		return nil, fmt.Errorf("parse: %w", err)
+		return err
 	}
-	s := &fileScan{fset: fset, file: f}
-	for _, g := range f.Comments {
-		for _, c := range g.List {
-			if x, err := constraint.Parse(c.Text); err == nil && g.Pos() < f.Package {
-				s.build = x.String()
-			}
+	name := d.Name()
+	hidden := strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")
+	if d.IsDir() {
+		if rel != "." && (hidden || name == "testdata" || name == "vendor") {
+			return fs.SkipDir
 		}
+		return nil
 	}
-	for _, d := range f.Decls {
-		fn, ok := d.(*ast.FuncDecl)
-		if !ok || fn.Body == nil {
-			continue
-		}
-		test := fn.Name.Name
-		if fn.Recv != nil && len(fn.Recv.List) == 1 {
-			test = "(" + types.ExprString(fn.Recv.List[0].Type) + ")." + test
-		}
-		ast.PreorderStack(fn, nil, func(n ast.Node, stack []ast.Node) bool {
-			if call, ok := n.(*ast.CallExpr); ok && isRun(call) {
-				s.run(call, stack, Declaration{File: path, Test: test})
-			}
-			return true
-		})
+	if hidden || !strings.HasSuffix(name, "_test.go") {
+		return nil
 	}
-	return s.decls, nil
+	src, err := fs.ReadFile(s.fsys, rel)
+	if err != nil {
+		return fmt.Errorf("read: %w", err)
+	}
+	f, err := parser.ParseFile(s.fset, rel, src, parser.ParseComments|parser.SkipObjectResolution)
+	if err != nil {
+		return fmt.Errorf("parse: %w", err)
+	}
+	key := [2]string{path.Dir(rel), f.Name.Name}
+	p := s.pkgs[key]
+	if p == nil {
+		p = &pkg{
+			fsys: s.fsys, fset: s.fset, dir: key[0], decls: map[string][]top{},
+			tables: map[*ast.CompositeLit]bool{}, infos: map[infoKey]*info{}, skips: map[ast.Node]bool{},
+		}
+		s.pkgs[key] = p
+	}
+	p.add(&file{path: rel, ast: f, constraint: buildConstraint(f, name)})
+	return nil
 }
 
-// run records the declarations bound by call, a Run with two arguments.
-// stack holds the nodes from the top-level function down to call, and d the
-// fields every declaration of the function shares.
-func (s *fileScan) run(call *ast.CallExpr, stack []ast.Node, d Declaration) {
-	if lit, ok := call.Args[0].(*ast.BasicLit); ok {
-		d.Kind, d.Skips = Subtest, hasSkip(call.Args[1], false) || enclosingSkips(stack)
-		s.add(d, lit, canon(call))
-		return
+// pkg is the test files of one package, which share their helpers.
+type pkg struct {
+	fsys   fs.FS
+	fset   *token.FileSet
+	dir    string
+	files  []*file
+	decls  map[string][]top // helpers by name; methods under their receiver type's
+	always []top            // TestMain and init
+	tables map[*ast.CompositeLit]bool
+	infos  map[infoKey]*info
+	skips  map[ast.Node]bool // per function: calls Skip outside its subtests
+}
+
+type file struct {
+	path       string
+	ast        *ast.File
+	constraint string
+}
+
+// top is a top-level declaration and its file.
+type top struct {
+	node ast.Node
+	file *file
+}
+
+func (p *pkg) add(f *file) {
+	p.files = append(p.files, f)
+	for _, d := range f.ast.Decls {
+		switch d := d.(type) {
+		case *ast.FuncDecl:
+			name := d.Name.Name
+			switch {
+			case d.Recv == nil && (name == "TestMain" || name == "init"):
+				p.always = append(p.always, top{d, f})
+				continue
+			case isEntryPoint(name):
+				continue
+			case d.Recv != nil && len(d.Recv.List) == 1:
+				name = recvType(d.Recv.List[0].Type)
+			}
+			p.decls[name] = append(p.decls[name], top{d, f})
+		case *ast.GenDecl:
+			for _, spec := range d.Specs {
+				switch s := spec.(type) {
+				case *ast.ValueSpec:
+					for _, id := range s.Names {
+						p.decls[id.Name] = append(p.decls[id.Name], top{d, f})
+					}
+				case *ast.TypeSpec:
+					p.decls[s.Name.Name] = append(p.decls[s.Name.Name], top{d, f})
+				}
+			}
+		}
+	}
+}
+
+func isEntryPoint(name string) bool {
+	return slices.ContainsFunc([]string{"Test", "Benchmark", "Fuzz", "Example"}, func(p string) bool {
+		return strings.HasPrefix(name, p)
+	})
+}
+
+func recvType(x ast.Expr) string {
+	for {
+		switch t := x.(type) {
+		case *ast.StarExpr:
+			x = t.X
+		case *ast.IndexExpr:
+			x = t.X
+		case *ast.IndexListExpr:
+			x = t.X
+		case *ast.Ident:
+			return t.Name
+		default:
+			return ""
+		}
+	}
+}
+
+// pending is a declaration found in the first pass, fingerprinted once every
+// table of the package is known.
+type pending struct {
+	d     Declaration
+	file  *file
+	stack []ast.Node // from the top-level function down to call
+	call  *ast.CallExpr
+	loop  *ast.RangeStmt // TableEntry only
+	entry ast.Expr       // TableEntry only
+}
+
+func (p *pkg) declarations() ([]Declaration, error) {
+	var found []pending
+	for _, f := range p.files {
+		for _, d := range f.ast.Decls {
+			fn, ok := d.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			test := fn.Name.Name
+			if fn.Recv != nil && len(fn.Recv.List) == 1 {
+				test = "(" + types.ExprString(fn.Recv.List[0].Type) + ")." + test
+			}
+			ast.PreorderStack(fn, nil, func(n ast.Node, stack []ast.Node) bool {
+				if call, ok := n.(*ast.CallExpr); ok && isRun(call) {
+					found = p.discover(found, pending{d: Declaration{File: f.path, Test: test}, file: f, stack: slices.Clone(stack), call: call})
+				}
+				return true
+			})
+		}
+	}
+	if len(found) == 0 {
+		return nil, nil
+	}
+	testdata, err := p.testdata()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Declaration, 0, len(found))
+	for _, pd := range found {
+		pd.d.Fingerprint = p.fingerprint(pd, testdata)
+		pd.d.Skips = p.skipped(pd)
+		out = append(out, pd.d)
+	}
+	return out, nil
+}
+
+// discover appends the declarations bound by pd.call, a Run with two
+// arguments, and records the table it runs, if any.
+func (p *pkg) discover(found []pending, pd pending) []pending {
+	if lit, ok := pd.call.Args[0].(*ast.BasicLit); ok {
+		pd.d.Kind = Subtest
+		return p.named(found, pd, lit)
 	}
 	var loopVar, field string
-	switch arg := call.Args[0].(type) {
+	switch arg := pd.call.Args[0].(type) {
 	case *ast.Ident:
 		loopVar = arg.Name
 	case *ast.SelectorExpr:
 		x, ok := arg.X.(*ast.Ident)
 		if !ok {
-			return
+			return found
 		}
 		loopVar, field = x.Name, arg.Sel.Name
 	default:
-		return
+		return found
 	}
-	loop := rangeOver(stack, loopVar)
+	loop := rangeOver(pd.stack, loopVar)
 	if loop == nil {
-		return
+		return found
 	}
-	table := s.resolve(loop.X, stack[0], loop.Pos())
+	table := p.resolve(loop.X, pd.stack[0], loop.Pos())
 	if table == nil {
-		return
+		return found
 	}
+	p.tables[table] = true
+	pd.d.Kind, pd.loop = TableEntry, loop
+	key, elt := eltTypes(table.Type)
 	byKey := field == "" && isIdent(loop.Key, loopVar)
-	runner := canon(loop.Body)
-	d.Kind, d.Skips = TableEntry, hasSkip(loop.Body, false) || enclosingSkips(stack)
-	for _, elt := range table.Elts {
-		entry, lit := entryName(elt, field, byKey)
-		s.add(d, lit, runner, canon(entry))
+	for _, x := range table.Elts {
+		pd.entry = fillElt(x, key, elt)
+		found = p.named(found, pd, entryName(x, field, byKey))
 	}
+	return found
 }
 
-// add records d if lit starts with an obligation ID followed by a space, a
+// named appends pd if lit starts with an obligation ID followed by a space, a
 // tab or the end of the string: go test turns that blank into the "_" that
 // obligation.FromTestSegment expects.
-func (s *fileScan) add(d Declaration, lit *ast.BasicLit, parts ...[]byte) {
+func (p *pkg) named(found []pending, pd pending, lit *ast.BasicLit) []pending {
 	if lit == nil || lit.Kind != token.STRING {
-		return
+		return found
 	}
 	name, err := strconv.Unquote(lit.Value)
 	if err != nil {
-		return
+		return found
 	}
-	if i := strings.IndexAny(name, " \t"); i >= 0 {
-		name = name[:i]
+	id, _, _ := strings.Cut(strings.ReplaceAll(name, "\t", " "), " ")
+	if pd.d.ID, err = obligation.Parse(id); err != nil {
+		return found
 	}
-	if d.ID, err = obligation.Parse(name); err != nil {
-		return
-	}
-	d.Line = s.fset.Position(lit.Pos()).Line
-	d.Fingerprint = fingerprint(d.Kind, s.build, parts...)
-	s.decls = append(s.decls, d)
+	pd.d.Name, pd.d.Line = name, p.fset.Position(lit.Pos()).Line
+	return append(found, pd)
 }
 
 // rangeOver returns the innermost range loop in stack that declares name as
@@ -226,7 +363,7 @@ func rangeOver(stack []ast.Node, name string) *ast.RangeStmt {
 // resolve returns the composite literal a range clause iterates over: x
 // itself, the last one assigned to x before the loop in fn, or the one of a
 // package-level var x.
-func (s *fileScan) resolve(x ast.Expr, fn ast.Node, loop token.Pos) *ast.CompositeLit {
+func (p *pkg) resolve(x ast.Expr, fn ast.Node, loop token.Pos) *ast.CompositeLit {
 	switch x := x.(type) {
 	case *ast.CompositeLit:
 		return x
@@ -234,11 +371,9 @@ func (s *fileScan) resolve(x ast.Expr, fn ast.Node, loop token.Pos) *ast.Composi
 		if lit := lastDef(fn, x.Name, loop); lit != nil {
 			return lit
 		}
-		for _, d := range s.file.Decls {
-			if gd, ok := d.(*ast.GenDecl); ok && gd.Tok == token.VAR {
-				if lit := lastDef(gd, x.Name, gd.End()); lit != nil {
-					return lit
-				}
+		for _, t := range p.decls[x.Name] {
+			if gd, ok := t.node.(*ast.GenDecl); ok && gd.Tok == token.VAR {
+				return lastDef(gd, x.Name, gd.End())
 			}
 		}
 	}
@@ -275,52 +410,67 @@ func lastDef(root ast.Node, name string, pos token.Pos) *ast.CompositeLit {
 	return lit
 }
 
-// entryName returns the node that defines one table entry and the string
-// literal that names it, which is nil when the entry has no literal name.
-func entryName(elt ast.Expr, field string, byKey bool) (ast.Node, *ast.BasicLit) {
-	kv, isMap := elt.(*ast.KeyValueExpr)
-	switch {
-	case isMap && byKey:
-		lit, _ := kv.Key.(*ast.BasicLit)
-		return kv, lit
-	case isMap:
-		elt = kv.Value
+// entryName returns the string literal that names one table entry, or nil.
+func entryName(x ast.Expr, field string, byKey bool) *ast.BasicLit {
+	if kv, ok := x.(*ast.KeyValueExpr); ok { // a map entry
+		if byKey {
+			lit, _ := kv.Key.(*ast.BasicLit)
+			return lit
+		}
+		x = kv.Value
 	}
-	if e, ok := elt.(*ast.CompositeLit); ok && field != "" {
+	if e, ok := x.(*ast.CompositeLit); ok && field != "" {
 		for _, x := range e.Elts {
 			if kv, ok := x.(*ast.KeyValueExpr); ok && isIdent(kv.Key, field) {
 				lit, _ := kv.Value.(*ast.BasicLit)
-				return elt, lit
+				return lit
 			} else if lit, ok := x.(*ast.BasicLit); ok && lit.Kind == token.STRING {
-				return elt, lit // unkeyed: the first string literal
+				return lit // unkeyed: the first string literal
 			}
 		}
 	}
-	return elt, nil
+	return nil
 }
 
-// enclosingSkips reports whether a function around the current node calls
-// Skip outside its subtests, which skips everything that function runs.
-func enclosingSkips(stack []ast.Node) bool {
-	return slices.ContainsFunc(stack, func(n ast.Node) bool {
+// skipped reports whether pd's bound code, or a function around it outside
+// its other subtests, skips. For a table entry the bound code is the runner's
+// function; a skip elsewhere in the loop body skips the enclosing function.
+func (p *pkg) skipped(pd pending) bool {
+	for i, n := range pd.stack {
 		switch n.(type) {
 		case *ast.FuncDecl, *ast.FuncLit:
-			return hasSkip(n, true)
+		default:
+			continue
 		}
-		return false
-	})
+		skips, ok := p.skips[n]
+		if !ok {
+			skips = hasSkip(n, pd.stack[:i], true)
+			p.skips[n] = skips
+		}
+		if skips {
+			return true
+		}
+	}
+	if fn, ok := pd.call.Args[1].(*ast.Ident); ok { // a named function
+		return slices.ContainsFunc(p.decls[fn.Name], func(t top) bool {
+			fd, ok := t.node.(*ast.FuncDecl)
+			return ok && fd.Recv == nil && hasSkip(fd, nil, false)
+		})
+	}
+	return hasSkip(pd.call.Args[1], pd.stack, false)
 }
 
-// hasSkip reports whether n calls Skip, Skipf or SkipNow. With ownOnly it does
+// hasSkip reports whether a Skip, Skipf or SkipNow call on a testing
+// parameter occurs in root, whose ancestors are given. With ownOnly it does
 // not look into subtests started with Run: their skips only skip themselves.
-func hasSkip(n ast.Node, ownOnly bool) bool {
+func hasSkip(root ast.Node, ancestors []ast.Node, ownOnly bool) bool {
 	found := false
-	ast.Inspect(n, func(n ast.Node) bool {
+	ast.PreorderStack(root, slices.Clip(ancestors), func(n ast.Node, stack []ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		switch {
 		case found || !ok:
 			return !found
-		case isMethod(call, "Skip", "Skipf", "SkipNow"):
+		case isSkip(call, stack):
 			found = true
 		}
 		return !found && (!ownOnly || !isRun(call))
@@ -328,11 +478,46 @@ func hasSkip(n ast.Node, ownOnly bool) bool {
 	return found
 }
 
-func isRun(call *ast.CallExpr) bool { return len(call.Args) == 2 && isMethod(call, "Run") }
-
-func isMethod(call *ast.CallExpr, names ...string) bool {
+func isSkip(call *ast.CallExpr, stack []ast.Node) bool {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
-	return ok && slices.Contains(names, sel.Sel.Name)
+	if !ok || !slices.Contains([]string{"Skip", "Skipf", "SkipNow"}, sel.Sel.Name) {
+		return false
+	}
+	x, ok := sel.X.(*ast.Ident)
+	return ok && isTestingParam(stack, x.Name)
+}
+
+// isTestingParam reports whether name, seen from the innermost function in
+// stack, is a *testing.T, *testing.B, *testing.F or testing.TB parameter.
+// Local variables are not tracked.
+func isTestingParam(stack []ast.Node, name string) bool {
+	for i := len(stack) - 1; i >= 0; i-- {
+		var ft *ast.FuncType
+		switch fn := stack[i].(type) {
+		case *ast.FuncLit:
+			ft = fn.Type
+		case *ast.FuncDecl:
+			ft = fn.Type
+		default:
+			continue
+		}
+		for _, field := range ft.Params.List {
+			if slices.ContainsFunc(field.Names, func(id *ast.Ident) bool { return id.Name == name }) {
+				typ, ptr := field.Type, false
+				if star, ok := typ.(*ast.StarExpr); ok {
+					typ, ptr = star.X, true
+				}
+				sel, ok := typ.(*ast.SelectorExpr)
+				return ok && (ptr && slices.Contains([]string{"T", "B", "F"}, sel.Sel.Name) || !ptr && sel.Sel.Name == "TB")
+			}
+		}
+	}
+	return false
+}
+
+func isRun(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	return ok && sel.Sel.Name == "Run" && len(call.Args) == 2
 }
 
 func isIdent(x ast.Expr, name string) bool {
