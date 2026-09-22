@@ -50,12 +50,14 @@ func checkVerified(ctx context.Context, in input) *response {
 }
 
 // pushedHead reports, once git answers, whether a remote-tracking branch
-// contains HEAD. It reports true when git fails: the hook fails open.
+// contains HEAD: no commit of HEAD is missing from every remote. Unlike
+// for-each-ref --contains, rev-list walks the history once, whatever the
+// number of remote refs. It reports true when git fails: the hook fails open.
 func pushedHead(ctx context.Context, dir string) <-chan bool {
 	pushed := make(chan bool, 1)
 	go func() {
-		out, err := git(ctx, dir, "for-each-ref", "--contains", "HEAD", "--count=1", "refs/remotes").Output()
-		pushed <- err != nil || len(out) > 0
+		out, err := git(ctx, dir, "rev-list", "-n1", "HEAD", "--not", "--remotes").Output()
+		pushed <- err != nil || len(out) == 0
 	}()
 	return pushed
 }

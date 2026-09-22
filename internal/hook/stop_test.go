@@ -30,6 +30,9 @@ func TestCheckVerified(t *testing.T) {
 	}{
 		{name: "missing status, clean tree, pushed HEAD", steps: []step{push}},
 		{name: "missing status, clean tree, unpushed HEAD", wantBlock: true},
+		{name: "missing status, clean tree, HEAD behind the remote", steps: []step{commit, push, func(t *testing.T, dir string) {
+			gitT(t, dir, "reset", "-q", "--hard", "HEAD~1")
+		}}},
 		{name: "missing status, edit committed but not pushed", steps: []step{push, edit, commit}, wantBlock: true},
 		{name: "missing status, edited tree", steps: []step{edit}, wantBlock: true},
 		{name: "missing status, untracked file", steps: []step{untracked}, wantBlock: true},
