@@ -37,7 +37,14 @@ Un comando entrega a `ui` un `ui.Result`: el nombre del comando, los datos del e
 - **`plain`:** el texto sin tonos y sin cortar líneas, para que los logs se puedan filtrar con grep.
 - **`tui`:** el mismo texto con estilos de Lip Gloss v2. Por ahora la salida es estática; las vistas en vivo con Bubble Tea llegarán en hitos posteriores.
 
-Los errores salen como envelope con `ok: false` por stdout en `json`. En los otros modos salen como `aval: <mensaje>` por stderr, con estilo en `tui`. Como el error va a stderr, su modo se resuelve contra stderr. `--json` y `--plain` se leen directamente de los argumentos, porque el parseo de flags puede haber fallado. Los códigos de salida y su nombre en el envelope (`failed`, `usage`, `tool`) siguen en `internal/cli`.
+Los errores salen como envelope con `ok: false` por stdout en `json`. En los otros modos salen como `aval: <mensaje>` por stderr, con estilo en `tui`. Como el error va a stderr, su modo y su color se resuelven contra stderr, no contra stdout: `aval trace 2>err.log` en una terminal da la tabla con estilo y un log sin secuencias de escape.
+
+Un comando puede producir su resultado y aun así fallar sus comprobaciones; por ejemplo, `aval trace` con obligaciones sin test. En ese caso el `ui.Result` lleva, además de los datos y las líneas, los `Issues` que explican el fallo:
+
+- en `json`, el envelope sale con `ok: false`, el resultado completo en `data` y los motivos en `errors`;
+- en `plain` y `tui`, las líneas van por stdout y los motivos, como `aval: <mensaje>`, por stderr.
+
+`data` es `null` solo cuando el comando no llegó a producir un resultado. `--json` y `--plain` se leen directamente de los argumentos, porque el parseo de flags puede haber fallado. Los códigos de salida y su nombre en el envelope (`failed`, `usage`, `tool`) siguen en `internal/cli`.
 
 ### Color, animación y accesibilidad
 

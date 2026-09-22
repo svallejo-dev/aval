@@ -21,6 +21,11 @@ func TestWrite(t *testing.T) {
 			want: []string{`"schemaVersion": 1`, `"command": "version"`, `"ok": true`, `"go": "go1.27.1"`, `"errors": []`},
 		},
 		{
+			name: "failed checks keep the result they produced",
+			in:   Envelope{Command: "trace", Data: map[string][]string{"blocking": {"ORD-O01"}}, Errors: []Issue{{Code: "failed", Message: "trace failed: 1 open question"}}},
+			want: []string{`"ok": false`, `"blocking": [`, `"ORD-O01"`, `"code": "failed"`},
+		},
+		{
 			name: "failure keeps its issues and omits an empty hint",
 			in:   Envelope{Command: "gate", Errors: []Issue{{Code: "failed", Message: "no evidence"}}},
 			want: []string{`"ok": false`, `"data": null`, `"code": "failed"`, `"message": "no evidence"`},
