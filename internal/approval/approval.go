@@ -88,9 +88,9 @@ var shaRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
 //     admin permission.
 //
 // An override also needs a non-empty reason. A review whose body has a line
-// starting with OverrideMarker, outside a fenced code block, is an override
-// even if that reason is empty, so it is rejected rather than counted as a
-// plain approval.
+// starting with OverrideMarker at column 0, outside a fenced code block, is an
+// override even if that reason is empty, so it is rejected rather than
+// counted as a plain approval.
 //
 // Logins match case-insensitively. Team entries (@org/team) in owners never
 // match: expanding them needs read:org, which v0 does not have.
@@ -168,10 +168,10 @@ func Evaluate(reviews []Review, head, prAuthor string, owners []string, access m
 	return out
 }
 
-// overrideReason finds the first line of body that starts with
-// OverrideMarker, after leading spaces and outside fenced code blocks (``` or
-// ~~~), and returns the rest of that line. Among several such lines the first
-// non-empty reason wins.
+// overrideReason finds the lines of body that start with OverrideMarker at
+// column 0, outside fenced code blocks (``` or ~~~), and returns the rest of
+// the first such line with a non-empty reason. An indented line does not
+// count: it may be an indented code block.
 func overrideReason(body string) (reason string, found bool) {
 	fence := "" // the open code fence; empty outside one
 	for line := range strings.Lines(body) {
@@ -186,7 +186,7 @@ func overrideReason(body string) (reason string, found bool) {
 			fence = t[:len(t)-len(strings.TrimLeft(t, t[:1]))]
 			continue
 		}
-		rest, ok := strings.CutPrefix(t, OverrideMarker)
+		rest, ok := strings.CutPrefix(strings.TrimRight(line, "\r\n"), OverrideMarker)
 		if !ok || (rest != "" && rest[0] != ' ' && rest[0] != '\t') {
 			continue // not the marker, or a longer word such as aval:overrides
 		}

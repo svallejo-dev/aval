@@ -43,11 +43,12 @@ func override(a evidence.Approval, reason string) evidence.Approval {
 func TestEvaluate(t *testing.T) {
 	t.Parallel()
 
-	owners := []string{"@lead", "@agent", "@ghost", "@gone"}
+	owners := []string{"@lead", "@agent", "@ghost", "@nobody", "@gone"}
 	access := map[string]Access{
 		"lead":   {Role: "write", Permission: "write"},
 		"agent":  {Role: "write", Permission: "write"},
 		"ghost":  {Role: "read", Permission: "read"}, // a stale entry someone else registered
+		"nobody": {Permission: "none"},
 		"maint":  {Role: RoleMaintain, Permission: "write"},
 		"boss":   {Role: RoleAdmin, Permission: "admin"},
 		"writer": {Role: "write", Permission: "write"},
@@ -90,16 +91,20 @@ func TestEvaluate(t *testing.T) {
 			review(1, "lead", Approved, headSHA, 1, ""),
 			review(2, "lead", Approved, olderSHA, 2, ""),
 		), want: as(rejected("lead", headSHA, 1, RejectSuperseded), rejected("lead", olderSHA, 2, RejectStale))},
-		{name: "override with a reason", reviews: rs(review(1, "lead", Approved, headSHA, 1, "Checked.\r\n  aval:override   hotfix INC-42  \r\n")),
+		{name: "override with a reason", reviews: rs(review(1, "lead", Approved, headSHA, 1, "Checked.\r\naval:override   hotfix INC-42  \r\n")),
 			want: as(override(valid("lead", 1), "hotfix INC-42"))},
 		{name: "override without a reason", reviews: rs(review(1, "lead", Approved, headSHA, 1, "aval:override")),
 			want: as(override(rejected("lead", headSHA, 1, RejectNoReason), ""))},
 		{name: "the first override line with a reason wins", reviews: rs(review(1, "lead", Approved, headSHA, 1, "aval:override \naval:override flaky CI")),
 			want: as(override(valid("lead", 1), "flaky CI"))},
 		{name: "override lines in fenced code blocks do not count", reviews: rs(review(1, "lead", Approved, headSHA, 1,
-			"```\naval:override a\n```\n~~~~\naval:override b\n~~~\naval:override c\n~~~~~\n  aval:override real\n")),
+			"```\naval:override a\n```\n~~~~\naval:override b\n~~~\naval:override c\n~~~~~\naval:override real\n")),
 			want: as(override(valid("lead", 1), "real"))},
 		{name: "an override only in a code block is a plain approval", reviews: rs(review(1, "lead", Approved, headSHA, 1, "```sh\naval:override x\n```")),
+			want: as(valid("lead", 1))},
+		{name: "the first of two reasons wins", reviews: rs(review(1, "lead", Approved, headSHA, 1, "aval:override first\naval:override second")),
+			want: as(override(valid("lead", 1), "first"))},
+		{name: "an indented override line does not count", reviews: rs(review(1, "lead", Approved, headSHA, 1, "Example:\n\n    aval:override hotfix\n")),
 			want: as(valid("lead", 1))},
 		{name: "a longer word is not the marker", reviews: rs(review(1, "lead", Approved, headSHA, 1, "aval:overrides nothing")), want: as(valid("lead", 1))},
 		{name: "override in a comment is not an approval", reviews: rs(review(1, "lead", Commented, headSHA, 1, "aval:override hotfix")),
@@ -109,6 +114,7 @@ func TestEvaluate(t *testing.T) {
 		{name: "admin role without a CODEOWNERS entry", reviews: rs(review(1, "boss", Approved, headSHA, 1, "")), want: as(valid("boss", 1))},
 		{name: "write role is not a code owner", reviews: rs(review(1, "writer", Approved, headSHA, 1, "")), want: as(rejected("writer", headSHA, 1, RejectNotOwner))},
 		{name: "CODEOWNERS entry without write access", reviews: rs(review(1, "ghost", Approved, headSHA, 1, "")), want: as(rejected("ghost", headSHA, 1, RejectNoWrite))},
+		{name: "CODEOWNERS entry with permission none", reviews: rs(review(1, "nobody", Approved, headSHA, 1, "")), want: as(rejected("nobody", headSHA, 1, RejectNoWrite))},
 		{name: "CODEOWNERS entry with no access at all", reviews: rs(review(1, "gone", Approved, headSHA, 1, "")), want: as(rejected("gone", headSHA, 1, RejectNoWrite))},
 		{name: "no role and no CODEOWNERS entry", reviews: rs(review(1, "stranger", Approved, headSHA, 1, "")), want: as(rejected("stranger", headSHA, 1, RejectNotOwner))},
 		{name: "owners match case-insensitively", reviews: rs(review(1, "LEAD", Approved, headSHA, 1, "")), owners: []string{"@Lead"}, want: as(valid("LEAD", 1))},
