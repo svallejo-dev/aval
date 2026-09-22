@@ -43,15 +43,18 @@ func override(a evidence.Approval, reason string) evidence.Approval {
 func TestEvaluate(t *testing.T) {
 	t.Parallel()
 
-	owners := []string{"@lead", "@agent", "@ghost", "@nobody", "@gone"}
+	owners := []string{"@lead", "@agent", "@ghost", "@nobody", "@gone", "@custom", "@customro"}
 	access := map[string]Access{
 		"lead":   {Role: "write", Permission: "write"},
 		"agent":  {Role: "write", Permission: "write"},
 		"ghost":  {Role: "read", Permission: "read"}, // a stale entry someone else registered
 		"nobody": {Permission: "none"},
-		"maint":  {Role: RoleMaintain, Permission: "write"},
-		"boss":   {Role: RoleAdmin, Permission: "admin"},
-		"writer": {Role: "write", Permission: "write"},
+		// A custom role: only the legacy permission says whether it writes.
+		"custom":   {Role: "reviewer", Permission: "write"},
+		"customro": {Role: "reviewer", Permission: "read"},
+		"maint":    {Role: RoleMaintain, Permission: "write"},
+		"boss":     {Role: RoleAdmin, Permission: "admin"},
+		"writer":   {Role: "write", Permission: "write"},
 	}
 
 	tests := []struct {
@@ -114,6 +117,9 @@ func TestEvaluate(t *testing.T) {
 		{name: "admin role without a CODEOWNERS entry", reviews: rs(review(1, "boss", Approved, headSHA, 1, "")), want: as(valid("boss", 1))},
 		{name: "write role is not a code owner", reviews: rs(review(1, "writer", Approved, headSHA, 1, "")), want: as(rejected("writer", headSHA, 1, RejectNotOwner))},
 		{name: "CODEOWNERS entry without write access", reviews: rs(review(1, "ghost", Approved, headSHA, 1, "")), want: as(rejected("ghost", headSHA, 1, RejectNoWrite))},
+		{name: "CODEOWNERS entry with a custom role and write permission", reviews: rs(review(1, "custom", Approved, headSHA, 1, "")), want: as(valid("custom", 1))},
+		{name: "CODEOWNERS entry with a custom role and read permission", reviews: rs(review(1, "customro", Approved, headSHA, 1, "")),
+			want: as(rejected("customro", headSHA, 1, RejectNoWrite))},
 		{name: "CODEOWNERS entry with permission none", reviews: rs(review(1, "nobody", Approved, headSHA, 1, "")), want: as(rejected("nobody", headSHA, 1, RejectNoWrite))},
 		{name: "CODEOWNERS entry with no access at all", reviews: rs(review(1, "gone", Approved, headSHA, 1, "")), want: as(rejected("gone", headSHA, 1, RejectNoWrite))},
 		{name: "no role and no CODEOWNERS entry", reviews: rs(review(1, "stranger", Approved, headSHA, 1, "")), want: as(rejected("stranger", headSHA, 1, RejectNotOwner))},

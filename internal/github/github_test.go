@@ -149,6 +149,8 @@ func TestRedirects(t *testing.T) {
 			http.Redirect(w, r, "/api/v3/repos/renamed/r/pulls/7/reviews", http.StatusMovedPermanently)
 		case "/api/v3/repos/renamed/r/pulls/7/reviews":
 			_, _ = io.WriteString(w, `[{"id":1,"state":"APPROVED"}]`)
+		case "/api/v3/repos/o/tls/pulls/7/reviews": // same host, another scheme
+			http.Redirect(w, r, "https://"+r.Host+"/api/v3/repos/renamed/r/pulls/7/reviews", http.StatusFound) //nolint:gosec // test server: its own host over https
 		default:
 			http.Redirect(w, r, foreign.URL+"/api/v3/repos/o/moved/pulls/7/reviews", http.StatusFound)
 		}
@@ -157,8 +159,10 @@ func TestRedirects(t *testing.T) {
 	if got, err := c.ListReviews(context.Background(), "o", "r", 7); err != nil || len(got) != 1 {
 		t.Errorf("ListReviews through a same-origin redirect = %v, %v", got, err)
 	}
-	if _, err := c.ListReviews(context.Background(), "o", "moved", 7); err == nil || !strings.Contains(err.Error(), "refusing a redirect") {
-		t.Errorf("ListReviews through a redirect to another origin = %v, want a refusal", err)
+	for _, repo := range []string{"moved", "tls"} {
+		if _, err := c.ListReviews(context.Background(), "o", repo, 7); err == nil || !strings.Contains(err.Error(), "refusing a redirect") {
+			t.Errorf("ListReviews(%s) through a redirect to another origin = %v, want a refusal", repo, err)
+		}
 	}
 }
 
