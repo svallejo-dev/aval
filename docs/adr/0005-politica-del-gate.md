@@ -69,7 +69,7 @@ Requiere git ≥ 2.40; con uno más antiguo, exit 3.
 ### 2. Falla-antes por superposición
 
 Aplica a las obligaciones **F, N e I** con delta `added` o `modified`:
-1. **Worktree:** `git worktree add --detach <tmp> <base>`.
+1. **Worktree:** `git worktree add --detach <tmp> <base>`. El worktree y la superposición del paso 2 se preparan **desde los objetos de git de head, no desde el árbol de trabajo**, y **antes** de ejecutar los tests de head, porque esos tests podrían reescribir ficheros (§1). Solo los patrones `-run` del paso 3 esperan a los nombres de la ejecución de head.
 2. **Superposición:** en **todo el diff**, no solo en los paquetes de la obligación:
    - **primero se borran** las rutas que head eliminó o renombró (un renombre cuenta como baja más alta);
    - después se copian desde head los `*_test.go` y los ficheros de `testdata/` añadidos o modificados.
@@ -77,7 +77,8 @@ Aplica a las obligaciones **F, N e I** con delta `added` o `modified`:
    Limitarlo a los paquetes daría un `strong` falso si un test nuevo lee `testdata/` compartido.
 3. **Selección exacta:**
    - a partir de los **nombres completos** de sus tests en la ejecución de head (por ejemplo `TestSuite/TestX/ORD-F01_…`) se construye un patrón anclado por nivel: `-run '^TestSuite$/^TestX$/^ORD-F01([_#]|$)'`, con cada nivel escapado;
-   - se ejecuta **un `go test` por (Test de primer nivel, ID)**, para que un hermano con un bug en la base no cambie el estado de otro ID.
+   - se ejecuta **un proceso de test por (Test de primer nivel, ID)**, para que un hermano con un bug en la base no cambie el estado de otro ID;
+   - para abaratarlo, se puede compilar el binario de test de cada paquete una vez (`go test -c`) y ejecutarlo por ID a través de `go tool test2json`.
 4. **Estado:** el de cada ID sale de `gotest.Report.Status(id, <paquetes de sus tests en head>)`.
 5. **Limpieza:** el worktree se elimina siempre.
 6. **Entorno:** git y `go test` se lanzan sin las variables de repositorio que exporta un hook de git (`GIT_DIR`, `GIT_INDEX_FILE`, `GIT_WORK_TREE`…). Si no, un test de la base que use git escribiría en el índice de quien ejecuta aval.
@@ -89,14 +90,15 @@ La fuerza (ADR-0004) exige **además** que el estado en head sea `pass`:
 | `fail` | `strong` | Válido |
 | `fail`, y head añade o modifica ficheros que no son Go ni están en `testdata/` dentro de un paquete de la obligación | `weak`, con `note` | Válido; motivo `weak_evidence`. El fallo puede deberse a esos ficheros, no a la falta del comportamiento. Los datos de test van en `testdata/` |
 | `build_fail` del propio paquete de test de la obligación | `weak` | Válido; motivo `weak_evidence` |
-| `build_fail` de otro paquete o por un módulo ausente | `none`, con `note` | Bloquea (`fail_before_missing`). Las dependencias y los paquetes auxiliares nuevos entran antes, en un PR `dx` |
+| `build_fail` de un paquete que head **añade** (código de producción nuevo del propio PR) | `weak`, con `note` | Válido; motivo `weak_evidence` |
+| `build_fail` de un paquete que ya existe en la base, o por un módulo ausente | `none`, con `note` | Bloquea (`fail_before_missing`). Las dependencias nuevas entran antes, en un PR `dx` |
 | `pass` con `**aval**: characterization` | `characterization` | Válido |
 | `pass` sin la marca | `none` | Bloquea (`fail_before_missing`) |
 | `not_run` / `skipped` | `none` | Bloquea (`fail_before_missing`) |
 
 ### 3. Regresiones aisladas
 
-Las obligaciones F, N e I **fuera del delta** que tienen tests vinculados se ejecutan en head **aisladas**, con la selección exacta de §2.3, un `go test` por Test de primer nivel. Así los subtests hermanos y los Tests anteriores no pueden alterar su estado. Tienen que pasar.
+Las obligaciones F, N e I **fuera del delta** que tienen tests vinculados se ejecutan en head **aisladas**, con la selección exacta de §2.3 y un proceso por (Test de primer nivel, ID), igual que la falla-antes. Así ni los subtests hermanos ni los Tests anteriores pueden alterar su estado. Tienen que pasar.
 
 ### 3b. Clasificación de commits (scope)
 
