@@ -24,3 +24,7 @@ aval feat trace    matriz obligación → test; huérfanos en ambos sentidos
 aval verify        ejecuta verificadores y genera la evidencia
 aval gate          decide y devuelve el exit code para CI
 ```
+
+## Licencia
+
+[MIT](LICENSE)
