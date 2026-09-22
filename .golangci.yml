@@ -1,0 +1,46 @@
+version: "2"
+
+# Locks derived from the senior-go-idiomatic skill: rules that must hold are
+# enforced here, not left as advice in a prompt.
+linters:
+  default: standard
+  enable:
+    - wrapcheck       # errors crossing package boundaries carry context
+    - errorlint       # errors.Is / errors.As and %w, never == on errors
+    - revive          # context.Context as the first parameter, doc comments
+    - gocritic        # defer inside loops
+    - gosec           # crypto/rand, file permissions, subprocess hygiene
+    - copyloopvar     # obsolete `i := i` copies (Go >= 1.22)
+    - interfacebloat  # small interfaces
+    - bodyclose       # HTTP response bodies are closed
+  settings:
+    errcheck:
+      check-type-assertions: true
+    errorlint:
+      errorf: true
+      asserts: true
+      comparison: true
+    revive:
+      enable-default-rules: true
+      rules:
+        - name: context-as-argument
+          arguments:
+            - allow-types-before: "*testing.T"
+    gocritic:
+      enabled-checks:
+        - deferInLoop
+    interfacebloat:
+      max: 10
+  exclusions:
+    generated: strict
+    presets:
+      - std-error-handling
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/svallejo-dev/aval

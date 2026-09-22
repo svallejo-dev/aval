@@ -1,0 +1,12 @@
+# aval version works in plain and JSON modes, and rejects conflicting modes.
+
+exec aval version --plain
+stdout '^aval '
+
+exec aval version --json
+stdout '"command": "version"'
+stdout '"ok": true'
+stdout '"errors": \[\]'
+
+! exec aval version --json --plain
+stderr '^aval: '

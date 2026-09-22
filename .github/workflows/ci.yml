@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # .tool-versions (asdf) is the single source of truth for tool versions.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: .tool-versions
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
+
+      - name: Read golangci-lint version
+        id: tools
+        run: echo "golangci=v$(awk '$1 == "golangci-lint" {print $2}' .tool-versions)" >> "$GITHUB_OUTPUT"
+
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: ${{ steps.tools.outputs.golangci }}
