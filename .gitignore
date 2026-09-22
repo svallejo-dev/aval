@@ -1,0 +1,18 @@
+# Binarios y artefactos de build
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# Cobertura y perfiles
+coverage.*
+*.prof
+
+# Workspaces locales de Go
+go.work
+go.work.sum
+
+# Entorno
+.env
+.DS_Store
