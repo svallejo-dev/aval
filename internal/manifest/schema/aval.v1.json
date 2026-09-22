@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/svallejo-dev/aval/schema/aval.v1.json",
+  "title": "aval repository manifest (aval.yaml), version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "context", "mode", "tierDefault", "openspec", "paths"],
+  "properties": {
+    "version": { "const": 1 },
+    "context": {
+      "description": "Bounded-context prefix of every obligation ID, e.g. ORD in ORD-F01.",
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9]{1,9}$"
+    },
+    "mode": {
+      "description": "observe reports the verdict without blocking; enforce blocks.",
+      "enum": ["observe", "enforce"]
+    },
+    "tierDefault": { "type": "integer", "minimum": 0, "maximum": 3 },
+    "openspec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version"],
+      "properties": {
+        "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" }
+      }
+    },
+    "paths": {
+      "description": "Doublestar globs assigning paths to a command family.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dx", "feat"],
+      "properties": {
+        "dx": { "$ref": "#/$defs/globs", "minItems": 1 },
+        "feat": { "$ref": "#/$defs/globs", "minItems": 1 },
+        "seam": { "$ref": "#/$defs/globs" }
+      }
+    }
+  },
+  "$defs": {
+    "globs": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

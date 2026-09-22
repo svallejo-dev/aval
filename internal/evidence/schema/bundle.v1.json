@@ -1,0 +1,387 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/svallejo-dev/aval/schema/bundle.v1.json",
+  "title": "aval evidence bundle, version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "repo",
+    "base",
+    "head",
+    "avalVersion",
+    "generatedAt",
+    "mode",
+    "tier",
+    "changes",
+    "obligations",
+    "checks",
+    "scope",
+    "tamper",
+    "override",
+    "verdict",
+    "notCollected"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "repo": {
+      "type": "string"
+    },
+    "base": {
+      "$ref": "#/$defs/sha"
+    },
+    "head": {
+      "$ref": "#/$defs/sha"
+    },
+    "avalVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "mode": {
+      "enum": [
+        "observe",
+        "enforce"
+      ]
+    },
+    "tier": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3
+    },
+    "changes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "obligations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/obligation"
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/check"
+      }
+    },
+    "scope": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/commit"
+      }
+    },
+    "tamper": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    },
+    "override": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "actor",
+            "reason",
+            "labeledAt",
+            "lastCommitAt",
+            "valid"
+          ],
+          "properties": {
+            "actor": {
+              "type": "string",
+              "minLength": 1
+            },
+            "reason": {
+              "type": "string"
+            },
+            "labeledAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "lastCommitAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "valid": {
+              "type": "boolean"
+            },
+            "rejection": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "if": {
+            "properties": {
+              "valid": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "minLength": 1
+              }
+            },
+            "not": {
+              "required": [
+                "rejection"
+              ]
+            }
+          },
+          "else": {
+            "required": [
+              "rejection"
+            ]
+          }
+        }
+      ]
+    },
+    "verdict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "result",
+        "reasons"
+      ],
+      "properties": {
+        "result": {
+          "enum": [
+            "pass",
+            "warn",
+            "block"
+          ]
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reason"
+          }
+        }
+      }
+    },
+    "notCollected": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "$defs": {
+    "sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "status": {
+      "enum": [
+        "pass",
+        "fail",
+        "build_fail",
+        "not_run",
+        "skipped",
+        "n/a"
+      ]
+    },
+    "obligation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "source",
+        "delta",
+        "characterization",
+        "tests",
+        "before",
+        "after",
+        "strength"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9]{1,9}-[FNISAO][0-9]{2,4}$"
+        },
+        "kind": {
+          "enum": [
+            "F",
+            "N",
+            "I",
+            "S",
+            "A",
+            "O"
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "characterization": {
+          "type": "boolean"
+        },
+        "tests": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "before": {
+          "$ref": "#/$defs/status"
+        },
+        "after": {
+          "$ref": "#/$defs/status"
+        },
+        "strength": {
+          "enum": [
+            "strong",
+            "weak",
+            "characterization",
+            "none"
+          ]
+        },
+        "delta": {
+          "enum": [
+            "added",
+            "modified",
+            "unchanged"
+          ]
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "command",
+        "exitCode",
+        "durationMs",
+        "status"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "command": {
+          "type": "string"
+        },
+        "exitCode": {
+          "type": "integer"
+        },
+        "durationMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "status": {
+          "$ref": "#/$defs/status"
+        },
+        "artifact": {
+          "type": "string"
+        }
+      }
+    },
+    "commit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sha",
+        "family",
+        "paths"
+      ],
+      "properties": {
+        "sha": {
+          "$ref": "#/$defs/sha"
+        },
+        "family": {
+          "enum": [
+            "dx",
+            "feat",
+            "seam",
+            "mixed",
+            "other"
+          ]
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "families": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "enum": [
+              "dx",
+              "feat",
+              "seam",
+              "other"
+            ]
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "detail"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "fingerprint_changed",
+            "test_removed",
+            "skip_added",
+            "policy_edited",
+            "baseline_edited"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        }
+      }
+    },
+    "reason": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
