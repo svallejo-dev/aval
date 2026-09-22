@@ -9,148 +9,197 @@ M2 construye `aval verify`, que reúne la evidencia, y `aval gate`, que decide s
 - qué entra al gate;
 - qué reglas aplica;
 - con qué códigos explica su veredicto;
-- cuándo vale un override;
+- cuándo vale una aprobación o una excepción;
 - cómo se traduce todo a un código de salida.
 
-Los formatos (bundle, manifiestos, envelope) ya están en ADR-0004. Este ADR fija el **comportamiento**.
+Los formatos base están en ADR-0004. Este ADR fija el **comportamiento** y los cambios de contrato que ese comportamiento exige (bundle v2 y baseline v1).
+
+## Modelo de amenazas
+
+El gate defiende de un **agente** (o una persona) que quiere fusionar un cambio sin la evidencia que la política exige. Puede editar cualquier fichero del PR y ejecuta código en el job de CI a través de los tests.
+
+**Qué no puede hacer, porque aval no confía en nada del head para decidir:**
+- cambiar la política;
+- cambiar el tier por debajo del mínimo;
+- falsificar aprobaciones;
+- alterar lo que aval lee de la base.
+
+**Qué queda fuera de aval y exige configuración de GitHub:** un workflow de `pull_request` ejecuta la definición del workflow **del propio PR**. Un PR podría, por tanto, editar el job del gate. La integridad del gate depende de proteger `.github/**` con CODEOWNERS y **revisión obligatoria de code owner** en el ruleset.
+
+aval informa además de cualquier edición de `.github/**`, `CODEOWNERS`, `.golangci.yml`, el `aval.yaml` raíz y `.aval/baseline.json` como `tamper` (§4). La protección fuerte, sin embargo, es la de GitHub.
+
+**Límite conocido:** un agente que opera con las credenciales de una persona actúa como esa persona. Los agentes deben usar una cuenta o token propio, sin permisos de revisión.
 
 ## Decisión
 
 ### 1. Entradas
 
 El gate trabaja sobre un rango `base..head`:
-- **En CI:** `base` es el merge-base del PR (con `fetch-depth: 0`) y `head` es el commit del PR.
-- **En local:** `--base` y `--head` (por defecto `origin/main` y `HEAD`).
+- **En CI:** `base` es el merge-base del PR con `main` (`fetch-depth: 0`) y `head` es `github.event.pull_request.head.sha`. El checkout usa `ref:` head, no el merge commit.
+- **En local:** `--base` y `--head` (por defecto el merge-base con `origin/main` y `HEAD`).
+
+**Orden obligatorio:** todas las entradas de la base (política, CODEOWNERS, baseline, specs de la base, `.golangci.yml` de la base, declaraciones de la base) se leen **antes** de ejecutar cualquier test del PR. Todo `git` corre con `GIT_NO_REPLACE_OBJECTS=1`.
 
 | Entrada | De dónde sale |
 |---|---|
-| Política | `aval.yaml` **del SHA base** (`git show <base>:aval.yaml`), nunca del head |
-| Changes del PR | Directorios de `openspec/changes/<id>/` o `openspec/changes/archive/<fecha>-<id>/` que el diff `base..head` toca |
-| Tier | El mayor `tier` de los manifiestos de esos changes; si un change no tiene manifiesto, `tierDefault` de la política. **Sin changes, Tier 0** |
-| Obligaciones del delta | Requisitos ADDED y MODIFIED de esos changes (`Delta`: `added`/`modified`); el resto son `unchanged` |
-| Specs y reglas | `openspec.Load` en head, más `Check(CheckOptions{Base: <repo en base>})` |
+| Política | El `aval.yaml` **raíz del SHA base**. Si no existe, el gate corre en `observe` (`no_base_policy`) |
+| Changes del PR | Directorios de `openspec/changes/<id>/` o `openspec/changes/archive/<fecha>-<id>/` que toca el diff `base..head` |
+| Tier | **max**(`tierDefault` si hay algún commit `feat` o `mixed` o algún change; el `tier` de cada change en head; el `tier` de ese mismo change en la base si ya existía). Un PR solo `dx`/`seam`/`other` y sin changes es **Tier 0**. El head puede subir el tier, nunca bajarlo |
+| Obligaciones del delta | IDs **ADDED ∪ MODIFIED ∪ REMOVED ∪ RENAMED** de esos changes. Solo las ADDED y MODIFIED (`added`/`modified`) exigen falla-antes; el resto son `unchanged` |
+| Specs y reglas | `openspec.Load` en head, `Check(CheckOptions{Base})`, y el mismo `Check` en la base, para reportar solo los hallazgos **nuevos** |
 | Validación | `openspec.Validate` con la versión de la política, si el PR toca `openspec/` |
-| Declaraciones | `testsource.Scan` en base y en head, y `Compare` con los IDs del delta |
-| Ejecución | `gotest` en head; falla-antes sobre la superposición; regresiones aisladas |
-| Scope | Clasificación de cada commit `base..head` por las rutas de la política |
-| Etiquetas | `aval:override` y `aval:human-approved`: quién, cuándo y motivo, leídos de la API de GitHub |
+| Declaraciones | `testsource.Scan` en base y en head; `Compare` con `changed` = los IDs del delta (incluidos REMOVED y RENAMED) |
+| Ejecución | Ejecución completa de `gotest` en head, falla-antes (§2) y regresiones aisladas (§3) |
+| Scope | §3b |
+| Aprobaciones | Reviews del PR (§5), leídas de la API de GitHub |
 
 ### 2. Falla-antes por superposición
 
-Aplica solo a las obligaciones **F, N e I** con delta `added` o `modified`:
-1. Se crea `git worktree add --detach <tmp> <base>`.
-2. Encima se copian, desde head, los `*_test.go` añadidos o modificados y los ficheros de `testdata/` añadidos o modificados de esos paquetes.
-3. Se ejecuta `go test -json -run '^TestX$/^(ID1|ID2)([_#]|$)'`, una vez por Test.
-4. Se calcula el estado de cada ID con `gotest.Report.Status(id, <paquetes de sus tests en head>)`.
-5. El worktree se elimina siempre, también si algo falla.
+Aplica a las obligaciones **F, N e I** con delta `added` o `modified`:
+1. **Worktree:** `git worktree add --detach <tmp> <base>`.
+2. **Superposición:** en los paquetes de sus tests se copian, desde head, los `*_test.go` añadidos o modificados y los ficheros de `testdata/` añadidos o modificados. **Se borran** las rutas que head eliminó o renombró en esos paquetes.
+3. **Selección exacta:** a partir de los **nombres completos** de sus tests en la ejecución de head (por ejemplo `TestSuite/TestX/ORD-F01_…`) se construye un patrón anclado por nivel: `-run '^TestSuite$/^TestX$/^ORD-F01([_#]|$)'`. Cada nivel va escapado, y los IDs se agrupan por Test de primer nivel.
+4. **Estado:** el de cada ID sale de `gotest.Report.Status(id, <paquetes de sus tests en head>)`.
+5. **Limpieza:** el worktree se elimina siempre.
 
-| Estado en la base | Fuerza (ADR-0004) | Efecto |
+La fuerza (ADR-0004) exige **además** que el estado en head sea `pass`:
+
+| Estado en la base | Fuerza | Efecto |
 |---|---|---|
 | `fail` | `strong` | Válido |
-| `build_fail` | `weak` | Válido, se informa como evidencia débil |
+| `build_fail` | `weak` | Válido; motivo `weak_evidence` |
 | `pass` con `**aval**: characterization` | `characterization` | Válido |
 | `pass` sin la marca | `none` | Bloquea (`fail_before_missing`) |
 | `not_run` / `skipped` | `none` | Bloquea (`fail_before_missing`) |
 
 ### 3. Regresiones aisladas
 
-Las obligaciones F, N e I **sin** delta que tengan tests vinculados se ejecutan en head **aisladas**: un `go test -run '^TestX$/^(ID1|ID2)([_#]|$)'` por Test. Así los subtests hermanos y los Tests anteriores no pueden alterar su estado compartido (huecos aceptados de `testsource`). Tienen que pasar.
+Las obligaciones F, N e I **fuera del delta** que tienen tests vinculados se ejecutan en head **aisladas**, con la selección exacta de §2.3, un `go test` por Test de primer nivel. Así los subtests hermanos y los Tests anteriores no pueden alterar su estado. Tienen que pasar.
 
 ### 3b. Clasificación de commits (scope)
 
-Cada commit de `base..head` se clasifica por las rutas que toca, con los globs `paths.dx`, `paths.feat` y `paths.seam` de la política del **SHA base**. Si una ruta encaja en varias familias, gana `seam`; después, el glob más específico (el más largo).
+Cada commit de `base..head` se clasifica por sus rutas con los globs `paths.dx`, `paths.feat` y `paths.seam` de la política **del SHA base**. Si una ruta encaja en varias familias, gana `seam` y después el glob más largo.
 
 | Rutas del commit | Familia |
 |---|---|
-| Solo `dx` (más `seam` u otras) | `dx` |
-| Solo `feat` (más `seam` u otras) | `feat` |
-| `dx` **y** `feat` | `mixed`, con `families` → bloquea (`mixed_commit`) |
+| `dx`, más cualquier `seam` u otras | `dx` |
+| `feat`, más cualquier `seam` u otras | `feat` |
+| `dx` **y** `feat` | `mixed`, con `families: [dx, feat]` → bloquea (`mixed_commit`) |
 | Solo `seam` | `seam` |
-| Ninguna familia | `other` (no bloquea) |
+| Ninguna familia | `other` |
 
-**Commits de merge:** se clasifican solo con las rutas de su *combined diff* (`git show --cc --name-only`), es decir, lo que el merge cambia respecto a **todos** sus padres. Un merge limpio de `main` en la rama no aporta rutas y es `other`. Un "evil merge", que introduce cambios propios, se clasifica por esos cambios.
+`seam` y `other` **nunca** hacen `mixed` a un commit. Esto enmienda la frase de ADR-0004 "mixed cuando toca dos o más familias": `mixed` significa que toca `dx` y `feat`.
+
+**Commits de merge:** se clasifican con `git show --remerge-diff --name-only --format=`, que requiere git ≥ 2.36 (con uno más antiguo, exit 3).
+
+| Tipo de merge | Rutas que aporta |
+|---|---|
+| Merge limpio | Ninguna |
+| "Evil merge" | Las que introduce el propio merge |
+| Resolución de conflicto | Los ficheros resueltos |
+| Resolución que descarta cambios de una rama | Esos ficheros |
 
 ### 4. Reglas y códigos de motivo
 
-Cada regla que no se cumple añade un `Reason{Code, Message, ID}` al veredicto. Los códigos son estables: los scripts y el resumen de CI dependen de ellos.
+Cada regla incumplida añade un `Reason{Code, Message, ID}` al veredicto. Los códigos son estables.
 
 | Código | Cuándo | Tier | Efecto |
 |---|---|---|---|
-| `spec_rule` | `openspec.Check` devuelve un hallazgo de severidad error | 0–3 | block |
+| `spec_rule` | Un hallazgo de severidad error de `openspec.Check` en head **que no existía en la base** | 0–3 | block |
 | `openspec_invalid` | `Validate` falla (todo INFO es fallo salvo la allowlist de ADR-0002) | 0–3, si el PR toca `openspec/` | block |
-| `open_question` | Hay una obligación **O** en el delta | 1–3 | block |
-| `unverified` | Una obligación F/N/I del delta no tiene test vinculado | 1–3 | block |
-| `fail_before_missing` | Falla-antes no es válido (§2) | 1–3 | block |
-| `after_not_passing` | Un test vinculado (del delta o no) no pasa en head | 0–3 | block |
-| `regression` | Un test que pasaba en la base falla en head y no está en el baseline | 0–3 | block |
-| `build_failed` | Algún paquete no compila, o `go test` falla al preparar la ejecución, en head | 0–3 | block |
-| `tamper` | `testsource.Compare` devuelve un hallazgo para un ID fuera del delta, o el PR edita `aval.yaml` o `.aval/baseline.json` | 0–3 | block |
+| `open_question` | Una obligación **O** en el delta | 1–3 | block |
+| `unverified` | Una obligación F/N/I ADDED o MODIFIED sin test vinculado | 1–3 | block |
+| `fail_before_missing` | Falla-antes no válido (§2) | 1–3 | block |
+| `after_not_passing` | Un test **vinculado** (del delta o no) no pasa en head | 0–3 | block |
+| `regression` | Un test **no vinculado** falla en head y no figura en el baseline de la base | 0–3 | block |
+| `build_failed` | Algún paquete no compila o `go test` falla al preparar la ejecución, en head | 0–3 | block |
+| `tamper` | `testsource.Compare` devuelve un hallazgo, o el PR edita el `aval.yaml` raíz, `.aval/baseline.json`, `.github/**`, `CODEOWNERS` o `.golangci.yml` | 0–3 | block |
 | `undeclared_runtime` | Un test con ID se ejecuta sin declaración estática que lo empareje | 0–3 | block |
-| `mixed_commit` | Un commit toca rutas de `dx` y de `feat` | 0–3 | block |
-| `premortem_missing` | Un change no tiene `premortem.md` | 2–3 | block |
-| `premortem_unmapped` | Un ítem de lista de `premortem.md` no cita ningún ID del delta | 2–3 | block |
-| `approval_missing` | No hay una etiqueta `aval:human-approved` válida (§5) | 3 | block |
-| `lint_new_issues` | golangci-lint informa de problemas en código nuevo (`issues.new-from-merge-base`) | 0–3, si el repo tiene `.golangci.yml` | block |
-| `assumption` | Hay una obligación **A** en el delta | 1–3 | warn |
-| `slo_unverified` | Hay una obligación **S** en el delta (la v0 no mide SLOs) | 1–3 | warn |
-| `spec_warning` | `openspec.Check` devuelve un hallazgo de severidad warn | 0–3 | warn |
-| `seam_touched` | Un commit `feat` toca rutas de `seam` | 0–3 | warn |
-| `weak_evidence` | Alguna obligación tiene fuerza `weak` | 1–3 | warn |
-| `no_base_policy` | El SHA base no tiene `aval.yaml` (PR de adopción) | — | warn; el gate corre en `observe` |
+| `mixed_commit` | Un commit `mixed` (§3b) | 0–3 | block |
+| `premortem_missing` | Un change de tier ≥ 2 sin `premortem.md` | según cada change | block |
+| `premortem_unmapped` | Un `premortem.md` sin ítems, o con un ítem que no cita ningún ID de **su** change. Ítem = elemento de lista de primer nivel, fuera de bloques de código | según cada change | block |
+| `approval_missing` | Tier 3 sin una aprobación válida (§5) | 3 | block |
+| `lint_new_issues` | golangci-lint, con **el `.golangci.yml` de la base**, informa de problemas nuevos (`issues.new-from-merge-base`) | 0–3, si la base tiene `.golangci.yml` | block |
+| `assumption` | Una obligación **A** en el delta | 1–3 | warn |
+| `slo_unverified` | Una obligación **S** en el delta (la v0 no mide SLOs) | 1–3 | warn |
+| `spec_warning` | Un hallazgo de severidad warn nuevo de `openspec.Check` | 0–3 | warn |
+| `seam_touched` | Un commit `feat` toca rutas `seam` | 0–3 | warn |
+| `weak_evidence` | Alguna obligación con fuerza `weak` | 1–3 | warn |
+| `no_base_policy` | El SHA base no tiene `aval.yaml` raíz (PR de adopción) | — | warn; el gate corre en `observe` |
 
-Códigos **reservados** para hitos posteriores, que no se emiten en la v0 de M2:
-- `contract_breaking` (oasdiff, M4);
-- `contract_lint` (vacuum, M4);
-- `change_not_archived` (M3).
+Códigos **reservados** para hitos posteriores: `contract_breaking` y `contract_lint` (M4), y `change_not_archived` (M3).
 
 **El resultado del veredicto** es `block` si alguna regla bloquea, `warn` si solo hay avisos, y `pass` si no hay motivos.
 
-### 5. Etiquetas y override
+### 5. Aprobaciones y excepciones: reviews ligados al SHA
 
-Las dos etiquetas se validan igual. Una etiqueta es **válida** solo si se cumplen tres condiciones:
-1. **La puso un CODEOWNER.** En la v0 eso significa:
-   - un usuario listado **individualmente** en el `CODEOWNERS` del SHA base para `aval.yaml`;
-   - o un usuario con permiso `admin` o `maintain` en el repo.
+Las etiquetas no sirven: no se atan a un commit, y la hora de GitHub que podría anclarlas (la check suite) se puede adelantar empujando el SHA a otra rama. aval usa **reviews del PR**, que GitHub liga al commit revisado.
 
-   Los equipos de GitHub exigen un token con `read:org` y quedan para más adelante.
-2. **Se puso después del último commit.** La hora de referencia es el `created_at` de la primera *check suite* de GitHub para el SHA head. Es hora del servidor, así que no se puede falsificar con la fecha de un commit.
-3. **Tiene motivo** (solo para `aval:override`): una sección `## aval override` con texto no vacío en la descripción del PR.
+Una aprobación es **válida** si cumple tres condiciones:
+1. es un review con `state: APPROVED` y **`commit_id` igual al SHA head**;
+2. su autor es un **CODEOWNER**: un usuario listado individualmente en el `CODEOWNERS` de la base para el `aval.yaml` raíz, o con `role_name` ∈ {`admin`, `maintain`} (`GET /repos/{o}/{r}/collaborators/{user}/permission`; el campo `permission` no sirve porque reporta `maintain` como `write`);
+3. GitHub ya impide que el autor del PR apruebe su propio PR.
 
-Efectos:
-- **`aval:override` válida** convierte un `block` en `warn`. Los motivos se conservan y el override queda en el bundle (`valid: true`).
-- **`aval:override` inválida** también se registra, con `valid: false` y su `rejection`, y no cambia el veredicto.
-- **`aval:human-approved` válida** solo satisface `approval_missing`, no ninguna otra regla.
+Hay dos tipos:
+
+| Tipo | Requisito extra | Efecto |
+|---|---|---|
+| **Aprobación humana** | Ninguno | Satisface `approval_missing`; nada más |
+| **Excepción (override)** | Una línea `aval:override <motivo>` en el cuerpo del review, con motivo no vacío | Convierte un `block` en `warn`; los motivos se conservan |
+
+- **Todas las aprobaciones se registran en el bundle,** también las inválidas, con su `rejection`.
+- **Un review de un commit anterior no cuenta.** Cuando llega un commit nuevo, hace falta volver a aprobar.
+- **Los equipos de GitHub** exigen un token con `read:org` y quedan fuera de la v0.
 
 ### 6. Modos y códigos de salida
 
-- **El modo sale de la política del SHA base.** Si el propio PR cambia `mode`, eso no tiene efecto hasta que se fusiona, y además dispara `tamper`.
-- **`observe`:** el gate calcula e informa el veredicto completo y sale con 0.
-- **`enforce`:** sale con 1 si el veredicto es `block`, y con 0 si es `pass` o `warn`.
+- **El modo sale de la política del SHA base.** Cambiarlo en el PR dispara `tamper` y no tiene efecto hasta fusionarse.
+- **`observe`:** el gate calcula e informa el veredicto y sale con 0.
+- **`enforce`:** sale con 1 si el veredicto es `block`.
 
 | Código | Cuándo |
 |---|---|
 | 0 | `pass` o `warn`; o cualquier veredicto en `observe` |
 | 1 | `block` en `enforce` |
 | 2 | Uso incorrecto o política inválida (ADR-0004) |
-| 3 | Falta una herramienta (`go`, `git`, `node`/`npm`) o su versión no es la fijada |
+| 3 | Falta una herramienta (`go`, `git` ≥ 2.36, `node`/`npm`) o su versión no es la fijada |
 
-### 7. Evidencia y resumen
+### 7. Evidencia, baseline y resumen
 
-- **`aval verify`** escribe el bundle en `.aval/evidence/<head>.json` y deja el estado para los hooks en `.aval/cache/verify-status.json`, con clave `HEAD` + hash de `git diff HEAD`.
-- **`aval gate`** recalcula la evidencia en el mismo job (o reutiliza la de `verify` si `CheckHead` coincide), decide, escribe el veredicto en el bundle y, en GitHub Actions, un resumen en `$GITHUB_STEP_SUMMARY`.
-- El workflow sube el bundle como artefacto.
+- **`aval verify`** escribe el bundle en `.aval/evidence/<head>.json` y el estado para hooks en `.aval/cache/verify-status.json` (formato de `internal/hook`), con clave `HEAD` + hash de `git diff HEAD`.
+- **`aval gate`** recalcula la evidencia en el mismo job (o reutiliza la de `verify` si `CheckHead` coincide), decide, escribe el veredicto y, en GitHub Actions, un resumen en `$GITHUB_STEP_SUMMARY`. El workflow sube el bundle como artefacto.
 
-### 8. Seguridad del workflow
+**Bundle v2** (sube `schemaVersion`, según ADR-0004): sustituye `override` por **`approvals`**, una lista de:
 
-- **El gate corre con `on: pull_request`, nunca con `pull_request_target`:** ejecuta código del PR, así que no tiene secretos.
-- **Permisos de solo lectura:** `contents: read`, `pull-requests: read`, `issues: read` y `checks: read`.
-- **Eventos `labeled` y `unlabeled`** también disparan el gate, para que una etiqueta lo reevalúe.
+```
+{kind: "approval" | "override", actor, commitId, submittedAt, reason, valid, rejection}
+```
+
+`reason` solo aplica a `override`, y `rejection` solo a las inválidas. El resto del bundle v1 no cambia.
+
+**Baseline v1** (`.aval/baseline.json`, contrato nuevo en `internal/baseline`, con JSON Schema):
+
+```
+{version: 1, failing: [{package, test}]}
+```
+
+Lista los tests no vinculados que ya fallaban al adoptar aval. Lo escribe `aval dx adopt` (M4); en M2, si no existe, se trata como vacío.
+
+### 8. Workflow
+
+- **Evento `on: pull_request`** con los tipos `opened`, `synchronize`, `reopened` y `ready_for_review`, más **`on: pull_request_review`** para que una aprobación nueva reevalúe el gate.
+- **Checkout** con `fetch-depth: 0` y `ref: ${{ github.event.pull_request.head.sha }}`.
+- **Permisos de solo lectura:** `contents: read`, `pull-requests: read`, `checks: read`. Sin secretos.
+- **Prohibido filtrar el job con `if:` a nivel de job.** Un job saltado cuenta como éxito para un check obligatorio.
 
 ## Consecuencias
 
-- **Los motivos son un contrato:** añadir un código es compatible, pero cambiar el significado de uno existente exige un ADR nuevo.
-- **La primera adopción no puede bloquear:** un PR que introduce `aval.yaml` corre en `observe` (`no_base_policy`), y la política entra en vigor desde el siguiente PR.
-- **Huecos que quedan fuera de la v0:**
-  - equipos de GitHub en CODEOWNERS;
+- **Los códigos de motivo son un contrato:** añadir uno es compatible, cambiar el significado de uno existente exige un ADR nuevo.
+- **La primera adopción no puede bloquear** (`no_base_policy`).
+- **Bundle v2 y baseline v1** se implementan en `internal/evidence` e `internal/baseline` antes del motor del gate.
+- **La aprobación exige una segunda persona.** En un repo de una sola persona (el sandbox), `approval_missing` y `override` solo se pueden probar de punta a punta con una segunda cuenta de GitHub; mientras tanto se prueban contra una API de GitHub simulada.
+- **Huecos fuera de la v0:**
+  - equipos en CODEOWNERS;
   - reglas de contrato (M4);
-  - archivo obligatorio del change (M3).
+  - archivo obligatorio del change (M3);
+  - ejecución del gate desde una definición de workflow de confianza (por ejemplo, workflows requeridos por ruleset).

@@ -49,7 +49,7 @@ Cada contrato vive en el paquete del concepto que representa, con tipos Go, JSON
 
   Falla-antes solo aplica a obligaciones con `delta` `added` o `modified`.
 - **Override:** se registra aunque se rechace, incluso si le falta el motivo. Es válido solo si lo puso un CODEOWNER, con motivo, y después de un último commit conocido (`labeledAt` > `lastCommitAt`). Si no es válido, lleva `rejection`.
-- **Commit mixto:** es `mixed` exactamente cuando toca dos o más familias, y las lista en `families`.
+- **Commit mixto:** es `mixed` exactamente cuando toca `dx` **y** `feat`, y las lista en `families`; `seam` y `other` nunca lo hacen mixto (enmendado por ADR-0005 §3b).
 - **Tipos de manipulación:** `fingerprint_changed`, `test_removed`, `skip_added`, `policy_edited`, `baseline_edited`.
 - **La política viene de la base:** el gate lee `aval.yaml` y el baseline del SHA base, nunca del head. En modo `observe` el veredicto se informa sin bloquear; en `enforce`, un `block` bloquea.
 - **Recalcular en el mismo job:** el gate recalcula la evidencia y rechaza un bundle cuyo `head` no coincide con `HEAD` (`CheckHead`).
