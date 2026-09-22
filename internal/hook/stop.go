@@ -22,20 +22,23 @@ const verifyReason = "Run `aval verify` and fix failures before finishing."
 // checkVerified answers a Stop event: it blocks unless the last verify passed
 // on the current working tree. It does not block when a stop hook already
 // made the agent continue, so that a failing verify cannot trap it, nor when
-// there is no status and nothing to verify: a clean tree, as after a turn
-// that only answered a question.
+// there is nothing to verify: no status, a clean tree and a HEAD that some
+// remote-tracking branch contains, as after a turn that only answered a
+// question. An unpushed HEAD may hold commits nobody verified.
 func checkVerified(ctx context.Context, in input) *response {
 	if in.StopHookActive {
 		return nil
 	}
-	root, key, err := CurrentKey(ctx, cmp.Or(in.Cwd, "."))
+	dir := cmp.Or(in.Cwd, ".")
+	pushed := pushedHead(ctx, dir)
+	root, key, err := CurrentKey(ctx, dir)
 	if err != nil {
 		return nil
 	}
 	s, err := ReadStatus(root)
 	switch {
 	case errors.Is(err, ErrNoStatus):
-		if key.Clean() {
+		if key.Clean() && <-pushed {
 			return nil
 		}
 	case err != nil:
@@ -44,6 +47,17 @@ func checkVerified(ctx context.Context, in input) *response {
 		return nil
 	}
 	return &response{Decision: "block", Reason: verifyReason}
+}
+
+// pushedHead reports, once git answers, whether a remote-tracking branch
+// contains HEAD. It reports true when git fails: the hook fails open.
+func pushedHead(ctx context.Context, dir string) <-chan bool {
+	pushed := make(chan bool, 1)
+	go func() {
+		out, err := git(ctx, dir, "for-each-ref", "--contains", "HEAD", "--count=1", "refs/remotes").Output()
+		pushed <- err != nil || len(out) > 0
+	}()
+	return pushed
 }
 
 // StatusFile is where `aval verify` leaves its Status, relative to the
@@ -60,8 +74,8 @@ const maxStatus = 1 << 16
 // and in Diff the hex SHA-256 of the output of `git diff HEAD` followed, for
 // each untracked, not ignored file in path order, by
 // "<path>\x00<hex SHA-256 of its content>\n". A symlink's content is its
-// target. Untracked files under .aval/ are left out: they are aval's own
-// output, which verify writes after it takes the key.
+// target. Untracked files under .aval/cache/ and .aval/evidence/ are left
+// out: they are aval's own output, which verify writes after it takes the key.
 type Key struct {
 	Head string `json:"head"`
 	Diff string `json:"diff"`
@@ -197,7 +211,7 @@ func CurrentKey(ctx context.Context, dir string) (root string, key Key, err erro
 	}
 	root = filepath.FromSlash(top)
 	for p := range strings.SplitSeq(string(ut.out), "\x00") {
-		if p == "" || strings.HasPrefix(p, ".aval/") {
+		if p == "" || strings.HasPrefix(p, ".aval/cache/") || strings.HasPrefix(p, ".aval/evidence/") {
 			continue
 		}
 		sum, err := contentDigest(filepath.Join(root, filepath.FromSlash(p)))

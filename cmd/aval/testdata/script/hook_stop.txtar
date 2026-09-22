@@ -12,6 +12,13 @@ cd repo
 exec git init -q
 exec git add -A
 exec git -c user.name=aval -c user.email=aval@example.com -c commit.gpgsign=false commit -q -m init
+
+# A clean tree without a status needs no verify only once HEAD is pushed:
+# an agent may commit unverified work before it stops.
+stdin $WORK/stop.json
+exec aval hook stop
+cmp stdout $WORK/block.json
+exec git update-ref refs/remotes/origin/main HEAD
 stdin $WORK/stop.json
 exec aval hook stop
 ! stdout .

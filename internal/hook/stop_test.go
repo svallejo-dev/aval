@@ -20,25 +20,29 @@ func TestCheckVerified(t *testing.T) {
 	}
 	edit := files(map[string]string{"a.go": "package a // edited\n"})
 	untracked := files(map[string]string{"x_test.go": "package a\n\nimport \"testing\"\n\nfunc TestX(t *testing.T) { t.Fatal() }\n"})
-	commit := func(t *testing.T, dir string) { gitT(t, dir, "commit", "-q", "--allow-empty", "-m", "next") }
+	commit := func(t *testing.T, dir string) { gitT(t, dir, "commit", "-q", "-a", "--allow-empty", "-m", "next") }
+	push := func(t *testing.T, dir string) { gitT(t, dir, "update-ref", "refs/remotes/origin/main", "HEAD") }
 	tests := []struct {
 		name      string
 		in        input
 		steps     []step // run in order on a fresh repository
 		wantBlock bool
 	}{
-		{name: "missing status, clean tree"},
+		{name: "missing status, clean tree, pushed HEAD", steps: []step{push}},
+		{name: "missing status, clean tree, unpushed HEAD", wantBlock: true},
+		{name: "missing status, edit committed but not pushed", steps: []step{push, edit, commit}, wantBlock: true},
 		{name: "missing status, edited tree", steps: []step{edit}, wantBlock: true},
 		{name: "missing status, untracked file", steps: []step{untracked}, wantBlock: true},
 		{name: "passing status", steps: []step{edit, passed}},
 		{name: "passing status, from a subdirectory", in: input{Cwd: "sub"}, steps: []step{edit, passed}},
 		{name: "failing status", steps: []step{edit, failed}, wantBlock: true},
-		{name: "failing status, clean tree", steps: []step{failed}, wantBlock: true},
+		{name: "failing status, clean tree, pushed HEAD", steps: []step{push, failed}, wantBlock: true},
 		{name: "stale after an edit", steps: []step{passed, edit}, wantBlock: true},
 		{name: "stale after an untracked file", steps: []step{passed, untracked}, wantBlock: true},
 		{name: "stale after a commit", steps: []step{edit, passed, commit}, wantBlock: true},
 		{name: "fresh after staging", steps: []step{edit, passed, func(t *testing.T, dir string) { gitT(t, dir, "add", "a.go") }}},
 		{name: "fresh after aval's own output", steps: []step{edit, passed, files(map[string]string{".aval/evidence/x.json": "{}"})}},
+		{name: "stale after another untracked .aval file", steps: []step{edit, passed, files(map[string]string{".aval/baseline.json": "{}"})}, wantBlock: true},
 		{name: "corrupt status", steps: []step{edit, files(map[string]string{StatusFile: "{"})}, wantBlock: true},
 		{name: "status of another schema version", steps: []step{edit, files(map[string]string{StatusFile: `{"schemaVersion":2}`})}, wantBlock: true},
 		{name: "stop hook already active", in: input{StopHookActive: true}, steps: []step{edit}},
