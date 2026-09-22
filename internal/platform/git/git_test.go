@@ -162,6 +162,29 @@ func TestRunHardening(t *testing.T) {
 	}
 }
 
+// TestWithoutAttrSource checks that a default Runner reads attributes from
+// the empty tree and one made WithoutAttrSource from the working tree, and
+// that the latter keeps the other protections.
+func TestWithoutAttrSource(t *testing.T) {
+	t.Parallel()
+	dir := newRepo(t)
+	c1 := commit(t, dir, "c1", map[string]string{"a.txt": "one\n", ".gitattributes": "a.txt -diff\n"})
+	c2 := commit(t, dir, "c2", map[string]string{"a.txt": "two\n"})
+	gitT(t, dir, "replace", c2, c1) // read c1 for c2
+	diff := []string{"diff", "--no-ext-diff", "--no-color", c1, c2, "--", "a.txt"}
+
+	if got := run(t, New(dir), diff...); !strings.Contains(got, "-one\n+two") {
+		t.Errorf("default Runner: diff = %q, want a text patch: attributes from the empty tree", got)
+	}
+	without := New(dir, WithoutAttrSource())
+	if got := run(t, without, diff...); !strings.Contains(got, "Binary files") {
+		t.Errorf("WithoutAttrSource: diff = %q, want the working tree's -diff to make it binary", got)
+	}
+	if got := run(t, without, "log", "-1", "--format=%s", c2); got != "c2" {
+		t.Errorf("WithoutAttrSource: log = %q, want c2: replace refs are still ignored", got)
+	}
+}
+
 func readFile(t *testing.T, name string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(name) //nolint:gosec // a file of the test's repository

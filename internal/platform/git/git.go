@@ -4,7 +4,8 @@
 //   - with GIT_NO_REPLACE_OBJECTS=1 and GIT_GRAFT_FILE=/dev/null, so replace
 //     refs and grafts cannot rewrite the history;
 //   - with --attr-source=<empty tree>, so no .gitattributes in the repository
-//     can pick diff or merge drivers, filters or binary handling;
+//     can pick diff or merge drivers, filters or binary handling, unless the
+//     Runner was made WithoutAttrSource;
 //   - with -c core.hooksPath=/dev/null, so no hook runs;
 //   - without the repository variables a git hook exports (gitenv.Clean), so
 //     GIT_DIR or GIT_INDEX_FILE cannot point it at another repository;
@@ -78,21 +79,43 @@ func (e *Error) Unwrap() error { return e.Err }
 // Runner runs hardened git commands in one directory. It is safe for
 // concurrent use.
 type Runner struct {
-	dir string
+	dir          string
+	noAttrSource bool // set by WithoutAttrSource
 
 	mu        sync.Mutex
 	emptyTree string // set by the first EmptyTree that succeeds
 }
 
+// Option configures a Runner.
+type Option func(*Runner)
+
+// WithoutAttrSource makes Run and Stream leave out --attr-source, so they
+// read attributes from the working tree as plain git does, and need no git
+// hash-object first. Every other protection stays.
+//
+// Only the agent hooks use it (package hook): they read the agent's own
+// working tree to build an advisory cache key, within a 50 ms budget, and an
+// agent that could plant a .gitattributes could as well write the status
+// the key guards. The gate, which reads base and head in CI where head is
+// untrusted, must not use it (ADR-0005 §1).
+func WithoutAttrSource() Option {
+	return func(r *Runner) { r.noAttrSource = true }
+}
+
 // New returns a Runner for dir; "" is the current directory.
-func New(dir string) *Runner {
-	return &Runner{dir: dir}
+func New(dir string, opts ...Option) *Runner {
+	r := &Runner{dir: dir}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
 }
 
 // Run runs git with args, and with stdin as its standard input when it is
 // not nil, and returns its standard output. args follow the options Run
 // adds: global options, if any, then the subcommand and its arguments. The
-// first Run needs the empty tree, see EmptyTree.
+// first Run needs the empty tree, see EmptyTree, unless the Runner was made
+// WithoutAttrSource.
 //
 // A failed command returns an *Error with args. When ctx ends first, git is
 // stopped and Err is ctx's cause; when git is not on PATH, Err wraps
@@ -157,8 +180,12 @@ func checkVersion(out string) error {
 }
 
 // hardened runs git with every protection, attributes from the empty tree
-// included. Without the empty tree, git does not start.
+// included unless r is WithoutAttrSource. Without the empty tree, git does
+// not start.
 func (r *Runner) hardened(ctx context.Context, stdin []byte, stdout io.Writer, args []string) error {
+	if r.noAttrSource {
+		return r.run(ctx, stdin, stdout, "", args)
+	}
 	tree, err := r.EmptyTree(ctx)
 	if err != nil {
 		return &Error{Args: args, ExitCode: -1, Err: err}

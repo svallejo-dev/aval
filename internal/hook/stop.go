@@ -31,9 +31,8 @@ func checkVerified(ctx context.Context, in input) *response {
 		return nil
 	}
 	dir := cmp.Or(in.Cwd, ".")
-	g := git.New(dir) // shared, so that git hash-object runs once
-	pushed := pushedHead(ctx, g)
-	root, key, err := currentKey(ctx, g, dir)
+	pushed := pushedHead(ctx, dir)
+	root, key, err := CurrentKey(ctx, dir)
 	if err != nil {
 		return nil
 	}
@@ -55,10 +54,10 @@ func checkVerified(ctx context.Context, in input) *response {
 // contains HEAD: no commit of HEAD is missing from every remote. Unlike
 // for-each-ref --contains, rev-list walks the history once, whatever the
 // number of remote refs. It reports true when git fails: the hook fails open.
-func pushedHead(ctx context.Context, g *git.Runner) <-chan bool {
+func pushedHead(ctx context.Context, dir string) <-chan bool {
 	pushed := make(chan bool, 1)
 	go func() {
-		out, err := g.Run(ctx, nil, "rev-list", "-n1", "HEAD", "--not", "--remotes")
+		out, err := newGit(dir).Run(ctx, nil, "rev-list", "-n1", "HEAD", "--not", "--remotes")
 		pushed <- err != nil || len(out) == 0
 	}()
 	return pushed
@@ -182,14 +181,10 @@ func ReadStatus(root string) (Status, error) {
 }
 
 // CurrentKey returns the root of the git working tree that holds dir and its
-// Key. It runs its three git commands concurrently, for latency, hardened
-// like every git aval runs (package git).
+// Key. It runs its three git commands concurrently, for latency, with the
+// hooks' git (newGit).
 func CurrentKey(ctx context.Context, dir string) (root string, key Key, err error) {
-	return currentKey(ctx, git.New(dir), dir)
-}
-
-// currentKey is CurrentKey with g, a Runner for dir.
-func currentKey(ctx context.Context, g *git.Runner, dir string) (root string, key Key, err error) {
+	g := newGit(dir)
 	type result struct {
 		out []byte
 		err error
@@ -259,4 +254,14 @@ func contentDigest(name string) ([]byte, error) {
 		}
 	}
 	return h.Sum(nil), nil
+}
+
+// newGit returns the Runner the hooks run git with: hardened, but reading
+// attributes from the working tree (git.WithoutAttrSource). The hooks read
+// the agent's own working tree for an advisory key, within ADR-0003's 50 ms,
+// and --attr-source would cost a git hash-object before any other git. An
+// agent that could plant a .gitattributes could as well write the status by
+// hand; the gate in CI, which does not trust head, keeps --attr-source.
+func newGit(dir string) *git.Runner {
+	return git.New(dir, git.WithoutAttrSource())
 }
