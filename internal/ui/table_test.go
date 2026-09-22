@@ -3,6 +3,7 @@ package ui
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/svallejo-dev/aval/internal/envelope"
@@ -59,5 +60,38 @@ func TestPrintIssues(t *testing.T) {
 	}
 	if stdout.String() != "table\n" || stderr.String() != "aval: trace failed: 1 orphan test\n" {
 		t.Errorf("plain: stdout %q, stderr %q; want the lines, then the issue on stderr", stdout.String(), stderr.String())
+	}
+}
+
+// TestPrintStderrSettings checks that the lines on stderr follow the settings
+// resolved against stderr: stdout at a terminal, stderr redirected to a log.
+func TestPrintStderrSettings(t *testing.T) {
+	t.Parallel()
+	const esc = "\x1b["
+	r := Result{
+		Lines:  []Line{{{Text: "traced", Tone: ToneSuccess}}},
+		Issues: []envelope.Issue{{Code: "failed", Message: "trace failed"}},
+	}
+	var stdout, stderr bytes.Buffer
+	p := NewPrinter(Settings{Mode: ModeTUI, Color: true}, &stdout, &stderr, WithStderr(Settings{Mode: ModePlain}))
+	if err := p.Print(r); err != nil {
+		t.Fatal(err)
+	}
+	p.PrintError("trace", envelope.Issue{Code: "usage", Message: "bad flag"})
+	if !strings.Contains(stdout.String(), esc) {
+		t.Errorf("stdout = %q, want it styled", stdout.String())
+	}
+	if want := "aval: trace failed\naval: bad flag\n"; stderr.String() != want {
+		t.Errorf("stderr = %q, want %q without escape sequences", stderr.String(), want)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	p = NewPrinter(Settings{Mode: ModePlain}, &stdout, &stderr, WithStderr(Settings{Mode: ModeTUI, Color: true}))
+	if err := p.Print(r); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stdout.String(), esc) || !strings.Contains(stderr.String(), esc) {
+		t.Errorf("stdout %q, stderr %q: want plain stdout and styled stderr", stdout.String(), stderr.String())
 	}
 }

@@ -51,8 +51,10 @@ type Printer struct {
 	stdout   io.Writer
 	stderr   io.Writer
 	theme    theme
+	errTheme theme // for the lines written to stderr
 	settings Settings
 	width    int
+	errTUI   bool // style the lines written to stderr
 }
 
 // Option configures a Printer.
@@ -64,10 +66,20 @@ func WithWidth(n int) Option {
 	return func(p *Printer) { p.width = n }
 }
 
+// WithStderr styles the lines written to stderr, issues and errors, with s,
+// the settings resolved against stderr, instead of with stdout's: each stream
+// follows its own terminal, so `aval trace 2>err.log` at a terminal writes no
+// escape sequences to the log (ADR-0003). The json envelope always follows
+// the stdout settings.
+func WithStderr(s Settings) Option {
+	return func(p *Printer) { p.errTUI, p.errTheme = s.Mode == ModeTUI, newTheme(s.Color) }
+}
+
 // NewPrinter returns a printer that writes results to stdout and, outside
 // json mode, failures to stderr.
 func NewPrinter(s Settings, stdout, stderr io.Writer, opts ...Option) *Printer {
-	p := &Printer{stdout: stdout, stderr: stderr, theme: newTheme(s.Color), settings: s}
+	th := newTheme(s.Color)
+	p := &Printer{stdout: stdout, stderr: stderr, theme: th, errTheme: th, settings: s, errTUI: s.Mode == ModeTUI}
 	for _, opt := range opts {
 		opt(p)
 	}
@@ -84,7 +96,7 @@ func (p *Printer) Print(r Result) error {
 		}
 		return nil
 	}
-	if err := p.writeLines(p.stdout, r.Lines); err != nil {
+	if err := p.writeLines(p.stdout, r.Lines, p.settings.Mode == ModeTUI, p.theme); err != nil {
 		return err
 	}
 	var lines []Line
@@ -94,7 +106,7 @@ func (p *Printer) Print(r Result) error {
 	if len(lines) == 0 {
 		return nil
 	}
-	return p.writeLines(p.stderr, lines)
+	return p.writeLines(p.stderr, lines, p.errTUI, p.errTheme)
 }
 
 // PrintError reports that command failed: with an error envelope on stdout in
@@ -108,7 +120,7 @@ func (p *Printer) PrintError(command string, is envelope.Issue) {
 			return
 		}
 	}
-	_ = p.writeLines(p.stderr, issueLines(is))
+	_ = p.writeLines(p.stderr, issueLines(is), p.errTUI, p.errTheme)
 }
 
 // issueLines is how an issue reads outside json mode.
@@ -120,16 +132,15 @@ func issueLines(is envelope.Issue) []Line {
 	return lines
 }
 
-// writeLines writes lines styled by the theme in tui mode and as bare text
-// otherwise. Plain lines are never wrapped, so logs stay greppable.
-func (p *Printer) writeLines(w io.Writer, lines []Line) error {
-	tui := p.settings.Mode == ModeTUI
+// writeLines writes lines styled by th when tui and as bare text otherwise.
+// Plain lines are never wrapped, so logs stay greppable.
+func (p *Printer) writeLines(w io.Writer, lines []Line, tui bool, th theme) error {
 	var b, line strings.Builder
 	for _, l := range lines {
 		line.Reset()
 		for _, s := range l {
 			if tui {
-				line.WriteString(p.theme.render(s))
+				line.WriteString(th.render(s))
 			} else {
 				line.WriteString(s.Text)
 			}
