@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -14,29 +15,33 @@ type step = func(t *testing.T, dir string)
 
 func TestCheckVerified(t *testing.T) {
 	t.Parallel()
-	edit := func(t *testing.T, dir string) { writeFiles(t, dir, map[string]string{"a.go": "package a // edited\n"}) }
-	status := func(content string) step {
-		return func(t *testing.T, dir string) { writeFiles(t, dir, map[string]string{StatusFile: content}) }
+	files := func(files map[string]string) step {
+		return func(t *testing.T, dir string) { writeFiles(t, dir, files) }
 	}
+	edit := files(map[string]string{"a.go": "package a // edited\n"})
+	untracked := files(map[string]string{"x_test.go": "package a\n\nimport \"testing\"\n\nfunc TestX(t *testing.T) { t.Fatal() }\n"})
+	commit := func(t *testing.T, dir string) { gitT(t, dir, "commit", "-q", "--allow-empty", "-m", "next") }
 	tests := []struct {
 		name      string
 		in        input
 		steps     []step // run in order on a fresh repository
 		wantBlock bool
 	}{
-		{name: "missing status", wantBlock: true},
-		{name: "passing status", steps: []step{passed}},
-		{name: "passing status, from a subdirectory", in: input{Cwd: "sub"}, steps: []step{passed}},
-		{name: "failing status", steps: []step{failed}, wantBlock: true},
+		{name: "missing status, clean tree"},
+		{name: "missing status, edited tree", steps: []step{edit}, wantBlock: true},
+		{name: "missing status, untracked file", steps: []step{untracked}, wantBlock: true},
+		{name: "passing status", steps: []step{edit, passed}},
+		{name: "passing status, from a subdirectory", in: input{Cwd: "sub"}, steps: []step{edit, passed}},
+		{name: "failing status", steps: []step{edit, failed}, wantBlock: true},
+		{name: "failing status, clean tree", steps: []step{failed}, wantBlock: true},
 		{name: "stale after an edit", steps: []step{passed, edit}, wantBlock: true},
-		{name: "stale after a commit", steps: []step{passed, func(t *testing.T, dir string) {
-			gitT(t, dir, "commit", "-q", "--allow-empty", "-m", "next")
-		}}, wantBlock: true},
+		{name: "stale after an untracked file", steps: []step{passed, untracked}, wantBlock: true},
+		{name: "stale after a commit", steps: []step{edit, passed, commit}, wantBlock: true},
 		{name: "fresh after staging", steps: []step{edit, passed, func(t *testing.T, dir string) { gitT(t, dir, "add", "a.go") }}},
-		{name: "corrupt status", steps: []step{status("{")}, wantBlock: true},
-		{name: "status of another schema version", steps: []step{status(`{"schemaVersion":2}`)}, wantBlock: true},
-		{name: "stop hook already active", in: input{StopHookActive: true}},
-		{name: "cursor loop", in: input{LoopCount: 1}},
+		{name: "fresh after aval's own output", steps: []step{edit, passed, files(map[string]string{".aval/evidence/x.json": "{}"})}},
+		{name: "corrupt status", steps: []step{edit, files(map[string]string{StatusFile: "{"})}, wantBlock: true},
+		{name: "status of another schema version", steps: []step{edit, files(map[string]string{StatusFile: `{"schemaVersion":2}`})}, wantBlock: true},
+		{name: "stop hook already active", in: input{StopHookActive: true}, steps: []step{edit}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -103,5 +108,24 @@ func TestStatusFile(t *testing.T) {
 	want.SchemaVersion = StatusVersion
 	if got, err := ReadStatus(root); err != nil || got != want {
 		t.Errorf("ReadStatus() = %+v, %v; want %+v", got, err, want)
+	}
+
+	// Only a regular file is read: opening a FIFO would hang.
+	for name, create := range map[string]func(string) error{
+		"symlink": func(p string) error { return os.Symlink("/dev/zero", p) },
+		"fifo":    func(p string) error { return exec.Command("mkfifo", p).Run() }, //nolint:gosec // a temporary path
+	} {
+		root := t.TempDir()
+		p := filepath.Join(root, filepath.FromSlash(StatusFile))
+		if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := create(p); err != nil {
+			t.Logf("no %s here: %v", name, err)
+			continue
+		}
+		if _, err := ReadStatus(root); !errors.Is(err, ErrNoStatus) {
+			t.Errorf("ReadStatus() of a %s: error %v, want ErrNoStatus", name, err)
+		}
 	}
 }

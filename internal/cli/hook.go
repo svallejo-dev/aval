@@ -16,7 +16,7 @@ In .claude/settings.json:
 
   {
     "hooks": {
-      "PostToolUse": [{"matcher": "Edit|MultiEdit|Write",
+      "PostToolUse": [{"matcher": "Edit|Write",
         "hooks": [{"type": "command", "command": "aval hook post-tool-use"}]}],
       "Stop": [{"hooks": [{"type": "command", "command": "aval hook stop"}]}]
     }

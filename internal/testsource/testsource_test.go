@@ -477,3 +477,25 @@ func TestScanErrors(t *testing.T) {
 		t.Errorf("Scan of a missing directory = %v, want fs.ErrNotExist", err)
 	}
 }
+
+func TestScanDir(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	for name, src := range map[string]string{
+		"a_test.go":     "package p\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) { t.Run(\"ORD-F01 top\", func(t *testing.T) {}) }\n",
+		"sub/b_test.go": "package p\n\nfunc {", // below dir: never read
+	} {
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(src), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	decls, err := ScanDir(dir)
+	if got := describe(decls); err != nil || !slices.Equal(got, []string{`ORD-F01 "ORD-F01 top" a_test.go:5 TestA subtest`}) {
+		t.Errorf("ScanDir = %q, %v; want only the declaration of a_test.go", got, err)
+	}
+}

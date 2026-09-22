@@ -141,7 +141,17 @@ type Declaration struct {
 // and vendor directories and names starting with "." or "_". A file that does
 // not parse is an error that names its file and line.
 func Scan(dir string) ([]Declaration, error) {
-	s := &scanner{fsys: os.DirFS(dir), fset: token.NewFileSet(), pkgs: map[[2]string]*pkg{}}
+	return scan(dir, false)
+}
+
+// ScanDir is Scan for the _test.go files directly in dir, the package in
+// that directory, without the directories below it.
+func ScanDir(dir string) ([]Declaration, error) {
+	return scan(dir, true)
+}
+
+func scan(dir string, flat bool) ([]Declaration, error) {
+	s := &scanner{fsys: os.DirFS(dir), fset: token.NewFileSet(), pkgs: map[[2]string]*pkg{}, flat: flat}
 	if err := fs.WalkDir(s.fsys, ".", s.visit); err != nil {
 		return nil, fmt.Errorf("scan %s: %w", dir, err)
 	}
@@ -163,6 +173,7 @@ type scanner struct {
 	fsys fs.FS
 	fset *token.FileSet
 	pkgs map[[2]string]*pkg // by directory and package name
+	flat bool               // do not descend into directories
 }
 
 func (s *scanner) visit(rel string, d fs.DirEntry, err error) error {
@@ -172,7 +183,7 @@ func (s *scanner) visit(rel string, d fs.DirEntry, err error) error {
 	name := d.Name()
 	hidden := strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")
 	if d.IsDir() {
-		if rel != "." && (hidden || name == "testdata" || name == "vendor") {
+		if rel != "." && (s.flat || hidden || name == "testdata" || name == "vendor") {
 			return fs.SkipDir
 		}
 		return nil

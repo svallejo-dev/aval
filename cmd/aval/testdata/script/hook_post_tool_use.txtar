@@ -1,8 +1,9 @@
 # aval hook post-tool-use reminds the agent that the bound tests it edited are
 # guarded, leaving out the IDs in the delta of the active changes. It never
-# blocks, and says nothing about other files or unreadable events.
+# blocks, and says nothing about other files.
 
 cd repo
+exec git init -q
 stdin $WORK/edit-test.json
 exec aval hook post-tool-use
 stdout '^\{"hookSpecificOutput":\{"hookEventName":"PostToolUse","additionalContext":"aval: this file binds tests to ORD-F01, which are not in the delta of any active OpenSpec change\. .*tamper'

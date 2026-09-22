@@ -1,5 +1,5 @@
-// Package hook answers the hooks that coding agents run, fast and without
-// Charm (ADR-0003). The CI gate is the real check; hooks give early feedback:
+// Package hook answers Claude Code's hooks, fast and without Charm
+// (ADR-0003). The CI gate is the real check; hooks give early feedback:
 //
 //   - post-tool-use reminds the agent, without blocking, that the test file
 //     it edited binds tests to obligations outside the delta of every active
@@ -7,17 +7,16 @@
 //   - stop keeps the agent working until the last `aval verify` passed on the
 //     current working tree (ADR-0005 §7, see Status).
 //
-// The protocol is Claude Code's: the event arrives as JSON on stdin and the
-// answer leaves as JSON on stdout, with exit status 0. Cursor's and GitHub
-// Copilot's event shapes are read too, but answered in the same format.
+// The event arrives as JSON on stdin and the answer leaves as JSON on
+// stdout, with exit status 0. Other agents' events decode as far as they
+// match Claude Code's; their own shapes are for a later shim (M6).
 //
 // Hooks fail open: when the event cannot be read, the directory is not in a
-// git repository or anything else fails, they write nothing and exit with 0,
-// so a hook never breaks the agent.
+// git repository, anything fails or the deadline passes, they write nothing
+// and exit with 0, so a hook never breaks the agent.
 package hook
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -42,25 +41,40 @@ const (
 // Run reads event e from stdin and writes the agent's answer, if any, to
 // stdout. It has no error to return: a hook fails open.
 func Run(ctx context.Context, e Event, stdin io.Reader, stdout io.Writer) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	if r := respond(ctx, e, stdin); r != nil {
 		_ = json.NewEncoder(stdout).Encode(r) // the agent stopped listening: nothing left to do
 	}
 }
 
-// respond returns the answer to e, or nil. A panic yields nil too: a bug in
-// a hook must not break the agent either.
-func respond(ctx context.Context, e Event, stdin io.Reader) (r *response) {
-	defer func() {
-		if recover() != nil {
-			r = nil
-		}
+// respond returns the answer to e, or nil when there is none, when anything
+// fails or panics, or when ctx is done first. The work runs in a goroutine so
+// that nothing outlives the deadline: ctx kills git, and a blocked read of
+// stdin or of a file ends with the process.
+func respond(ctx context.Context, e Event, stdin io.Reader) *response {
+	done := make(chan *response, 1)
+	go func() {
+		defer func() {
+			if recover() != nil {
+				done <- nil
+			}
+		}()
+		done <- answer(ctx, e, stdin)
 	}()
+	select {
+	case r := <-done:
+		return r
+	case <-ctx.Done():
+		return nil
+	}
+}
+
+func answer(ctx context.Context, e Event, stdin io.Reader) *response {
 	in, err := readInput(stdin)
 	if err != nil {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 	switch e {
 	case PostToolUse:
 		return checkBoundTests(ctx, in)
@@ -83,61 +97,22 @@ type specific struct {
 	AdditionalContext string `json:"additionalContext"`
 }
 
-// input is what aval reads from an event, whichever agent sent it.
+// input is the part of a Claude Code event that aval reads.
 type input struct {
-	Cwd            string // "" is the process's working directory
-	Tool           string
-	FilePath       string // relative paths are relative to Cwd
-	StopHookActive bool
-	LoopCount      int
+	Cwd            string    `json:"cwd"` // "" is the process's working directory
+	ToolName       string    `json:"tool_name"`
+	ToolInput      toolInput `json:"tool_input"`
+	StopHookActive bool      `json:"stop_hook_active"`
 }
 
-// wireInput has the fields of Claude Code, Cursor and Copilot events.
-// encoding/json matches keys case-insensitively, but tool_name and toolName
-// still differ.
-type wireInput struct {
-	Cwd            string          `json:"cwd"`
-	WorkspaceRoots []string        `json:"workspace_roots"` // Cursor
-	ToolName       string          `json:"tool_name"`
-	ToolNameCamel  string          `json:"toolName"` // Copilot
-	ToolInput      json.RawMessage `json:"tool_input"`
-	ToolArgs       json.RawMessage `json:"toolArgs"`  // Copilot: an object, or one encoded as a string
-	FilePath       string          `json:"file_path"` // Cursor's afterFileEdit
-	StopHookActive bool            `json:"stop_hook_active"`
-	LoopCount      int             `json:"loop_count"` // Cursor
+type toolInput struct {
+	FilePath string `json:"file_path"` // absolute for Edit and Write
 }
 
 func readInput(r io.Reader) (input, error) {
-	var w wireInput
-	if err := json.NewDecoder(io.LimitReader(r, maxInput)).Decode(&w); err != nil {
+	var in input
+	if err := json.NewDecoder(io.LimitReader(r, maxInput)).Decode(&in); err != nil {
 		return input{}, fmt.Errorf("decode hook event: %w", err)
 	}
-	in := input{
-		Cwd:            w.Cwd,
-		Tool:           cmp.Or(w.ToolName, w.ToolNameCamel),
-		FilePath:       cmp.Or(argsFile(w.ToolInput), argsFile(w.ToolArgs), w.FilePath),
-		StopHookActive: w.StopHookActive,
-		LoopCount:      w.LoopCount,
-	}
-	if in.Cwd == "" && len(w.WorkspaceRoots) > 0 {
-		in.Cwd = w.WorkspaceRoots[0]
-	}
 	return in, nil
-}
-
-// argsFile returns the file_path, filePath or path of a tool's arguments.
-func argsFile(raw json.RawMessage) string {
-	var encoded string
-	if json.Unmarshal(raw, &encoded) == nil {
-		raw = json.RawMessage(encoded)
-	}
-	var args struct {
-		FilePath      string `json:"file_path"`
-		FilePathCamel string `json:"filePath"`
-		Path          string `json:"path"`
-	}
-	if json.Unmarshal(raw, &args) != nil {
-		return ""
-	}
-	return cmp.Or(args.FilePath, args.FilePathCamel, args.Path)
 }

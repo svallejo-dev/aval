@@ -35,11 +35,19 @@ func TestRefund(t *testing.T) {
 import "testing"
 
 func TestDelta(t *testing.T) {
+	t.Run("ORD-F05 mail", func(t *testing.T) {})
+	t.Run("ORD-F06 notice", func(t *testing.T) {})
+	t.Run("ORD-F04 manual", func(t *testing.T) {})
+}
+`,
+	"refund/only_delta_test.go": `package refund
+
+import "testing"
+
+func TestOnlyDelta(t *testing.T) {
 	t.Run("ORD-F02 partial", func(t *testing.T) {})
 	t.Run("ORD-N01 bounded", func(t *testing.T) {})
 	t.Run("ORD-F04 manual", func(t *testing.T) {})
-	t.Run("ORD-F05 mail", func(t *testing.T) {})
-	t.Run("ORD-F06 notice", func(t *testing.T) {})
 }
 `,
 	"refund/plain_test.go": "package refund\n\nimport \"testing\"\n\nfunc TestPlain(t *testing.T) { t.Run(\"works\", func(t *testing.T) {}) }\n",
@@ -47,11 +55,12 @@ func TestDelta(t *testing.T) {
 
 func TestCheckBoundTests(t *testing.T) {
 	t.Parallel()
-	shop := t.TempDir()
-	writeFiles(t, shop, shopFiles)
+	shop := newRepo(t, shopFiles)
 	writeFiles(t, shop, map[string]string{"broken/broken_test.go": "package broken\n\nfunc {"})
-	bare := t.TempDir() // no OpenSpec tree
-	writeFiles(t, bare, map[string]string{"refund/refund_test.go": shopFiles["refund/refund_test.go"]})
+	bare := newRepo(t, map[string]string{"refund/refund_test.go": shopFiles["refund/refund_test.go"]}) // no OpenSpec tree
+	edit := func(tool, cwd, file string) input {
+		return input{Cwd: cwd, ToolName: tool, ToolInput: toolInput{FilePath: file}}
+	}
 	file := func(root, name string) string { return filepath.Join(root, "refund", name) }
 
 	const outside = ", which are not in the delta of any active OpenSpec change"
@@ -60,19 +69,23 @@ func TestCheckBoundTests(t *testing.T) {
 		in   input
 		want string // the IDs part of the reminder; "" means no answer
 	}{
-		{"IDs outside the delta", input{Tool: "Edit", FilePath: file(shop, "refund_test.go")}, "ORD-F01, ORD-F03" + outside},
-		{"relative to cwd", input{Cwd: shop, Tool: "MultiEdit", FilePath: "refund/refund_test.go"}, "ORD-F01, ORD-F03" + outside},
-		{"table in another file", input{Tool: "Write", FilePath: file(shop, "table_test.go")}, "ORD-I01" + outside},
-		{"cursor, no tool name", input{FilePath: file(shop, "refund_test.go")}, "ORD-F01, ORD-F03" + outside},
-		{"no OpenSpec tree", input{Tool: "Edit", FilePath: file(bare, "refund_test.go")}, "ORD-F01, ORD-F02, ORD-F03, ORD-N01"},
-		{"only delta IDs", input{Tool: "Edit", FilePath: file(shop, "delta_test.go")}, ""},
-		{"no ID", input{Tool: "Edit", FilePath: file(shop, "plain_test.go")}, ""},
-		{"only the data of a table", input{Tool: "Edit", FilePath: file(shop, "cases_test.go")}, ""},
-		{"not a test file", input{Tool: "Edit", FilePath: file(shop, "refund.go")}, ""},
-		{"read, not edited", input{Tool: "Read", FilePath: file(shop, "refund_test.go")}, ""},
-		{"missing file", input{Tool: "Write", FilePath: file(shop, "gone_test.go")}, ""},
-		{"does not parse", input{Tool: "Write", FilePath: filepath.Join(shop, "broken", "broken_test.go")}, ""},
-		{"no file", input{Tool: "Edit"}, ""},
+		{"IDs outside the delta", edit("Edit", shop, file(shop, "refund_test.go")), "ORD-F01, ORD-F03" + outside},
+		{"relative to cwd", edit("Write", shop, "refund/refund_test.go"), "ORD-F01, ORD-F03" + outside},
+		{"from a subdirectory", edit("Edit", filepath.Join(shop, "refund"), file(shop, "refund_test.go")), "ORD-F01, ORD-F03" + outside},
+		{"table in another file", edit("Write", shop, file(shop, "table_test.go")), "ORD-I01" + outside},
+		{"renamed IDs stay guarded", edit("Edit", shop, file(shop, "delta_test.go")), "ORD-F05, ORD-F06" + outside},
+		{"no OpenSpec tree", edit("Edit", bare, file(bare, "refund_test.go")), "ORD-F01, ORD-F02, ORD-F03, ORD-N01"},
+		{"only delta IDs", edit("Edit", shop, file(shop, "only_delta_test.go")), ""},
+		{"no ID", edit("Edit", shop, file(shop, "plain_test.go")), ""},
+		{"only the data of a table", edit("Edit", shop, file(shop, "cases_test.go")), ""},
+		{"not a test file", edit("Edit", shop, file(shop, "refund.go")), ""},
+		{"not an edit", edit("Read", shop, file(shop, "refund_test.go")), ""},
+		{"no tool name", edit("", shop, file(shop, "refund_test.go")), ""},
+		{"outside the repository", edit("Edit", shop, file(bare, "refund_test.go")), ""},
+		{"cwd outside a repository", edit("Edit", t.TempDir(), file(shop, "refund_test.go")), ""},
+		{"missing file", edit("Write", shop, file(shop, "gone_test.go")), ""},
+		{"does not parse", edit("Write", shop, filepath.Join(shop, "broken", "broken_test.go")), ""},
+		{"no file", edit("Edit", shop, ""), ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

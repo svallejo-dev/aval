@@ -33,6 +33,7 @@ func TestLatency(t *testing.T) {
 		t.Fatal(err)
 	}
 	small := newRepo(t, shopFiles)
+	writeFiles(t, small, map[string]string{"refund/new_test.go": "package refund\n"}) // untracked: stop hashes it and blocks
 	edit := func(file string) string {
 		return `{"hook_event_name":"PostToolUse","tool_name":"Edit","tool_input":{"file_path":` + quote(file) + `}}`
 	}
@@ -66,7 +67,7 @@ func TestLatency(t *testing.T) {
 			t.Errorf("%s: aval hook %s wrote %q, want %q in it", tt.repo, tt.event, out.String(), tt.want)
 		}
 		slices.Sort(times)
-		p95 := times[len(times)*95/100-1]
+		p95 := times[(len(times)*95+99)/100-1]
 		t.Logf("%s: aval hook %s: p50 %v, p95 %v", tt.repo, tt.event, times[len(times)/2], p95)
 		if p95 > budget {
 			t.Errorf("%s: aval hook %s: p95 %v, over the %v budget", tt.repo, tt.event, p95, budget)
