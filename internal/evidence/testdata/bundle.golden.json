@@ -1,0 +1,133 @@
+{
+  "schemaVersion": 1,
+  "repo": "svallejo-dev/aval-sandbox",
+  "base": "1111111111111111111111111111111111111111",
+  "head": "2222222222222222222222222222222222222222",
+  "avalVersion": "v0.0.0-test",
+  "generatedAt": "2026-09-21T12:00:00Z",
+  "mode": "enforce",
+  "tier": 1,
+  "changes": [
+    "add-refunds"
+  ],
+  "obligations": [
+    {
+      "id": "ORD-F01",
+      "kind": "F",
+      "source": "openspec/specs/refunds/spec.md#ORD-F01 Refund is idempotent",
+      "delta": "added",
+      "characterization": false,
+      "tests": [
+        "TestRefunds/ORD-F01_second_refund_is_a_no-op"
+      ],
+      "before": "fail",
+      "after": "pass",
+      "strength": "strong"
+    },
+    {
+      "id": "ORD-F02",
+      "kind": "F",
+      "source": "openspec/specs/refunds/spec.md#ORD-F02 Refund needs a charge",
+      "delta": "added",
+      "characterization": false,
+      "tests": [
+        "TestRefunds/ORD-F02_unknown_charge"
+      ],
+      "before": "build_fail",
+      "after": "pass",
+      "strength": "weak",
+      "note": "refund.New did not exist at the base"
+    },
+    {
+      "id": "ORD-I01",
+      "kind": "I",
+      "source": "openspec/specs/refunds/spec.md#ORD-I01 Totals never go negative",
+      "delta": "modified",
+      "characterization": true,
+      "tests": [
+        "TestRefunds/ORD-I01_totals"
+      ],
+      "before": "pass",
+      "after": "pass",
+      "strength": "characterization"
+    },
+    {
+      "id": "ORD-N01",
+      "kind": "N",
+      "source": "openspec/specs/refunds/spec.md#ORD-N01 Never refund more than charged",
+      "delta": "added",
+      "characterization": false,
+      "tests": [
+        "TestRefunds/ORD-N01_rejects_excess"
+      ],
+      "before": "pass",
+      "after": "pass",
+      "strength": "none"
+    }
+  ],
+  "checks": [
+    {
+      "name": "go-test",
+      "command": "go test -json ./...",
+      "exitCode": 0,
+      "durationMs": 4210,
+      "status": "pass"
+    },
+    {
+      "name": "golangci-lint",
+      "command": "golangci-lint run --new-from-merge-base=main",
+      "exitCode": 1,
+      "durationMs": 9120,
+      "status": "fail",
+      "artifact": "lint.json"
+    }
+  ],
+  "scope": [
+    {
+      "sha": "2222222222222222222222222222222222222222",
+      "family": "mixed",
+      "families": [
+        "dx",
+        "feat"
+      ],
+      "paths": [
+        ".golangci.yml",
+        "internal/refund/refund.go"
+      ]
+    }
+  ],
+  "tamper": [
+    {
+      "kind": "skip_added",
+      "id": "ORD-N01",
+      "detail": "t.Skip added to TestRefunds/ORD-N01_rejects_excess"
+    }
+  ],
+  "override": {
+    "actor": "@dev",
+    "reason": "hotfix",
+    "labeledAt": "2026-09-21T10:00:00Z",
+    "lastCommitAt": "2026-09-21T11:00:00Z",
+    "valid": false,
+    "rejection": "labeled before the last commit"
+  },
+  "verdict": {
+    "result": "block",
+    "reasons": [
+      {
+        "code": "fail_before_missing",
+        "message": "test passed at the base and the requirement is not characterization",
+        "id": "ORD-N01"
+      },
+      {
+        "code": "mixed_commit",
+        "message": "a commit touches dx and feat paths"
+      }
+    ]
+  },
+  "notCollected": [
+    "mutation",
+    "rollback",
+    "slo"
+  ]
+}
