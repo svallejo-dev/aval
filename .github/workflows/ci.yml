@@ -36,3 +36,25 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: ${{ steps.tools.outputs.golangci }}
+
+  # Differential test of internal/openspec against the real OpenSpec CLI
+  # (ADR-0002). It needs Node and downloads OpenSpec with npx, so it stays
+  # out of the ci job; the version is pinned in the test.
+  openspec-live:
+    name: openspec-live
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: .tool-versions
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Differential test against OpenSpec
+        env:
+          AVAL_OPENSPEC_LIVE: "1"
+        run: go test -race -count=1 -run '^TestLive$' -v ./internal/openspec
