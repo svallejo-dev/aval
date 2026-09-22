@@ -3,6 +3,7 @@ package scope
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -59,6 +60,7 @@ func TestClassifyPaths(t *testing.T) {
 		{"seam wins over a longer feat glob", []string{"internal/api/v1.proto"}, seam, nil},
 		{"dx with seam and other", []string{"Makefile", "go.mod", "README.md"}, dx, nil},
 		{"feat with seam", []string{"go.sum", "internal/order/order.go"}, feat, nil},
+		{"feat with seam and other", []string{"go.mod", "internal/order/order.go", "README.md"}, feat, nil},
 		{"seam with other", []string{"go.mod", "README.md"}, seam, nil},
 		{"longest glob wins for dx", []string{"internal/devtools/lint.go"}, dx, nil},
 		{"longest glob wins for feat", []string{"internal/order/testdata/golden.json"}, feat, nil},
@@ -167,39 +169,114 @@ func TestClassifyHistory(t *testing.T) {
 func TestClassifyMerges(t *testing.T) {
 	t.Parallel()
 	r := newRepo(t)
-	order := "package order\n\nfunc A() {}\n\nfunc B() {}\n\nfunc C() {}\n\nfunc D() {}\n"
-	r.commit("root", map[string]string{"Makefile": "all:\n", "internal/order/order.go": order, "README.md": "shop\n"})
+	order := func(a, b, d string) map[string]string {
+		return map[string]string{"internal/order/order.go": "package order\n\nfunc " + a + "() {}\n\nfunc " + b + "() {}\n\nfunc C() {}\n\nfunc " + d + "() {}\n"}
+	}
+	root := r.commit("root", map[string]string{"Makefile": "all:\n", "README.md": "shop\n"})
+	r.commit("root order", order("A", "B", "D"))
+	var want []evidence.Commit
+	add := func(sha string, family evidence.Family, families []evidence.Family, paths ...string) {
+		want = append(want, evidence.Commit{SHA: sha, Family: family, Families: families, Paths: append([]string{}, paths...)})
+	}
 
 	r.git("switch", "-q", "-c", "topic")
-	featSHA := r.commit("feat", map[string]string{"internal/order/order.go": strings.Replace(order, "A()", "A2()", 1)})
+	add(r.commit("feat", order("A2", "B", "D")), feat, nil, "internal/order/order.go")
 	r.onMain("main dx", map[string]string{"Makefile": "all: lint\n"})
-	r.git("merge", "-q", "--no-ff", "--no-edit", "main")
-	clean := r.git("rev-parse", "HEAD")
+	add(r.merge("clean merge", "main"), other, nil)
+	r.onMain("main feat", order("A", "B", "D2"))
+	add(r.merge("same file merged cleanly", "main"), other, nil)
 
 	r.onMain("main docs", map[string]string{"README.md": "the shop\n"})
 	r.git("merge", "-q", "--no-ff", "--no-commit", "main")
-	evil := r.commit("evil merge", map[string]string{"tools/gen.go": "package tools\n"})
+	add(r.commit("evil merge", map[string]string{"tools/gen.go": "package tools\n"}), dx, nil, "tools/gen.go")
 
-	base := r.onMain("main feat", map[string]string{"internal/order/order.go": strings.Replace(order, "D()", "D2()", 1)})
-	r.git("merge", "-q", "--no-ff", "--no-edit", "main")
-	sameFile := r.git("rev-parse", "HEAD")
+	add(r.commit("topic B", order("A2", "B1", "D2")), feat, nil, "internal/order/order.go")
+	r.onMain("main B", order("A", "B2", "D2"))
+	if _, err := r.run("merge", "-q", "--no-ff", "main"); err == nil {
+		t.Fatal("merge of main B: want a conflict")
+	}
+	add(r.commit("resolve conflict", order("A2", "B3", "D2")), feat, nil, "internal/order/order.go")
+
+	r.onMain("main Makefile", map[string]string{"Makefile": "all: test\n"})
+	r.git("merge", "-q", "--no-ff", "--no-commit", "main")
+	r.git("checkout", "HEAD", "--", "Makefile")
+	add(r.commit("drop main's Makefile", nil), dx, nil, "Makefile")
+
+	base := r.onMain("main license", map[string]string{"LICENSE": "MIT\n"})
+	r.git("switch", "-q", "-c", "side", root)
+	add(r.commit("side", map[string]string{"NOTES": "notes\n"}), other, nil, "NOTES")
+	r.git("switch", "-q", "topic")
+	r.git("merge", "-q", "--no-ff", "--no-commit", "main", "side")
+	octopus := r.commit("evil octopus", map[string]string{"cmd/tool/main.go": "package main\n"})
+	add(octopus, feat, nil, "cmd/tool/main.go")
 
 	got, err := Classify(t.Context(), r.dir, base, "HEAD", testPaths)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []evidence.Commit{
-		{SHA: featSHA, Family: feat, Paths: []string{"internal/order/order.go"}},
-		// Main changed other files: the merge adds nothing of its own.
-		{SHA: clean, Family: other, Paths: []string{}},
-		// Only what the merge changed itself: README.md comes from main as is.
-		{SHA: evil, Family: dx, Paths: []string{"tools/gen.go"}},
-		// Both sides changed order.go; git merged it cleanly, yet it differs
-		// from both parents, so the combined diff lists it.
-		{SHA: sameFile, Family: feat, Paths: []string{"internal/order/order.go"}},
+	// The side commit may come anywhere before the octopus merge.
+	bySHA := func(cs []evidence.Commit) map[string]evidence.Commit {
+		m := make(map[string]evidence.Commit, len(cs))
+		for _, c := range cs {
+			m[c.SHA] = c
+		}
+		return m
 	}
+	if !reflect.DeepEqual(bySHA(got), bySHA(want)) || got[len(got)-1].SHA != octopus {
+		t.Errorf("Classify:\n got %+v\nwant %+v, the octopus merge last", got, want)
+	}
+}
+
+func TestClassifyIgnoresReplaceRefs(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	root := r.commit("root", map[string]string{"Makefile": "all:\n", "internal/order/order.go": "package order\n"})
+	featSHA := r.commit("feat", map[string]string{"internal/order/order.go": "package order // v2\n"})
+	r.git("switch", "-q", "--detach", root)
+	dxSHA := r.commit("dx", map[string]string{"Makefile": "all: lint\n"})
+	r.git("switch", "-q", "main")
+	r.git("replace", featSHA, dxSHA) // the change asks git to read the dx commit instead
+
+	got, err := Classify(t.Context(), r.dir, root, "main", testPaths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []evidence.Commit{{SHA: featSHA, Family: feat, Paths: []string{"internal/order/order.go"}}}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("Classify:\n got %+v\nwant %+v", got, want)
+		t.Errorf("Classify = %+v, want %+v", got, want)
+	}
+}
+
+func TestCheckVersion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		out string
+		ok  bool
+	}{
+		{"git version 2.50.1 (Apple Git-155)\n", true},
+		{"git version 2.36.0\n", true},
+		{"git version 2.45.1.windows.1\n", true},
+		{"git version 3.0.0\n", true},
+		{"git version 2.35.8\n", false},
+		{"git version 1.99.0\n", false},
+		{"git version\n", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		err := checkVersion(tt.out)
+		if (err == nil) != tt.ok || err != nil && !errors.Is(err, ErrToolMissing) {
+			t.Errorf("checkVersion(%q) = %v, want ok %t", tt.out, err, tt.ok)
+		}
+	}
+}
+
+// TestClassifyWithoutGit changes PATH, so it cannot run in parallel.
+func TestClassifyWithoutGit(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	_, err := Classify(t.Context(), t.TempDir(), "", "HEAD", testPaths)
+	if !errors.Is(err, ErrToolMissing) || !errors.Is(err, exec.ErrNotFound) {
+		t.Errorf("Classify without git: error %v, want ErrToolMissing and exec.ErrNotFound", err)
 	}
 }
 
@@ -257,23 +334,32 @@ func newRepo(t *testing.T) *repo {
 	return r
 }
 
-// git runs git in r and returns its trimmed stdout.
+// git runs git in r and returns its trimmed stdout, failing the test if git fails.
 func (r *repo) git(args ...string) string {
 	r.t.Helper()
+	out, err := r.run(args...)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return out
+}
+
+// run runs git in r and returns its trimmed stdout.
+func (r *repo) run(args ...string) (string, error) {
 	cmd := exec.CommandContext(r.t.Context(), "git", args...) //nolint:gosec // no shell: fixed arguments from the tests
 	cmd.Dir = r.dir
 	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1",
 		"GIT_AUTHOR_NAME=aval", "GIT_AUTHOR_EMAIL=aval@example.com",
 		"GIT_COMMITTER_NAME=aval", "GIT_COMMITTER_EMAIL=aval@example.com")
 	out, err := cmd.Output()
-	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			r.t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, exitErr.Stderr)
-		}
-		r.t.Fatalf("git %s: %v", strings.Join(args, " "), err)
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return "", fmt.Errorf("git %s: %w\n%s", strings.Join(args, " "), err, exitErr.Stderr)
 	}
-	return strings.TrimSpace(string(out))
+	if err != nil {
+		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // commit writes files, stages everything and commits it, even when nothing
@@ -291,6 +377,14 @@ func (r *repo) commit(msg string, files map[string]string) string {
 	}
 	r.git("add", "-A")
 	r.git("commit", "-q", "--allow-empty", "-m", msg)
+	return r.git("rev-parse", "HEAD")
+}
+
+// merge merges branch into the current branch with a merge commit and
+// returns its SHA.
+func (r *repo) merge(msg, branch string) string {
+	r.t.Helper()
+	r.git("merge", "-q", "--no-ff", "-m", msg, branch)
 	return r.git("rev-parse", "HEAD")
 }
 

@@ -25,19 +25,25 @@
 //
 // # Merge commits
 //
-// A merge contributes only the paths of its combined diff, git show --cc
-// --name-only: the files whose merged content differs from every parent.
-// Observed with git 2.50; the tests pin the first three:
+// A two-parent merge contributes only what it changed beyond the merge git
+// would have made on its own: the paths of git show --remerge-diff, which
+// needs git 2.36 or newer. Observed with git 2.50 and pinned by the tests:
 //
-//   - A clean merge of main into the branch, where each side changed other
-//     files, lists nothing and is other.
-//   - An evil merge lists the files it changes itself, e.g. one that neither
-//     side touched.
-//   - --name-only does not apply the hunk simplification of --cc: a file
-//     both sides changed differs from every parent, so it is listed even
-//     when git merged it without conflicts, and the merge takes its family.
-//   - A merge that keeps one parent's version of a file, dropping the other
-//     side's change to it, matches that parent and lists nothing.
+//   - A clean merge of main into the branch lists nothing and is other, also
+//     when both sides changed the same file and git merged it cleanly.
+//   - An evil merge lists the files it changes itself.
+//   - A conflict resolution lists the files that conflicted.
+//   - A merge that keeps the branch's version of a file, dropping main's
+//     change to it, lists that file.
+//
+// git skips --remerge-diff for an octopus merge, printing a warning instead,
+// so one contributes its combined diff, git show --cc --name-only: the files
+// whose content differs from every parent. That keeps an evil octopus merge
+// visible, but it misses a dropped change and lists a file that several
+// parents changed even if git merged it cleanly.
+//
+// Every git command runs with GIT_NO_REPLACE_OBJECTS=1: the change under
+// review could plant replace refs to make git read other commits.
 package scope
 
 import (
@@ -45,6 +51,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"slices"
 	"strings"
@@ -56,9 +63,14 @@ import (
 	"github.com/svallejo-dev/aval/internal/manifest"
 )
 
-// ErrInvalidRange is wrapped by Classify's error for a base or head it
-// refuses before running git.
-var ErrInvalidRange = errors.New("invalid commit range")
+var (
+	// ErrInvalidRange is wrapped by Classify's error for a base or head it
+	// refuses before running git.
+	ErrInvalidRange = errors.New("invalid commit range")
+	// ErrToolMissing is wrapped by Classify's error when git is not on PATH
+	// or is older than 2.36. Callers map it to exit code 3.
+	ErrToolMissing = errors.New("scope: git 2.36 or newer is required")
+)
 
 // Classify classifies every commit of base..head in repoRoot, parents first,
 // by the paths it touches. paths are the globs of the base policy, already
@@ -67,6 +79,13 @@ var ErrInvalidRange = errors.New("invalid commit range")
 func Classify(ctx context.Context, repoRoot, base, head string, paths manifest.Paths) ([]evidence.Commit, error) {
 	rng, err := revRange(base, head)
 	if err != nil {
+		return nil, err
+	}
+	version, err := git(ctx, repoRoot, "version")
+	if err != nil {
+		return nil, err
+	}
+	if err := checkVersion(string(version)); err != nil {
 		return nil, err
 	}
 	out, err := git(ctx, repoRoot, "rev-list", "--reverse", "--topo-order", "--parents", "--end-of-options", rng, "--")
@@ -79,7 +98,7 @@ func Classify(ctx context.Context, repoRoot, base, head string, paths manifest.P
 		if len(shas) == 0 {
 			continue
 		}
-		files, err := touched(ctx, repoRoot, shas[0], len(shas) > 2)
+		files, err := touched(ctx, repoRoot, shas[0], len(shas)-1)
 		if err != nil {
 			return nil, err
 		}
@@ -160,18 +179,22 @@ func revRange(base, head string) (string, error) {
 	return base + ".." + head, nil
 }
 
-// touched lists the paths commit sha touches, as git prints them (sorted):
-// its combined diff for a merge, its diff against its parent otherwise, and
-// every file for a root commit.
-func touched(ctx context.Context, dir, sha string, merge bool) ([]string, error) {
-	args := []string{"diff-tree", "--root", "--no-commit-id", "--no-renames", "-r", "--name-only", "-z", "--end-of-options", sha, "--"}
-	if merge {
-		args = []string{
-			"show", "--cc", "--no-renames", "--name-only", "--format=", "-z",
-			"--no-color", "--no-ext-diff", "--no-textconv", "--no-show-signature", "--end-of-options", sha, "--",
-		}
+// touched lists the paths commit sha, with the given number of parents,
+// touches, as git prints them (sorted). See the package doc for merges.
+func touched(ctx context.Context, dir, sha string, parents int) ([]string, error) {
+	var args []string
+	switch {
+	case parents == 2:
+		args = []string{"show", "--remerge-diff"}
+	case parents > 2:
+		args = []string{"show", "--cc"}
+	default: // --root: a root commit touches every file it has
+		args = []string{"diff-tree", "--root", "--no-commit-id", "-r"}
 	}
-	out, err := git(ctx, dir, args...)
+	if parents >= 2 {
+		args = append(args, "--format=", "--no-color", "--no-ext-diff", "--no-textconv", "--no-show-signature")
+	}
+	out, err := git(ctx, dir, append(args, "--no-renames", "--name-only", "-z", "--end-of-options", sha, "--")...)
 	if err != nil {
 		return nil, err
 	}
@@ -184,11 +207,24 @@ func touched(ctx context.Context, dir, sha string, merge bool) ([]string, error)
 	return files, nil
 }
 
-// git runs git in dir and returns its stdout. A failure carries git's stderr;
-// a missing git wraps exec.ErrNotFound.
+// checkVersion returns ErrToolMissing unless out, what git version prints,
+// names git 2.36 or newer, the first with --remerge-diff.
+func checkVersion(out string) error {
+	v, _ := strings.CutPrefix(strings.TrimSpace(out), "git version ")
+	var major, minor int
+	if _, err := fmt.Sscanf(v, "%d.%d", &major, &minor); err == nil && (major > 2 || major == 2 && minor >= 36) {
+		return nil
+	}
+	return fmt.Errorf("%w: git version says %q", ErrToolMissing, strings.TrimSpace(out))
+}
+
+// git runs git in dir, ignoring replace refs, and returns its stdout. A
+// failure carries git's stderr; a missing git wraps ErrToolMissing and
+// exec.ErrNotFound.
 func git(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec // no shell: fixed flags, and revisions follow --end-of-options
 	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_NO_REPLACE_OBJECTS=1")
 	out, err := cmd.Output()
 	if ctx.Err() != nil {
 		return nil, fmt.Errorf("git %s: %w", args[0], context.Cause(ctx))
@@ -197,6 +233,8 @@ func git(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	switch {
 	case errors.As(err, &exitErr):
 		return nil, fmt.Errorf("git %s: %w: %s", args[0], err, bytes.TrimSpace(exitErr.Stderr))
+	case errors.Is(err, exec.ErrNotFound):
+		return nil, fmt.Errorf("%w: %w", ErrToolMissing, err)
 	case err != nil:
 		return nil, fmt.Errorf("git %s: %w", args[0], err)
 	}
