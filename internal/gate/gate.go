@@ -168,6 +168,7 @@ type Premortem struct {
 // Lint is golangci-lint's result, run with the base commit's .golangci.yml.
 type Lint struct {
 	BaseConfig bool // the base commit has a .golangci.yml; without one the rule does not apply
+	Ran        bool // golangci-lint ran to completion; a run that did not blocks
 	NewIssues  int  // issues new since the merge base
 }
 
@@ -234,7 +235,11 @@ func Decide(in Input) evidence.Verdict {
 	if !in.approved(evidence.ApprovalHuman) {
 		c.addf(CodeApprovalMissing, "", "tier %d needs a CODEOWNER's approval of the head commit", c.tier)
 	}
-	if in.Lint.BaseConfig && in.Lint.NewIssues > 0 {
+	switch {
+	case !in.Lint.BaseConfig:
+	case !in.Lint.Ran:
+		c.addf(CodeLintNewIssues, "", "lint did not run")
+	case in.Lint.NewIssues != 0:
 		c.addf(CodeLintNewIssues, "", "golangci-lint reports %d new issues", in.Lint.NewIssues)
 	}
 
@@ -255,11 +260,11 @@ func Decide(in Input) evidence.Verdict {
 }
 
 // ExitCode maps a verdict to the gate's exit code (ADR-0005 §6): 0 in observe
-// mode or for a pass or warn, 1 for a block in enforce mode. It fails closed:
-// a mode other than observe enforces. Usage and tool errors (2 and 3) belong
-// to the CLI.
+// mode or for a pass or warn, 1 otherwise. It fails closed: a mode other than
+// observe enforces, and a result other than pass or warn blocks. Usage and
+// tool errors (2 and 3) belong to the CLI.
 func ExitCode(mode manifest.Mode, v evidence.Verdict) int {
-	if mode == manifest.Observe || v.Result != evidence.ResultBlock {
+	if mode == manifest.Observe || v.Result == evidence.ResultPass || v.Result == evidence.ResultWarn {
 		return 0
 	}
 	return 1
@@ -306,7 +311,12 @@ func (c *collector) obligations(obs []evidence.Obligation) {
 		if o.Strength == evidence.Weak {
 			c.addf(CodeWeakEvidence, o.ID, "weak fail-before evidence (before=%s)%s", o.Before, suffix(o.Note))
 		}
-		if o.Delta != evidence.Added && o.Delta != evidence.Modified {
+		// The strength label is not trusted: it must match the statuses.
+		inconsistent := o.Validate()
+		if inconsistent != nil {
+			c.addf(CodeFailBeforeMissing, o.ID, "inconsistent fail-before evidence: %v", inconsistent)
+		}
+		if o.Delta == evidence.Unchanged { // any other delta is judged as added or modified
 			continue
 		}
 		switch k := kindOf(o.Kind); {
@@ -318,6 +328,8 @@ func (c *collector) obligations(obs []evidence.Obligation) {
 			c.addf(CodeOpenQuestion, o.ID, "%s open question: a human must resolve it", o.Delta)
 		case len(o.Tests) == 0:
 			c.addf(CodeUnverified, o.ID, "%s obligation has no bound test", o.Delta)
+		case o.After != evidence.Pass, inconsistent != nil:
+			// Already reported: after_not_passing, or inconsistent evidence.
 		case o.Strength != evidence.Strong && o.Strength != evidence.Weak && o.Strength != evidence.Characterized:
 			c.addf(CodeFailBeforeMissing, o.ID, "no valid fail-before (before=%s, after=%s)%s", o.Before, o.After, suffix(o.Note))
 		}

@@ -16,3 +16,6 @@ go.work.sum
 # Entorno
 .env
 .DS_Store
+
+# Casos fallidos que rapid guarda al fallar una propiedad
+**/testdata/rapid/

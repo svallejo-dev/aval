@@ -40,16 +40,26 @@ func clean(tier manifest.Tier) Input {
 	}
 }
 
-// ob is an obligation with one bound test that failed at the base and
-// passes at head.
+// ob is an obligation with one bound test that passes at head, and a base
+// status consistent with strength s.
 func ob(id string, d evidence.Delta, s evidence.Strength) evidence.Obligation {
-	before := evidence.Fail
-	if s != evidence.Strong && s != evidence.Weak {
+	before := map[evidence.Strength]evidence.Status{evidence.Strong: evidence.Fail, evidence.Weak: evidence.BuildFail}[s]
+	if before == "" {
 		before = evidence.Pass
 	}
-	return evidence.Obligation{ID: id, Kind: id[len(id)-3 : len(id)-2], Delta: d,
+	return evidence.Obligation{ID: id, Kind: id[len(id)-3 : len(id)-2], Delta: d, Characterization: s == evidence.Characterized,
 		Tests: []string{"TestRefund/" + id}, Before: before, After: evidence.Pass, Strength: s}
 }
+
+// with returns o after edit.
+func with(o evidence.Obligation, edit func(*evidence.Obligation)) evidence.Obligation {
+	edit(&o)
+	return o
+}
+
+// allowedInfo is the one INFO message openspec validate may report on a
+// valid change (ADR-0002).
+const allowedInfo = "skip_specs is set in .openspec.yaml: change declares no spec-level behavior changes, zero deltas accepted"
 
 func obs(o ...evidence.Obligation) func(*Input) {
 	return func(in *Input) { in.Obligations = o }
@@ -82,6 +92,13 @@ func TestDecide(t *testing.T) {
 			in.Validation = &openspec.Report{Items: []openspec.Item{{ID: "add-refunds", Type: "change",
 				Issues: []openspec.Issue{{Level: "ERROR", Path: "refunds/spec.md", Message: "bad"}}}}}
 		}, want: evidence.ResultBlock, codes: []string{CodeOpenSpecInvalid}},
+		{name: "unknown severity blocks", edit: func(in *Input) {
+			in.SpecFindings = []openspec.Finding{{Severity: "fatal", Path: "openspec/specs/a/spec.md", Message: "?"}}
+		}, want: evidence.ResultBlock, codes: []string{CodeSpecRule}},
+		{name: "openspec_invalid without findings", edit: func(in *Input) {
+			in.Validation = &openspec.Report{Items: []openspec.Item{{ID: "add-refunds", Type: "change",
+				Issues: []openspec.Issue{{Level: "INFO", Message: allowedInfo}}}}}
+		}, want: evidence.ResultBlock, codes: []string{CodeOpenSpecInvalid}},
 		{name: "openspec validate passed", edit: func(in *Input) {
 			in.Validation = &openspec.Report{Items: []openspec.Item{{ID: "refunds", Type: "spec", Valid: true}}}
 		}, want: evidence.ResultPass},
@@ -91,6 +108,24 @@ func TestDecide(t *testing.T) {
 		{name: "removing an O does not block", tier: 1, edit: obs(ob("ORD-O01", evidence.Unchanged, evidence.None)), want: evidence.ResultPass},
 		{name: "unknown kind fails closed", tier: 1, edit: obs(evidence.Obligation{ID: "ORD-X01", Kind: "X", Delta: evidence.Added}),
 			want: evidence.ResultBlock, codes: []string{CodeOpenQuestion}},
+		{name: "empty delta fails closed", tier: 1, edit: obs(with(untested, func(o *evidence.Obligation) { o.Delta = "" })),
+			want: evidence.ResultBlock, codes: []string{CodeUnverified}},
+		{name: "upper-case delta fails closed", tier: 1, edit: obs(with(untested, func(o *evidence.Obligation) { o.Delta = "ADDED" })),
+			want: evidence.ResultBlock, codes: []string{CodeUnverified}},
+		{name: "removed delta fails closed", tier: 1, edit: obs(with(untested, func(o *evidence.Obligation) { o.Delta = "removed" })),
+			want: evidence.ResultBlock, codes: []string{CodeUnverified}},
+		{name: "failing head on an added obligation is only after_not_passing", tier: 1,
+			edit: obs(with(ob("ORD-F01", evidence.Added, evidence.None), func(o *evidence.Obligation) { o.Before, o.After = evidence.Fail, evidence.Fail })),
+			want: evidence.ResultBlock, codes: []string{CodeAfterNotPassing}},
+		{name: "characterization without the marker is inconsistent", tier: 1,
+			edit: obs(with(ob("ORD-F01", evidence.Added, evidence.Characterized), func(o *evidence.Obligation) { o.Characterization = false })),
+			want: evidence.ResultBlock, codes: []string{CodeFailBeforeMissing}},
+		{name: "strong that passed at the base is inconsistent", tier: 1,
+			edit: obs(with(ob("ORD-F01", evidence.Added, evidence.Strong), func(o *evidence.Obligation) { o.Before = evidence.Pass })),
+			want: evidence.ResultBlock, codes: []string{CodeFailBeforeMissing}},
+		{name: "a kind that is not the ID's is inconsistent", tier: 1,
+			edit: obs(with(ob("ORD-F01", evidence.Added, evidence.None), func(o *evidence.Obligation) { o.Kind = "A" })),
+			want: evidence.ResultBlock, codes: []string{CodeAssumption, CodeFailBeforeMissing}},
 		{name: "unverified at tier 1", tier: 1, edit: obs(untested), want: evidence.ResultBlock, codes: []string{CodeUnverified}},
 		{name: "unverified not below tier 1", edit: obs(untested), want: evidence.ResultPass},
 		{name: "fail_before_missing at tier 1", tier: 1, edit: obs(ob("ORD-N01", evidence.Added, evidence.None)),
@@ -99,8 +134,22 @@ func TestDecide(t *testing.T) {
 		{name: "strong and characterization are valid", tier: 1,
 			edit: obs(ob("ORD-F01", evidence.Added, evidence.Strong), ob("ORD-I01", evidence.Modified, evidence.Characterized)), want: evidence.ResultPass},
 		{name: "after_not_passing at tier 0", edit: obs(failing), want: evidence.ResultBlock, codes: []string{CodeAfterNotPassing}},
+		{name: "not_run at head is not passing", edit: obs(with(failing, func(o *evidence.Obligation) { o.After = evidence.NotRun })),
+			want: evidence.ResultBlock, codes: []string{CodeAfterNotPassing}},
+		{name: "skipped at head is not passing", edit: obs(with(failing, func(o *evidence.Obligation) { o.After = evidence.Skipped })),
+			want: evidence.ResultBlock, codes: []string{CodeAfterNotPassing}},
+		{name: "build_fail at head is not passing", edit: obs(with(failing, func(o *evidence.Obligation) { o.After = evidence.BuildFail })),
+			want: evidence.ResultBlock, codes: []string{CodeAfterNotPassing}},
 		{name: "regression", edit: func(in *Input) { in.UnboundFailures = []baseline.Test{unbound} },
 			want: evidence.ResultBlock, codes: []string{CodeRegression}},
+		{name: "a new subtest under a baseline parent is a regression", edit: func(in *Input) {
+			in.UnboundFailures = []baseline.Test{{Package: unbound.Package, Test: unbound.Test + "/sub"}}
+			in.Baseline.Failing = []baseline.Test{unbound}
+		}, want: evidence.ResultBlock, codes: []string{CodeRegression}},
+		{name: "the baseline matches by package too", edit: func(in *Input) {
+			in.UnboundFailures = []baseline.Test{{Package: "example.com/shop/other", Test: unbound.Test}}
+			in.Baseline.Failing = []baseline.Test{unbound}
+		}, want: evidence.ResultBlock, codes: []string{CodeRegression}},
 		{name: "baseline failure is no regression", edit: func(in *Input) {
 			in.UnboundFailures = []baseline.Test{unbound}
 			in.Baseline.Failing = []baseline.Test{unbound}
@@ -128,12 +177,18 @@ func TestDecide(t *testing.T) {
 			want: evidence.ResultBlock, codes: []string{CodePremortemMissing}},
 		{name: "premortem_unmapped without items", tier: 2, edit: func(in *Input) { in.Changes[0].Premortem.Items = 0 },
 			want: evidence.ResultBlock, codes: []string{CodePremortemUnmapped}},
+		{name: "premortem_unmapped not below change tier 2", tier: 1, edit: func(in *Input) {
+			in.Changes[0].Premortem = Premortem{Present: true, Unmapped: []string{"db fails"}}
+		}, want: evidence.ResultPass},
 		{name: "premortem_unmapped item", tier: 2, edit: func(in *Input) { in.Changes[0].Premortem.Unmapped = []string{"db fails"} },
 			want: evidence.ResultBlock, codes: []string{CodePremortemUnmapped}},
 		{name: "approval_missing at tier 3", tier: 3, edit: func(in *Input) { in.Approvals = nil },
 			want: evidence.ResultBlock, codes: []string{CodeApprovalMissing}},
 		{name: "approval not needed below tier 3", tier: 2, edit: func(in *Input) { in.Approvals = nil }, want: evidence.ResultPass},
-		{name: "lint_new_issues", edit: func(in *Input) { in.Lint = Lint{BaseConfig: true, NewIssues: 2} },
+		{name: "lint_new_issues", edit: func(in *Input) { in.Lint = Lint{BaseConfig: true, Ran: true, NewIssues: 1} },
+			want: evidence.ResultBlock, codes: []string{CodeLintNewIssues}},
+		{name: "lint clean", edit: func(in *Input) { in.Lint = Lint{BaseConfig: true, Ran: true} }, want: evidence.ResultPass},
+		{name: "lint did not run", edit: func(in *Input) { in.Lint = Lint{BaseConfig: true} },
 			want: evidence.ResultBlock, codes: []string{CodeLintNewIssues}},
 		{name: "lint ignored without base config", edit: func(in *Input) { in.Lint = Lint{NewIssues: 2} }, want: evidence.ResultPass},
 		{name: "assumption at tier 1", tier: 1, edit: obs(ob("ORD-A01", evidence.Added, evidence.None)),
@@ -144,6 +199,9 @@ func TestDecide(t *testing.T) {
 		{name: "seam_touched", edit: func(in *Input) {
 			in.Scope = []evidence.Commit{{SHA: other, Family: evidence.FamilyFeat, Paths: []string{"go.mod", "internal/a.go"}}}
 		}, want: evidence.ResultWarn, codes: []string{CodeSeamTouched}},
+		{name: "a dx commit is not seam_touched", edit: func(in *Input) {
+			in.Scope = []evidence.Commit{{SHA: other, Family: evidence.FamilyDX, Paths: []string{"go.mod", "tools/a.go"}}}
+		}, want: evidence.ResultPass},
 		{name: "seam alone is not seam_touched", edit: func(in *Input) {
 			in.Scope = []evidence.Commit{{SHA: other, Family: evidence.FamilySeam, Paths: []string{"go.mod"}}}
 		}, want: evidence.ResultPass},
@@ -264,6 +322,10 @@ func TestExitCode(t *testing.T) {
 		{manifest.Enforce, evidence.ResultWarn, 0},
 		{manifest.Enforce, evidence.ResultBlock, 1},
 		{"", evidence.ResultBlock, 1}, // an unknown mode enforces
+		{"", evidence.ResultWarn, 0},
+		{manifest.Enforce, "", 1}, // an unknown result blocks
+		{manifest.Enforce, "BLOCK", 1},
+		{manifest.Observe, "BLOCK", 0},
 	} {
 		if got := ExitCode(tt.mode, evidence.Verdict{Result: tt.result}); got != tt.want {
 			t.Errorf("ExitCode(%q, %s) = %d, want %d", tt.mode, tt.result, got, tt.want)
@@ -315,7 +377,7 @@ func genInput(t *rapid.T) Input {
 	in.BuildFailures = rapid.SliceOfN(rapid.SampledFrom([]string{"p", "q"}), 0, 2).Draw(t, "build")
 	in.UnboundFailures = rapid.SliceOfN(rapid.SampledFrom(tests), 0, 3).Draw(t, "unbound")
 	in.Baseline.Failing = rapid.SliceOfN(rapid.SampledFrom(tests), 0, 3).Draw(t, "baseline")
-	in.Lint = Lint{BaseConfig: rapid.Bool().Draw(t, "lintcfg"), NewIssues: rapid.IntRange(0, 2).Draw(t, "issues")}
+	in.Lint = Lint{BaseConfig: rapid.Bool().Draw(t, "lintcfg"), Ran: rapid.Bool().Draw(t, "lintran"), NewIssues: rapid.IntRange(0, 2).Draw(t, "issues")}
 	in.Approvals = rapid.SliceOfN(rapid.SampledFrom(append(invalidOverrides(), approval, override)), 0, 3).Draw(t, "approvals")
 	return in
 }
@@ -342,8 +404,10 @@ func TestAddingABlockNeverImproves(t *testing.T) {
 			in.SpecFindings = append(slices.Clone(in.SpecFindings), openspec.Finding{Severity: openspec.SeverityError, Message: "new"})
 		}
 		after := Decide(in)
+		// genInput draws approvals from a fixed set in which override is the
+		// only valid override.
 		want := evidence.ResultBlock
-		if in.approved(evidence.ApprovalOverride) {
+		if slices.Contains(in.Approvals, override) {
 			want = evidence.ResultWarn
 		}
 		if rank[after.Result] < rank[before.Result] || after.Result != want {
