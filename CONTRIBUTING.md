@@ -1,5 +1,19 @@
 # Contribuir a aval
 
+## Entorno de desarrollo
+
+Las versiones de las herramientas se fijan en `.tool-versions` y se gestionan con [asdf](https://asdf-vm.com):
+
+```sh
+brew install asdf
+asdf plugin add golang https://github.com/asdf-community/asdf-golang.git
+asdf plugin add golangci-lint
+asdf install          # instala lo que dice .tool-versions
+make verify           # build + tests con -race + lint
+```
+
+Si instalas herramientas con `go install`, ejecuta después `asdf reshim golang` para que queden en el PATH.
+
 ## Modelo de ramas: trunk-based con ramas cortas
 
 `main` está siempre verde y en condiciones de hacer release. El ruleset `main-trunk` la protege:
