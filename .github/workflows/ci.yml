@@ -20,14 +20,14 @@ jobs:
         with:
           go-version-file: .tool-versions
 
-      - name: Build
-        run: go build ./...
+      - name: go.mod is tidy
+        run: go mod tidy -diff
 
       - name: Vet
         run: go vet ./...
 
-      - name: Test
-        run: go test -race ./...
+      - name: Build and test
+        run: make build test
 
       - name: Read golangci-lint version
         id: tools

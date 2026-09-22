@@ -9,4 +9,8 @@ stdout '"ok": true'
 stdout '"errors": \[\]'
 
 ! exec aval version --json --plain
-stderr '^aval: '
+stdout '"ok": false'
+stdout '"code": "usage"'
+
+! exec aval version --plain extra
+stderr '^aval: unknown command "extra"'

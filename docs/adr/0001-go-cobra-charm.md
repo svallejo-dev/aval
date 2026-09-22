@@ -17,7 +17,7 @@ Además, la CLI tiene que guiar a quien la usa, al estilo de Claude Code: pantal
   - un código que el equipo puede mantener.
 - **Árbol de comandos: cobra**, el estándar para subcomandos anidados, flags persistentes y completions.
 - **Interfaz: Charm v2** (Bubble Tea, Bubbles, Lip Gloss, Huh, Glamour, con rutas `charm.land/*/v2`).
-- **Tres modos de salida,** que se detallan en ADR-0003: `tui` para personas, `plain` para logs de CI y `json` para agentes y hooks. Nunca se pregunta sin TTY.
+- **Tres modos de salida,** que se detallarán en un ADR propio: `tui` para personas, `plain` para logs de CI y `json` para agentes y hooks. Nunca se pregunta sin TTY.
 
 ## Consecuencias
 

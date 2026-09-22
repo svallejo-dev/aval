@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 
 	"github.com/spf13/cobra"
 )
@@ -30,6 +31,13 @@ func newRootCmd(stdout, stderr io.Writer) *cobra.Command {
 			"only when executed, traceable evidence backs it.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		Args:          cobra.NoArgs,
+		RunE: runE(func(cmd *cobra.Command, _ []string) error {
+			if g.json {
+				return usageError(errors.New("a command is required, e.g. `aval version --json`"))
+			}
+			return cmd.Help() //nolint:wrapcheck // printing help cannot fail meaningfully
+		}),
 	}
 	root.SetOut(stdout)
 	root.SetErr(stderr)
@@ -48,24 +56,63 @@ func newRootCmd(stdout, stderr io.Writer) *cobra.Command {
 	return root
 }
 
-// Execute runs aval with args and returns the process exit code.
-//
-// Commands report domain failures as *ExitError. Any other error comes from
-// cobra itself (unknown command, invalid arguments, conflicting flags), so it
-// is a usage error.
-func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	root := newRootCmd(stdout, stderr)
-	root.SetArgs(args)
+// runE adapts a command body so that any error it returns without an explicit
+// exit code counts as a failed command (exit 1), never as a usage error.
+func runE(fn func(*cobra.Command, []string) error) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, args []string) error {
+		err := fn(cmd, args)
+		if err == nil {
+			return nil
+		}
+		var ee *ExitError
+		if errors.As(err, &ee) {
+			return err
+		}
+		return &ExitError{Code: ExitFailed, Err: err}
+	}
+}
 
+// Execute runs aval with args and returns the process exit code.
+func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	return execute(ctx, newRootCmd(stdout, stderr), args, stdout, stderr)
+}
+
+// execute runs root and maps its error to an exit code. Commands built with
+// runE always return *ExitError; any other error comes from cobra itself
+// (unknown command, invalid arguments, conflicting flags), so it is usage.
+func execute(ctx context.Context, root *cobra.Command, args []string, stdout, stderr io.Writer) int {
+	root.SetArgs(args)
 	err := root.ExecuteContext(ctx)
 	if err == nil {
 		return ExitOK
 	}
-	fmt.Fprintln(stderr, "aval:", err)
 
+	code := ExitUsage
 	var ee *ExitError
 	if errors.As(err, &ee) {
-		return ee.Code
+		code = ee.Code
+		if ee.Err == nil {
+			return code // the command already reported its outcome
+		}
 	}
-	return ExitUsage
+
+	// Flag parsing may have failed before --json was bound, so read it from args.
+	if wantsJSON(args) {
+		writeErrorEnvelope(stdout, stderr, commandName(root, args), code, err)
+		return code
+	}
+	fmt.Fprintln(stderr, "aval:", err)
+	return code
+}
+
+func wantsJSON(args []string) bool {
+	return slices.Contains(args, "--json") || slices.Contains(args, "--json=true")
+}
+
+// commandName returns the subcommand args point to, or "aval".
+func commandName(root *cobra.Command, args []string) string {
+	if cmd, _, err := root.Find(args); err == nil && cmd != root {
+		return cmd.Name()
+	}
+	return "aval"
 }

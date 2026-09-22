@@ -2,7 +2,7 @@ package cli
 
 import "fmt"
 
-// Exit codes are part of aval's public contract (ADR-0004). Scripts, CI
+// Exit codes are part of aval's public contract. Scripts, CI
 // jobs and agent hooks branch on them, so they never change meaning.
 const (
 	ExitOK     = 0 // success
