@@ -1,0 +1,37 @@
+# aval hook post-tool-use reminds the agent that the bound tests it edited are
+# guarded, leaving out the IDs in the delta of the active changes. It never
+# blocks, and says nothing about other files.
+
+cd repo
+exec git init -q
+stdin $WORK/edit-test.json
+exec aval hook post-tool-use
+stdout '^\{"hookSpecificOutput":\{"hookEventName":"PostToolUse","additionalContext":"aval: this file binds tests to ORD-F01, which are not in the delta of any active OpenSpec change\. .*tamper'
+! stdout 'ORD-F02|decision'
+! stderr .
+
+stdin $WORK/edit-code.json
+exec aval hook post-tool-use
+! stdout .
+! stderr .
+
+-- edit-test.json --
+{"session_id":"s1","hook_event_name":"PostToolUse","tool_name":"Edit","tool_input":{"file_path":"refund/refund_test.go"},"tool_response":{"success":true}}
+-- edit-code.json --
+{"session_id":"s1","hook_event_name":"PostToolUse","tool_name":"Write","tool_input":{"file_path":"refund/refund.go"}}
+-- repo/openspec/changes/partial/specs/refunds/spec.md --
+## ADDED Requirements
+
+### Requirement: ORD-F02 Partial refunds
+The system SHALL refund part of an order.
+-- repo/refund/refund.go --
+package refund
+-- repo/refund/refund_test.go --
+package refund
+
+import "testing"
+
+func TestRefund(t *testing.T) {
+	t.Run("ORD-F01 refunds once", func(t *testing.T) {})
+	t.Run("ORD-F02 refunds half", func(t *testing.T) {})
+}

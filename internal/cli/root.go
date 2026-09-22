@@ -82,7 +82,7 @@ func newRootCmd(stdout, stderr io.Writer) *cobra.Command {
 	pf.BoolVar(&g.noAnimation, "no-animation", false, "disable animations")
 	root.MarkFlagsMutuallyExclusive("json", "plain")
 
-	root.AddCommand(newVersionCmd(&g), newTraceCmd(&g))
+	root.AddCommand(newVersionCmd(&g), newTraceCmd(&g), newHookCmd())
 	return root
 }
 
