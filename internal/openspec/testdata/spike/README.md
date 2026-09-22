@@ -9,6 +9,12 @@ These files are the input and the expected output for the M1 parser's
 differential tests: aval parses the markdown itself and must agree with what
 OpenSpec validates and archives.
 
+Every requirement name satisfies the v1 ID contract of `internal/obligation`
+(ADR-0004): ID `^[A-Z][A-Z0-9]{1,9}-[FNISAO][0-9]{2,4}$`, requirement name
+`^ID[ \t]+(\S(?:.*\S)?)[ \t]*$` after header normalization, test2json segment
+`^([A-Z][A-Z0-9]{1,9}-[FNISAO][0-9]{2,4})(?:_|$|#[0-9]+$)`. The only exception is
+`negative/bracket-id`, whose `[ORD-F03] …` must be rejected.
+
 ## Normalization
 
 - The absolute path of the temp repo is replaced with `<ROOT>` and the npx cache
@@ -25,9 +31,10 @@ OpenSpec validates and archives.
 | `refunds/spec-before.md` | Main spec `openspec/specs/refunds/spec.md` before archiving: ORD-F01, ORD-N01 (`Old title`), ORD-I01 (with `**aval**: characterization`), ORD-A01. |
 | `refunds/spec-after.md` | The same file after `openspec archive add-refund-limits -y`. |
 | `changes/add-refund-limits/` | The change as archived: `proposal.md`, `tasks.md`, `.openspec.yaml` and the delta `specs/refunds/spec.md` with ADDED ORD-F02, MODIFIED ORD-F01 (+1 scenario) and ORD-I01 (keeps the marker), REMOVED ORD-A01, RENAMED `ORD-N01 Old title` → `ORD-N01 New title`. |
-| `changes/x/` | Tier-0 change created with `openspec new change x --schema aval`, filled with proposal, specs, design and tasks only (no premortem, no trace). Its base spec is `refunds/spec-after.md`. |
-| `schemas/aval/` | The custom schema: `openspec schema fork spec-driven aval` plus the `premortem` and `trace` artifacts and their templates. `apply.requires` is still `[ tasks ]`. |
-| `json/` | Captured `--json` outputs (table below). |
+| `changes/x/` | **Reference only (rejected option).** Tier-0 change created with `openspec new change x --schema aval`, filled with proposal, specs, design and tasks only (no premortem, no trace). Its base spec is `refunds/spec-after.md`. |
+| `schemas/aval/` | **Reference only (rejected option).** The custom schema: `openspec schema fork spec-driven aval` plus the `premortem` and `trace` artifacts and their templates, with `apply.requires` still `[ tasks ]`. v0 does not ship it (ADR-0002): OpenSpec has no optional artifacts, so `isPlanningComplete` stays `false` and `nextSteps` asks for premortem even at tier 0. It is kept as evidence for that decision. |
+| `extra-files/` | The files aval manages itself inside `openspec/changes/<id>/` with the built-in `spec-driven` schema: `aval.yaml` (change manifest), `premortem.md`, `trace.yaml`. They were added to `changes/add-refund-limits/` in a fresh repo; `validate.json`, `status.json` and `archive.txt` show that OpenSpec ignores them. |
+| `json/` | Captured `--json` outputs (table below). The `*-x*` and `schema-*` files belong to the rejected custom-schema option. |
 | `negative/<case>/` | Edge cases, each applied to `refunds/spec-after.md`: `delta.md` (the change's `specs/refunds/spec.md`), `validate.json` (`validate <case> --type change --strict --json`), `archive.txt` (`archive <case> -y`, stdout+stderr), and `spec-after.md` only when archive rewrote the spec. |
 
 ### `json/`
@@ -64,3 +71,14 @@ OpenSpec validates and archives.
 | `bracket-id` | valid | applied: `[ORD-F03] …` | aval must reject the malformed ID. |
 | `trailing-hash` | valid | applied, header written with ` ##` | Normalize like OpenSpec; lint it. |
 | `modified-drops-marker` | valid | applied, `**aval**: characterization` lost | aval must flag the dropped marker. |
+
+### `extra-files/`
+
+Same change as `changes/add-refund-limits/`, built-in `spec-driven` schema, plus
+`aval.yaml`, `premortem.md` and `trace.yaml` in the change directory.
+
+| File | Command and result |
+|---|---|
+| `validate.json` | `validate add-refund-limits --type change --strict --json`: exit 0, `valid: true`, no issues |
+| `status.json` | `status --change add-refund-limits --json`: the three files appear in neither `artifacts` nor `artifactPaths` |
+| `archive.txt` | `archive add-refund-limits -y`: exit 0, same totals; the resulting spec is byte-identical to `refunds/spec-after.md` and the three files move to `changes/archive/2026-09-21-add-refund-limits/` (`validate --archived` passes) |
