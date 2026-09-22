@@ -1,0 +1,54 @@
+# aval hook stop blocks until `aval verify` passed on the current working
+# tree, lets the agent stop once a stop hook made it continue, and fails open
+# outside a git repository and on events or flags it does not know.
+
+stdin stop.json
+exec aval hook stop
+! stdout .
+! stderr .
+
+cd repo
+exec git init -q
+exec git add -A
+exec git -c user.name=aval -c user.email=aval@example.com -c commit.gpgsign=false commit -q -m init
+stdin $WORK/stop.json
+exec aval hook stop
+cmp stdout $WORK/block.json
+! stderr .
+
+stdin $WORK/stop-active.json
+exec aval hook stop
+! stdout .
+
+# The status ignores itself, or committing it would make it stale.
+verify-status pass
+exec git add -A
+stdin $WORK/stop.json
+exec aval hook stop
+! stdout .
+
+cp $WORK/edited.go refund.go
+stdin $WORK/stop.json
+exec aval hook stop
+cmp stdout $WORK/block.json
+
+verify-status fail
+stdin $WORK/stop.json
+exec aval hook stop --future-flag extra
+cmp stdout $WORK/block.json
+
+stdin $WORK/stop.json
+exec aval hook pre-compact --future-flag
+! stdout .
+stderr '^aval: unknown hook event "pre-compact", ignored$'
+
+-- stop.json --
+{"session_id":"s1","hook_event_name":"Stop","stop_hook_active":false}
+-- stop-active.json --
+{"session_id":"s1","hook_event_name":"Stop","stop_hook_active":true}
+-- block.json --
+{"decision":"block","reason":"Run `aval verify` and fix failures before finishing."}
+-- edited.go --
+package refund // edited
+-- repo/refund.go --
+package refund
