@@ -264,17 +264,29 @@
           }
         },
         "families": {
-          "type": "array",
-          "minItems": 2,
-          "items": {
-            "enum": [
-              "dx",
-              "feat",
-              "seam",
-              "other"
-            ]
-          },
-          "uniqueItems": true
+          "const": [
+            "dx",
+            "feat"
+          ]
+        }
+      },
+      "if": {
+        "properties": {
+          "family": {
+            "const": "mixed"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "families"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "families"
+          ]
         }
       }
     },

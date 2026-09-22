@@ -7,8 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"slices"
 	"strings"
 	"time"
+
+	"github.com/svallejo-dev/aval/internal/platform/strictjson"
 )
 
 // SchemaVersion is the bundle schema version this build writes and reads.
@@ -101,7 +105,8 @@ type Check struct {
 // Family is the command family a commit belongs to, by the paths it touches.
 type Family string
 
-// Commit families. Mixed commits block; Families lists what they span.
+// Commit families. A commit is mixed exactly when it touches dx and feat paths
+// (ADR-0005 §3b); seam and other never make it mixed. Mixed commits block.
 const (
 	FamilyDX    Family = "dx"
 	FamilyFeat  Family = "feat"
@@ -114,7 +119,7 @@ const (
 type Commit struct {
 	SHA      string   `json:"sha"`
 	Family   Family   `json:"family"`
-	Families []Family `json:"families,omitempty"` // only for mixed commits
+	Families []Family `json:"families,omitempty"` // [dx feat], only for mixed commits
 	Paths    []string `json:"paths"`
 }
 
@@ -220,6 +225,39 @@ func orEmpty[T any](s []T) []T {
 // ErrInvalid is wrapped by every bundle validation error.
 var ErrInvalid = errors.New("invalid evidence bundle")
 
+// mixedFamilies is the only valid Families value: the two families a mixed
+// commit spans.
+var mixedFamilies = []Family{FamilyDX, FamilyFeat}
+
+// maxBundleBytes caps a bundle read from disk. Larger input is an error, never
+// silently truncated.
+const maxBundleBytes = 16 << 20
+
+// Parse reads a bundle written by an earlier run and validates the raw bytes,
+// not a re-encoding of them: unknown fields, duplicate keys, empty strings the
+// writer would omit and trailing data are all errors. Only local gates reuse a
+// bundle; in CI the gate always recomputes it (ADR-0005 §7).
+func Parse(r io.Reader) (Bundle, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxBundleBytes+1))
+	if err != nil {
+		return Bundle{}, fmt.Errorf("read bundle: %w", err)
+	}
+	if len(data) > maxBundleBytes {
+		return Bundle{}, fmt.Errorf("%w: larger than %d bytes", ErrInvalid, maxBundleBytes)
+	}
+	if err := validateJSON(data); err != nil {
+		return Bundle{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	var b Bundle
+	if err := strictjson.Decode(data, &b); err != nil {
+		return Bundle{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	if err := b.Validate(); err != nil {
+		return Bundle{}, err
+	}
+	return b, nil
+}
+
 // Validate checks the bundle against the embedded JSON Schema, then the rules
 // that span several fields and that a schema cannot express. The gate never
 // trusts a bundle that fails it.
@@ -240,8 +278,8 @@ func (b Bundle) Validate() error {
 		}
 	}
 	for _, c := range b.Scope {
-		if (c.Family == FamilyMixed) != (len(c.Families) >= 2) {
-			errs = append(errs, fmt.Errorf("commit %s: families must list 2+ families exactly when family is mixed", c.SHA))
+		if (c.Family == FamilyMixed) != slices.Equal(c.Families, mixedFamilies) {
+			errs = append(errs, fmt.Errorf("commit %s: families must be [dx feat] exactly when family is mixed", c.SHA))
 		}
 	}
 	for i, a := range b.Approvals {

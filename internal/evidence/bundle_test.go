@@ -232,6 +232,11 @@ func TestValidate(t *testing.T) {
 		{name: "characterization failing after", mutate: func(b *Bundle) { b.Obligations[2].After = Fail }, wantErr: "characterization strength"},
 		{name: "kind letter mismatch", mutate: func(b *Bundle) { b.Obligations[0].Kind = "N" }, wantErr: "kind letter"},
 		{name: "duplicate families", mutate: func(b *Bundle) { b.Scope[0].Families = []Family{FamilyFeat, FamilyFeat} }, wantErr: "schema"},
+		{name: "mixed from seam and other", mutate: func(b *Bundle) { b.Scope[0].Families = []Family{FamilySeam, FamilyOther} }, wantErr: "[dx feat]"},
+		{name: "mixed with families out of order", mutate: func(b *Bundle) { b.Scope[0].Families = []Family{FamilyFeat, FamilyDX} }, wantErr: "[dx feat]"},
+		{name: "mixed with a third family", mutate: func(b *Bundle) {
+			b.Scope[0].Families = []Family{FamilyDX, FamilyFeat, FamilySeam}
+		}, wantErr: "[dx feat]"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -325,6 +330,72 @@ func TestSchemaEnforcesApprovalRules(t *testing.T) {
 		tc.mutate(&b.Approvals[1])
 		if err := validateSchema(b); err == nil {
 			t.Errorf("%s: schema accepted it", tc.name)
+		}
+	}
+}
+
+func TestParse(t *testing.T) {
+	t.Parallel()
+
+	golden, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := Parse(bytes.NewReader(golden))
+	if err != nil {
+		t.Fatalf("Parse(golden): %v", err)
+	}
+	if again, _ := json.MarshalIndent(b, "", "  "); !bytes.Equal(append(again, '\n'), golden) {
+		t.Errorf("golden does not round-trip through Parse:\n%s", again)
+	}
+
+	// Each case is valid once re-encoded, so only a check of the raw bytes
+	// catches it.
+	for _, tc := range []struct {
+		name string
+		edit func(string) string
+	}{
+		{"unknown field", func(s string) string { return strings.Replace(s, `"repo":`, `"trusted": true, "repo":`, 1) }},
+		{"v1 override field", func(s string) string { return strings.Replace(s, `"approvals":`, `"override": null, "approvals":`, 1) }},
+		{"empty reason on a rejected override", func(s string) string {
+			return strings.Replace(s, `"reason": "hotfix"`, `"reason": ""`, 1)
+		}},
+		{"empty rejection on a valid approval", func(s string) string {
+			return strings.Replace(s, `"valid": true`, `"valid": true, "rejection": ""`, 1)
+		}},
+		{"duplicate head", func(s string) string {
+			return strings.Replace(s, `"head":`, `"head": "`+olderSHA+`", "head":`, 1)
+		}},
+		{"trailing data", func(s string) string { return s + "{}" }},
+	} {
+		edited := tc.edit(string(golden))
+		if edited == string(golden) {
+			t.Fatalf("%s: the edit did not apply", tc.name)
+		}
+		if _, err := Parse(strings.NewReader(edited)); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: Parse = %v, want ErrInvalid", tc.name, err)
+		}
+	}
+	if _, err := Parse(bytes.NewReader(append(golden, bytes.Repeat([]byte(" "), maxBundleBytes)...))); !errors.Is(err, ErrInvalid) {
+		t.Errorf("oversized bundle: Parse = %v, want ErrInvalid", err)
+	}
+}
+
+// TestSchemaEnforcesMixedRule: mixed means exactly [dx feat] in the schema
+// too, not only in Go.
+func TestSchemaEnforcesMixedRule(t *testing.T) {
+	t.Parallel()
+
+	for name, c := range map[string]Commit{
+		"mixed without families":  {SHA: headSHA, Family: FamilyMixed},
+		"mixed from seam and dx":  {SHA: headSHA, Family: FamilyMixed, Families: []Family{FamilyDX, FamilySeam}},
+		"mixed out of order":      {SHA: headSHA, Family: FamilyMixed, Families: []Family{FamilyFeat, FamilyDX}},
+		"families on a dx commit": {SHA: headSHA, Family: FamilyDX, Families: []Family{FamilyDX, FamilyFeat}},
+	} {
+		b := sampleBundle()
+		b.Scope[0] = c
+		if err := validateSchema(b); err == nil {
+			t.Errorf("%s: schema accepted it", name)
 		}
 	}
 }

@@ -2,6 +2,11 @@
 // already failing when a repository adopted aval. The gate reads it from the
 // base commit, never from the head, and does not count those failures as
 // regressions (ADR-0005 §7).
+//
+// Entries are leaf failures: failing tests with no failing subtest in the
+// same run. go test marks every parent of a failing subtest as failed too, so
+// writers and the gate judge leaves only, and matching is exact. A new failing
+// subtest under a listed parent is therefore a regression, never hidden.
 package baseline
 
 import (
@@ -13,10 +18,11 @@ import (
 	"fmt"
 	"io"
 	"slices"
-	"strings"
 	"sync"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+
+	"github.com/svallejo-dev/aval/internal/platform/strictjson"
 )
 
 // Version is the baseline schema version this build writes and reads.
@@ -25,8 +31,8 @@ const Version = 1
 // Path is where the baseline lives, relative to the repository root.
 const Path = ".aval/baseline.json"
 
-// Baseline lists tests that were failing at adoption. The zero value is the
-// empty baseline, which is what the gate uses when the base has no file.
+// Baseline lists tests that were failing at adoption. Use Empty when the base
+// has no file.
 type Baseline struct {
 	Version int    `json:"version"`
 	Failing []Test `json:"failing"`
@@ -41,13 +47,12 @@ type Test struct {
 // ErrInvalid is wrapped by every parse and validation error.
 var ErrInvalid = errors.New("invalid baseline")
 
-// Covers reports whether a failure of test in pkg is already known: the
-// baseline lists the test itself or one of its parents. A failing parent
-// covers its subtests, since adoption could not tell which of them failed.
-func (b Baseline) Covers(pkg, test string) bool {
-	return slices.ContainsFunc(b.Failing, func(f Test) bool {
-		return f.Package == pkg && (f.Test == test || strings.HasPrefix(test, f.Test+"/"))
-	})
+// Empty is the baseline of a repository with no known failures.
+func Empty() Baseline { return Baseline{Version: Version} }
+
+// Contains reports whether the baseline lists exactly this leaf failure.
+func (b Baseline) Contains(pkg, test string) bool {
+	return slices.Contains(b.Failing, Test{Package: pkg, Test: test})
 }
 
 // MarshalJSON writes the tests sorted by package and name, and never null, so
@@ -84,7 +89,7 @@ func (b Baseline) Validate() error {
 const maxBytes = 1 << 20
 
 // Parse decodes and validates exactly one baseline document. Unknown fields,
-// nulls, other versions and trailing data are errors.
+// duplicate keys, nulls, other versions and trailing data are errors.
 func Parse(r io.Reader) (Baseline, error) {
 	data, err := io.ReadAll(io.LimitReader(r, maxBytes+1))
 	if err != nil {
@@ -97,9 +102,7 @@ func Parse(r io.Reader) (Baseline, error) {
 		return Baseline{}, fmt.Errorf("%s: %w", Path, err)
 	}
 	var b Baseline
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&b); err != nil {
+	if err := strictjson.Decode(data, &b); err != nil {
 		return Baseline{}, fmt.Errorf("%s: %w: %w", Path, ErrInvalid, err)
 	}
 	return b, nil

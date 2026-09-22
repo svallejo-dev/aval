@@ -26,11 +26,11 @@
         "properties": {
           "package": {
             "type": "string",
-            "pattern": "^[^\\s]+$"
+            "pattern": "^[^\\s\\p{Z}\\p{C}]+$"
           },
           "test": {
             "type": "string",
-            "pattern": "^(Test|Fuzz|Example)[^\\s]*$"
+            "pattern": "^(Test|Fuzz|Example)[^\\s\\p{Z}\\p{C}]*$"
           }
         }
       }

@@ -54,14 +54,14 @@ func TestGolden(t *testing.T) {
 func TestEmptyIsArray(t *testing.T) {
 	t.Parallel()
 
-	raw, err := json.Marshal(Baseline{Version: Version})
+	raw, err := json.Marshal(Empty())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(raw) != `{"version":1,"failing":[]}` {
 		t.Errorf("got %s, want an empty array, never null", raw)
 	}
-	if err := (Baseline{Version: Version}).Validate(); err != nil {
+	if err := Empty().Validate(); err != nil {
 		t.Errorf("empty baseline: %v", err)
 	}
 }
@@ -81,7 +81,13 @@ func TestParse(t *testing.T) {
 		{name: "empty input", in: ``, wantErr: true},
 		{name: "null", in: `null`, wantErr: true},
 		{name: "other version", in: `{"version":2,"failing":[]}`, wantErr: true},
+		// The schema accepts 1.0 as the integer 1; decoding into int rejects it, so this fails closed.
 		{name: "float version", in: `{"version":1.0,"failing":[]}`, wantErr: true},
+		{name: "duplicate version", in: `{"version":2,"version":1,"failing":[]}`, wantErr: true},
+		{name: "duplicate list hides entries", in: `{"version":1,"failing":[{"package":"p","test":"TestX"}],"failing":[]}`, wantErr: true},
+		{name: "non-breaking space in name", in: "{\"version\":1,\"failing\":[{\"package\":\"p\",\"test\":\"TestX\u00a0y\"}]}", wantErr: true},
+		{name: "control character in package", in: `{"version":1,"failing":[{"package":"p\u0000","test":"TestX"}]}`, wantErr: true},
+		{name: "numbered subtest", in: `{"version":1,"failing":[{"package":"p","test":"TestX/case#01"}]}`},
 		{name: "missing failing", in: `{"version":1}`, wantErr: true},
 		{name: "null failing", in: `{"version":1,"failing":null}`, wantErr: true},
 		{name: "unknown field", in: `{"version":1,"failing":[],"trusted":true}`, wantErr: true},
@@ -108,31 +114,42 @@ func TestParse(t *testing.T) {
 	}
 }
 
-func TestCovers(t *testing.T) {
+func TestContains(t *testing.T) {
 	t.Parallel()
 
-	b := Baseline{Version: Version, Failing: []Test{{Package: "p", Test: "TestX"}, {Package: "p", Test: "TestY/legacy"}}}
+	b := Baseline{Version: Version, Failing: []Test{{Package: "p", Test: "TestAll"}, {Package: "p", Test: "TestY/legacy"}}}
 	tests := []struct {
 		pkg, test string
 		want      bool
 	}{
-		{"p", "TestX", true},
-		{"p", "TestX/any_subtest", true},      // a failing parent covers its subtests
-		{"p", "TestX/a/b", true},              // at any depth
-		{"p", "TestXY", false},                // a name prefix is not a parent
-		{"p", "TestY", false},                 // a failing subtest does not cover its parent
-		{"p", "TestY/legacy", true},           // exact subtest
-		{"p", "TestY/legacy_rounding", false}, // prefix of a sibling
-		{"q", "TestX", false},                 // another package
-		{"p/sub", "TestX", false},             // a subpackage is another package
+		{"p", "TestAll", true},
+		{"p", "TestAll/new_regression", false}, // a listed parent never hides a new failing subtest
+		{"p", "TestAllX", false},
+		{"p", "TestY/legacy", true},
+		{"p", "TestY", false}, // parents of a leaf are not leaves; the gate does not judge them
+		{"p", "TestY/legacy_rounding", false},
+		{"q", "TestAll", false},
+		{"p/sub", "TestAll", false},
 	}
 	for _, tt := range tests {
-		if got := b.Covers(tt.pkg, tt.test); got != tt.want {
-			t.Errorf("Covers(%q, %q) = %v, want %v", tt.pkg, tt.test, got, tt.want)
+		if got := b.Contains(tt.pkg, tt.test); got != tt.want {
+			t.Errorf("Contains(%q, %q) = %v, want %v", tt.pkg, tt.test, got, tt.want)
 		}
 	}
-	if (Baseline{}).Covers("p", "TestX") {
-		t.Error("the zero baseline covers nothing")
+	if Empty().Contains("p", "TestAll") {
+		t.Error("the empty baseline contains nothing")
+	}
+}
+
+func TestEmpty(t *testing.T) {
+	t.Parallel()
+
+	raw, err := json.Marshal(Empty())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Parse(bytes.NewReader(raw)); err != nil {
+		t.Errorf("Empty() does not round-trip through Parse: %v", err)
 	}
 }
 
