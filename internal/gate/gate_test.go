@@ -126,6 +126,8 @@ func TestDecide(t *testing.T) {
 		{name: "a kind that is not the ID's is inconsistent", tier: 1,
 			edit: obs(with(ob("ORD-F01", evidence.Added, evidence.None), func(o *evidence.Obligation) { o.Kind = "A" })),
 			want: evidence.ResultBlock, codes: []string{CodeAssumption, CodeFailBeforeMissing}},
+		{name: "strong on an unchanged obligation is inconsistent", tier: 1, edit: obs(ob("ORD-F01", evidence.Unchanged, evidence.Strong)),
+			want: evidence.ResultBlock, codes: []string{CodeFailBeforeMissing}},
 		{name: "unverified at tier 1", tier: 1, edit: obs(untested), want: evidence.ResultBlock, codes: []string{CodeUnverified}},
 		{name: "unverified not below tier 1", edit: obs(untested), want: evidence.ResultPass},
 		{name: "fail_before_missing at tier 1", tier: 1, edit: obs(ob("ORD-N01", evidence.Added, evidence.None)),
