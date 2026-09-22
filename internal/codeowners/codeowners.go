@@ -50,7 +50,8 @@ var (
 // Parse reads a CODEOWNERS file. Like GitHub, it skips every line it cannot
 // use instead of failing: a negated pattern (!), a character range ([ ]), a
 // pattern that starts with an escaped # (GitHub documents that escaping # does
-// not work), or an owner that is not a user, team or email. The only error is
+// not work), a segment that mixes ** with other characters, or an owner that
+// is not a user, team or email. The only error is
 // a file GitHub would not load.
 func Parse(data []byte) (Rules, error) {
 	if len(data) >= MaxSize {
@@ -130,8 +131,9 @@ func fields(line string) []string {
 // paths relative to the repository root:
 //   - a leading / or a / in the middle anchors the pattern at the root;
 //     otherwise it matches at any depth;
-//   - a trailing / matches only directories, and so everything below them;
-//   - * and ? never cross a /, ** spans any number of directories;
+//   - a trailing / matches only directories, and so only what is below them;
+//   - * and ? never cross a /, and ** alone in a segment spans any number of
+//     directories; ** mixed with other characters is an error;
 //   - a pattern ending in a bare * matches files directly inside that
 //     directory only: docs/* does not own docs/a/b.md (GitHub's docs say so);
 //   - any other pattern also owns everything below a directory it matches.
@@ -139,16 +141,14 @@ func compile(pattern string) (*regexp.Regexp, error) {
 	anchored := strings.HasPrefix(pattern, "/")
 	p := strings.TrimPrefix(pattern, "/")
 	dirOnly := strings.HasSuffix(p, "/")
-	p = strings.TrimSuffix(p, "/")
-	segs := strings.Split(p, "/")
-	if slices.Contains(segs, "") {
-		return nil, fmt.Errorf("pattern %q has an empty segment", pattern)
+	segs := strings.Split(strings.TrimSuffix(p, "/"), "/")
+	for _, seg := range segs {
+		if seg == "" || (seg != "**" && strings.Contains(seg, "**")) {
+			return nil, fmt.Errorf("pattern %q has an empty segment or a stray **", pattern)
+		}
 	}
 	if !anchored && len(segs) == 1 {
 		segs = append([]string{"**"}, segs...)
-	}
-	if dirOnly {
-		segs = append(segs, "**")
 	}
 	segs = slices.CompactFunc(segs, func(a, b string) bool { return a == "**" && b == "**" })
 
@@ -157,33 +157,32 @@ func compile(pattern string) (*regexp.Regexp, error) {
 	needSlash := false
 	last := len(segs) - 1
 	for i, seg := range segs {
-		if seg == "**" {
-			switch {
-			case last == 0:
-				b.WriteString(`.+`)
-			case i == 0:
-				b.WriteString(`(?:.+/)?`)
-			case i == last:
-				b.WriteString(`/.+`)
-			default:
-				b.WriteString(`(?:/.+)?`)
+		switch {
+		case seg == "**" && last == 0:
+			b.WriteString(`.+`)
+		case seg == "**" && i == 0:
+			b.WriteString(`(?:.+/)?`)
+		case seg == "**" && i == last:
+			b.WriteString(`/.+`)
+		case seg == "**":
+			b.WriteString(`(?:/.+)?`)
+		default:
+			if needSlash {
+				b.WriteByte('/')
 			}
-			continue
+			needSlash = true
+			if seg == "*" {
+				b.WriteString(`[^/]+`)
+			} else if err := writeGlob(&b, seg); err != nil {
+				return nil, fmt.Errorf("pattern %q: %w", pattern, err)
+			}
 		}
-		if needSlash {
-			b.WriteByte('/')
-		}
-		needSlash = true
-		if seg == "*" {
-			b.WriteString(`[^/]+`)
-			continue
-		}
-		if err := writeGlob(&b, seg); err != nil {
-			return nil, fmt.Errorf("pattern %q: %w", pattern, err)
-		}
-		if i == last {
-			b.WriteString(`(?:/.*)?`)
-		}
+	}
+	switch {
+	case dirOnly:
+		b.WriteString(`/.+`) // what matched is a directory: own what is below it
+	case segs[last] != "*" && segs[last] != "**":
+		b.WriteString(`(?:/.*)?`) // the file itself, or everything below a directory
 	}
 	b.WriteString(`\z`)
 	re, err := regexp.Compile(b.String())

@@ -43,8 +43,15 @@ func override(a evidence.Approval, reason string) evidence.Approval {
 func TestEvaluate(t *testing.T) {
 	t.Parallel()
 
-	owners := []string{"@lead", "@agent"}
-	roles := map[string]string{"maint": RoleMaintain, "boss": RoleAdmin, "writer": "write", "lead": "read"}
+	owners := []string{"@lead", "@agent", "@ghost", "@gone"}
+	access := map[string]Access{
+		"lead":   {Role: "write", Permission: "write"},
+		"agent":  {Role: "write", Permission: "write"},
+		"ghost":  {Role: "read", Permission: "read"}, // a stale entry someone else registered
+		"maint":  {Role: RoleMaintain, Permission: "write"},
+		"boss":   {Role: RoleAdmin, Permission: "admin"},
+		"writer": {Role: "write", Permission: "write"},
+	}
 
 	tests := []struct {
 		name    string
@@ -62,6 +69,14 @@ func TestEvaluate(t *testing.T) {
 			review(2, "lead", Dismissed, headSHA, 2, ""),
 		), want: as(rejected("lead", headSHA, 1, RejectSuperseded))},
 		{name: "approval of an earlier commit", reviews: rs(review(1, "lead", Approved, olderSHA, 1, "")), want: as(rejected("lead", olderSHA, 1, RejectStale))},
+		{name: "same time: the higher ID is later", reviews: rs(
+			review(2, "lead", Approved, headSHA, 1, ""),
+			review(1, "lead", ChangesRequested, headSHA, 1, ""),
+		), want: as(valid("lead", 1))},
+		{name: "same time: the lower ID is earlier", reviews: rs(
+			review(2, "lead", ChangesRequested, headSHA, 1, ""),
+			review(1, "lead", Approved, headSHA, 1, ""),
+		), want: as(rejected("lead", headSHA, 1, RejectSuperseded))},
 		{name: "comment after the approval keeps it", reviews: rs(
 			review(1, "lead", Approved, headSHA, 1, ""),
 			review(2, "lead", Commented, headSHA, 2, "one more nit"),
@@ -81,6 +96,11 @@ func TestEvaluate(t *testing.T) {
 			want: as(override(rejected("lead", headSHA, 1, RejectNoReason), ""))},
 		{name: "the first override line with a reason wins", reviews: rs(review(1, "lead", Approved, headSHA, 1, "aval:override \naval:override flaky CI")),
 			want: as(override(valid("lead", 1), "flaky CI"))},
+		{name: "override lines in fenced code blocks do not count", reviews: rs(review(1, "lead", Approved, headSHA, 1,
+			"```\naval:override a\n```\n~~~~\naval:override b\n~~~\naval:override c\n~~~~~\n  aval:override real\n")),
+			want: as(override(valid("lead", 1), "real"))},
+		{name: "an override only in a code block is a plain approval", reviews: rs(review(1, "lead", Approved, headSHA, 1, "```sh\naval:override x\n```")),
+			want: as(valid("lead", 1))},
 		{name: "a longer word is not the marker", reviews: rs(review(1, "lead", Approved, headSHA, 1, "aval:overrides nothing")), want: as(valid("lead", 1))},
 		{name: "override in a comment is not an approval", reviews: rs(review(1, "lead", Commented, headSHA, 1, "aval:override hotfix")),
 			want: as(override(rejected("lead", headSHA, 1, "review is COMMENTED, not APPROVED"), "hotfix"))},
@@ -88,6 +108,8 @@ func TestEvaluate(t *testing.T) {
 		{name: "maintain role without a CODEOWNERS entry", reviews: rs(review(1, "maint", Approved, headSHA, 1, "")), want: as(valid("maint", 1))},
 		{name: "admin role without a CODEOWNERS entry", reviews: rs(review(1, "boss", Approved, headSHA, 1, "")), want: as(valid("boss", 1))},
 		{name: "write role is not a code owner", reviews: rs(review(1, "writer", Approved, headSHA, 1, "")), want: as(rejected("writer", headSHA, 1, RejectNotOwner))},
+		{name: "CODEOWNERS entry without write access", reviews: rs(review(1, "ghost", Approved, headSHA, 1, "")), want: as(rejected("ghost", headSHA, 1, RejectNoWrite))},
+		{name: "CODEOWNERS entry with no access at all", reviews: rs(review(1, "gone", Approved, headSHA, 1, "")), want: as(rejected("gone", headSHA, 1, RejectNoWrite))},
 		{name: "no role and no CODEOWNERS entry", reviews: rs(review(1, "stranger", Approved, headSHA, 1, "")), want: as(rejected("stranger", headSHA, 1, RejectNotOwner))},
 		{name: "owners match case-insensitively", reviews: rs(review(1, "LEAD", Approved, headSHA, 1, "")), owners: []string{"@Lead"}, want: as(valid("LEAD", 1))},
 		{name: "a team entry never matches", reviews: rs(review(1, "lead", Approved, headSHA, 1, "")), owners: []string{"@org/lead"},
@@ -118,7 +140,7 @@ func TestEvaluate(t *testing.T) {
 			if tt.owners != nil {
 				o = tt.owners
 			}
-			got := Evaluate(tt.reviews, headSHA, prAuthor, o, roles)
+			got := Evaluate(tt.reviews, headSHA, prAuthor, o, access)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("Evaluate =\n%+v\nwant\n%+v", got, tt.want)
 			}

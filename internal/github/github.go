@@ -1,5 +1,5 @@
 // Package github is a minimal client for the GitHub REST API endpoints the
-// gate reads: the reviews of a pull request and a collaborator's role.
+// gate reads: the reviews of a pull request and a collaborator's access.
 //
 // Both work with the GITHUB_TOKEN of a workflow with contents: read and
 // pull-requests: read: listing reviews needs the "Pull requests" repository
@@ -33,6 +33,7 @@ const (
 	perPage      = 100
 	maxPages     = 30 // 3,000 reviews; more is an error, never a silent truncation
 	maxBodyBytes = 16 << 20
+	maxRedirects = 10 // net/http's default
 )
 
 var defaultHTTP = &http.Client{Timeout: 30 * time.Second}
@@ -98,27 +99,48 @@ func (c *Client) ListReviews(ctx context.Context, owner, repo string, number int
 	return reviews, nil
 }
 
-// RoleName returns user's role in the repository: admin, maintain, write,
-// triage, read or a custom role name. It reads role_name, not permission,
-// which reports maintain as write. A 404 means no role: it returns "" and no
-// error.
-func (c *Client) RoleName(ctx context.Context, owner, repo, user string) (string, error) {
+// Permission returns user's access to the repository: role_name (admin,
+// maintain, write, triage, read or a custom role) and the legacy permission
+// (admin, write, read or none, where maintain reports as write). A 404 means
+// no access: it returns the zero Access and no error.
+func (c *Client) Permission(ctx context.Context, owner, repo, user string) (approval.Access, error) {
 	var body struct {
-		RoleName string `json:"role_name"`
+		RoleName   string `json:"role_name"`
+		Permission string `json:"permission"`
 	}
 	_, err := c.get(ctx, c.endpoint(fmt.Sprintf("/repos/%s/%s/collaborators/%s/permission",
 		url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(user))), &body)
 	if apiErr, ok := errors.AsType[*Error](err); ok && apiErr.StatusCode == http.StatusNotFound {
-		return "", nil
+		return approval.Access{}, nil
 	}
 	if err != nil {
-		return "", err
+		return approval.Access{}, err
 	}
-	return body.RoleName, nil
+	return approval.Access{Role: body.RoleName, Permission: body.Permission}, nil
 }
 
 func (c *Client) endpoint(path string) string {
 	return strings.TrimSuffix(cmp.Or(c.BaseURL, DefaultBaseURL), "/") + path
+}
+
+// httpClient returns a copy of the configured client that refuses redirects
+// to another origin, so the token never leaves the API host.
+func (c *Client) httpClient() *http.Client {
+	hc := *cmp.Or(c.HTTP, defaultHTTP)
+	checkNext := hc.CheckRedirect
+	hc.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if first := via[0].URL; req.URL.Scheme != first.Scheme || req.URL.Host != first.Host {
+			return fmt.Errorf("github: refusing a redirect from %s://%s to %s://%s", first.Scheme, first.Host, req.URL.Scheme, req.URL.Host)
+		}
+		if checkNext != nil {
+			return checkNext(req, via)
+		}
+		if len(via) >= maxRedirects {
+			return fmt.Errorf("github: stopped after %d redirects", maxRedirects)
+		}
+		return nil
+	}
+	return &hc
 }
 
 // get fetches rawURL into v and returns the URL of the next page, if any.
@@ -132,11 +154,7 @@ func (c *Client) get(ctx context.Context, rawURL string, v any) (next string, er
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
-	hc := c.HTTP
-	if hc == nil {
-		hc = defaultHTTP
-	}
-	resp, err := hc.Do(req)
+	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return "", fmt.Errorf("github: GET %s: %w", req.URL.Redacted(), err)
 	}
@@ -177,7 +195,7 @@ func nextPage(current *url.URL, links []string) (string, error) {
 				return "", fmt.Errorf("github: next page link: %w", err)
 			}
 			if u.Scheme != current.Scheme || u.Host != current.Host {
-				return "", fmt.Errorf("github: next page link leaves %s: %s", current.Host, u.Redacted())
+				return "", fmt.Errorf("github: next page link %s is not on %s://%s", u.Redacted(), current.Scheme, current.Host)
 			}
 			return u.String(), nil
 		}

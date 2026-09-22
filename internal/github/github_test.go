@@ -106,21 +106,74 @@ func TestListReviewsPageCap(t *testing.T) {
 	}
 }
 
-func TestListReviewsRefusesAForeignNextLink(t *testing.T) {
+// foreignServer fails the test on any request: the token must never reach
+// another origin.
+func foreignServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Errorf("request reached another origin: %s", r.URL)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestListReviewsRefusesNextLinksToAnotherOrigin(t *testing.T) {
 	t.Parallel()
 
-	c := newClient(t, func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Link", `<https://attacker.example/steal?page=2>; rel="next"`)
-		_, _ = io.WriteString(w, `[]`)
-	})
-
-	_, err := c.ListReviews(context.Background(), "o", "r", 7)
-	if err == nil || !strings.Contains(err.Error(), "attacker.example") {
-		t.Errorf("ListReviews = %v, want a refused next link", err)
+	foreign := foreignServer(t)
+	for name, link := range map[string]func(host string) string{
+		"another host":   func(string) string { return foreign.URL + "/api/v3/repos/o/r/pulls/7/reviews?page=2" },
+		"another scheme": func(host string) string { return "https://" + host + "/api/v3/repos/o/r/pulls/7/reviews?page=2" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Link", "<"+link(r.Host)+`>; rel="next"`)
+				_, _ = io.WriteString(w, `[]`)
+			})
+			_, err := c.ListReviews(context.Background(), "o", "r", 7)
+			if err == nil || !strings.Contains(err.Error(), "next page link") {
+				t.Errorf("ListReviews = %v, want a refused next link", err)
+			}
+		})
 	}
 }
 
-func TestRoleName(t *testing.T) {
+func TestRedirects(t *testing.T) {
+	t.Parallel()
+
+	foreign := foreignServer(t)
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v3/repos/o/r/pulls/7/reviews": // a renamed repository
+			http.Redirect(w, r, "/api/v3/repos/renamed/r/pulls/7/reviews", http.StatusMovedPermanently)
+		case "/api/v3/repos/renamed/r/pulls/7/reviews":
+			_, _ = io.WriteString(w, `[{"id":1,"state":"APPROVED"}]`)
+		default:
+			http.Redirect(w, r, foreign.URL+"/api/v3/repos/o/moved/pulls/7/reviews", http.StatusFound)
+		}
+	})
+
+	if got, err := c.ListReviews(context.Background(), "o", "r", 7); err != nil || len(got) != 1 {
+		t.Errorf("ListReviews through a same-origin redirect = %v, %v", got, err)
+	}
+	if _, err := c.ListReviews(context.Background(), "o", "moved", 7); err == nil || !strings.Contains(err.Error(), "refusing a redirect") {
+		t.Errorf("ListReviews through a redirect to another origin = %v, want a refusal", err)
+	}
+}
+
+func TestResponseSizeLimit(t *testing.T) {
+	t.Parallel()
+
+	c := newClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "[]"+strings.Repeat(" ", maxBodyBytes))
+	})
+	if _, err := c.ListReviews(context.Background(), "o", "r", 7); err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Errorf("ListReviews of a %d-byte body = %v, want a size error", maxBodyBytes+2, err)
+	}
+}
+
+func TestPermission(t *testing.T) {
 	t.Parallel()
 
 	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -132,11 +185,12 @@ func TestRoleName(t *testing.T) {
 		_, _ = io.WriteString(w, `{"permission":"write","role_name":"maintain","user":{"login":"maint"}}`)
 	})
 
-	if got, err := c.RoleName(context.Background(), "o", "r", "maint"); err != nil || got != approval.RoleMaintain {
-		t.Errorf("RoleName(maint) = %q, %v; want maintain from role_name, not permission", got, err)
+	want := approval.Access{Role: approval.RoleMaintain, Permission: "write"}
+	if got, err := c.Permission(context.Background(), "o", "r", "maint"); err != nil || got != want {
+		t.Errorf("Permission(maint) = %+v, %v; want %+v", got, err, want)
 	}
-	if got, err := c.RoleName(context.Background(), "o", "r", "stranger"); err != nil || got != "" {
-		t.Errorf("RoleName(stranger) = %q, %v; want no role and no error on 404", got, err)
+	if got, err := c.Permission(context.Background(), "o", "r", "stranger"); err != nil || got != (approval.Access{}) {
+		t.Errorf("Permission(stranger) = %+v, %v; want no access and no error on 404", got, err)
 	}
 }
 
@@ -165,7 +219,7 @@ func TestErrors(t *testing.T) {
 			_, listErr := c.ListReviews(context.Background(), "o", "r", 7)
 			calls := map[string]error{"ListReviews": listErr}
 			if tt.name != "wrong shape" { // an object is a valid permission body
-				_, calls["RoleName"] = c.RoleName(context.Background(), "o", "r", "lead")
+				_, calls["Permission"] = c.Permission(context.Background(), "o", "r", "lead")
 			}
 			for call, err := range calls {
 				if err == nil {

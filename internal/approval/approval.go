@@ -36,6 +36,14 @@ type Review struct {
 	Body        string
 }
 
+// Access is a collaborator's standing in the repository, as
+// GET /repos/{o}/{r}/collaborators/{user}/permission reports it. The zero
+// value is no access.
+type Access struct {
+	Role       string // role_name: admin, maintain, write, triage, read or a custom role
+	Permission string // legacy base role: admin, write, read or none; maintain reports as write
+}
+
 // Roles that make a collaborator a code owner of the policy even when
 // CODEOWNERS does not list them. They are role_name values: the legacy
 // permission field reports maintain as write.
@@ -43,6 +51,14 @@ const (
 	RoleAdmin    = "admin"
 	RoleMaintain = "maintain"
 )
+
+// elevated reports whether the role alone makes a code owner.
+func (a Access) elevated() bool { return a.Role == RoleAdmin || a.Role == RoleMaintain }
+
+// canWrite reports whether a CODEOWNERS entry for this user counts: GitHub
+// only assigns code owners with write access, and a stale entry (a renamed or
+// deleted account) could otherwise be claimed by anyone.
+func (a Access) canWrite() bool { return a.Permission == "admin" || a.Permission == "write" }
 
 // OverrideMarker starts the review body line that asks for an override; the
 // rest of the line is the reason.
@@ -54,6 +70,7 @@ const (
 	RejectStale      = "review of an earlier commit"
 	RejectAuthor     = "the PR author cannot approve their own PR"
 	RejectNotOwner   = "not a code owner"
+	RejectNoWrite    = "listed in CODEOWNERS without write access"
 	RejectNoReason   = "override without a reason"
 )
 
@@ -65,13 +82,15 @@ var shaRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
 //     counts reviews, so a later CHANGES_REQUESTED or DISMISSED voids it;
 //   - it is APPROVED and bound to head, the PR's head commit;
 //   - its author is not prAuthor;
-//   - its author is a code owner: listed in owners (the base CODEOWNERS
-//     owners of the root aval.yaml, "@login" or "login") or holding
-//     RoleAdmin or RoleMaintain in roles (login → role_name).
+//   - its author is a code owner: holding RoleAdmin or RoleMaintain in
+//     access (login → Access), or listed in owners (the base CODEOWNERS
+//     owners of the root aval.yaml, "@login" or "login") with write or
+//     admin permission.
 //
 // An override also needs a non-empty reason. A review whose body has a line
-// starting with OverrideMarker is an override even if that reason is empty,
-// so it is rejected rather than counted as a plain approval.
+// starting with OverrideMarker, outside a fenced code block, is an override
+// even if that reason is empty, so it is rejected rather than counted as a
+// plain approval.
 //
 // Logins match case-insensitively. Team entries (@org/team) in owners never
 // match: expanding them needs read:org, which v0 does not have.
@@ -81,15 +100,14 @@ var shaRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
 // latter still supersede their author's earlier reviews. head must be a full
 // lowercase SHA, so every returned Approval passes evidence.Bundle.Validate
 // for a bundle whose head is head.
-func Evaluate(reviews []Review, head, prAuthor string, owners []string, roles map[string]string) []evidence.Approval {
-	isOwner := make(map[string]bool, len(owners)+len(roles))
+func Evaluate(reviews []Review, head, prAuthor string, owners []string, access map[string]Access) []evidence.Approval {
+	listed := make(map[string]bool, len(owners))
 	for _, o := range owners {
-		isOwner[login(o)] = true
+		listed[login(o)] = true
 	}
-	for u, r := range roles {
-		if r == RoleAdmin || r == RoleMaintain {
-			isOwner[login(u)] = true
-		}
+	accessOf := make(map[string]Access, len(access))
+	for u, a := range access {
+		accessOf[login(u)] = a
 	}
 
 	submitted := make([]Review, 0, len(reviews))
@@ -134,8 +152,10 @@ func Evaluate(reviews []Review, head, prAuthor string, owners []string, roles ma
 			a.Rejection = RejectStale
 		case u == login(prAuthor):
 			a.Rejection = RejectAuthor
-		case !isOwner[u]:
+		case !accessOf[u].elevated() && !listed[u]:
 			a.Rejection = RejectNotOwner
+		case !accessOf[u].elevated() && !accessOf[u].canWrite():
+			a.Rejection = RejectNoWrite
 		case isOverride && reason == "":
 			a.Rejection = RejectNoReason
 		}
@@ -149,11 +169,24 @@ func Evaluate(reviews []Review, head, prAuthor string, owners []string, roles ma
 }
 
 // overrideReason finds the first line of body that starts with
-// OverrideMarker, after leading spaces, and returns the rest of that line.
-// Among several such lines the first non-empty reason wins.
+// OverrideMarker, after leading spaces and outside fenced code blocks (``` or
+// ~~~), and returns the rest of that line. Among several such lines the first
+// non-empty reason wins.
 func overrideReason(body string) (reason string, found bool) {
+	fence := "" // the open code fence; empty outside one
 	for line := range strings.Lines(body) {
-		rest, ok := strings.CutPrefix(strings.TrimSpace(line), OverrideMarker)
+		t := strings.TrimSpace(line)
+		switch {
+		case fence != "":
+			if strings.HasPrefix(t, fence) && strings.Trim(t, fence[:1]) == "" {
+				fence = ""
+			}
+			continue
+		case strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~"):
+			fence = t[:len(t)-len(strings.TrimLeft(t, t[:1]))]
+			continue
+		}
+		rest, ok := strings.CutPrefix(t, OverrideMarker)
 		if !ok || (rest != "" && rest[0] != ' ' && rest[0] != '\t') {
 			continue // not the marker, or a longer word such as aval:overrides
 		}
