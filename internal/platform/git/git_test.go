@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -333,13 +332,22 @@ func TestRunErrors(t *testing.T) {
 }
 
 // TestEnviron checks the variables that no git test here can observe: a
-// credential prompt and a lazy fetch need a remote.
+// credential prompt and a lazy fetch need a remote. The process sets the
+// opposite values, and the last value of a key is the one git gets. It
+// changes the environment, so it cannot run in parallel.
 func TestEnviron(t *testing.T) {
-	t.Parallel()
+	t.Setenv("GIT_TERMINAL_PROMPT", "1")
+	t.Setenv("GIT_NO_LAZY_FETCH", "0")
 	env := environ()
-	for _, kv := range []string{"GIT_TERMINAL_PROMPT=0", "GIT_NO_LAZY_FETCH=1"} {
-		if !slices.Contains(env, kv) {
-			t.Errorf("environ() lacks %s", kv)
+	for key, want := range map[string]string{"GIT_TERMINAL_PROMPT": "0", "GIT_NO_LAZY_FETCH": "1"} {
+		got, found := "", false
+		for _, kv := range env {
+			if v, ok := strings.CutPrefix(kv, key+"="); ok {
+				got, found = v, true
+			}
+		}
+		if !found || got != want {
+			t.Errorf("environ() gives git %s=%q (found %t), want %q", key, got, found, want)
 		}
 	}
 }
