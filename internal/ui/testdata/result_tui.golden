@@ -1,0 +1,7 @@
+[1mVerification[m
+✓ unit tests passed
+! coverage is below its target
+[1m✗[m the gate blocked the change:
+obligation OBL-7 has no executed
+evidence
+[2m3 verifiers in 1.2s[m

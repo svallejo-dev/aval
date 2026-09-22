@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "command": "sample",
+  "ok": true,
+  "data": {
+    "passed": 2,
+    "failed": 1
+  },
+  "errors": []
+}
