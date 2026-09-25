@@ -1,0 +1,28 @@
+{
+  "action": "created",
+  "issue": {
+    "number": 42,
+    "title": "feat(gate)",
+    "pull_request": {
+      "url": "https://api.github.com/repos/svallejo-dev/aval/pulls/42",
+      "html_url": "https://github.com/svallejo-dev/aval/pull/42"
+    }
+  },
+  "comment": {
+    "id": 7,
+    "body": "aval:override nada"
+  },
+  "repository": {
+    "id": 987654321,
+    "full_name": "svallejo-dev/aval",
+    "private": true,
+    "owner": {
+      "login": "svallejo-dev"
+    },
+    "default_branch": "main"
+  },
+  "sender": {
+    "login": "agente-bot",
+    "id": 4242
+  }
+}

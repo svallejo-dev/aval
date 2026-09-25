@@ -8,10 +8,29 @@
 // Detect could not learn lands in Context.Gaps, typed, so the gate decides
 // whether to record "approvals unavailable" and carry on or to stop.
 //
+// # Order
+//
+// Detect runs before any code of the pull request, for the same reason
+// ADR-0005 §1 fixes the order of everything aval reads with git: the tests of
+// the head run on this runner and can rewrite the event file, repoint
+// GITHUB_STEP_SUMMARY or change any variable of a later step. What Detect
+// returned before that still describes the pull request being judged; what it
+// would read afterwards does not.
+//
+// # Trust
+//
 // The event payload is untrusted input. GitHub writes it from its own API, but
 // it arrives as a file on a runner that also executes the pull request's code,
-// so Detect reads it under a size limit, decodes only the fields the gate
-// needs, tolerates every other field and refuses absurd values.
+// so Detect reads it under a size limit, only from a regular file, rejects
+// duplicate and case-folded-duplicate keys (which encoding/json would silently
+// merge, letting a second pull_request object override the first), decodes only
+// the fields the gate needs, tolerates every other field and refuses absurd
+// values.
+//
+// Only the events of ADR-0005 §8 yield a pull request. pull_request_target and
+// workflow_run run with the base's permissions against an untrusted head, and
+// this package is the only place that knows which event fired, so it is where
+// they are refused.
 package actions
 
 import (
@@ -23,9 +42,12 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/svallejo-dev/aval/internal/platform/strictjson"
 )
 
 // Environment variables Detect reads. The runner sets them all except the
@@ -58,6 +80,17 @@ const (
 	maxNameBytes = 64
 )
 
+// The events ADR-0005 §8 runs the gate on, and the only ones a pull request is
+// taken from.
+const (
+	EventPullRequest       = "pull_request"
+	EventPullRequestReview = "pull_request_review"
+)
+
+// allowedEvents is EventPullRequest and EventPullRequestReview. Any other
+// event that carries a pull_request object is refused, not read.
+var allowedEvents = []string{EventPullRequest, EventPullRequestReview}
+
 // GapKind names one piece of context the gate wanted and the environment did
 // not provide. The kinds are what the caller switches on; the wording of a
 // Gap is for the step summary, never for a decision.
@@ -76,12 +109,21 @@ const (
 	// GITHUB_EVENT_PATH, no file, not a regular file, empty, too large or
 	// not JSON.
 	GapEventPayload GapKind = "event_payload"
-	// GapPullRequest means the payload carries no usable pull request, either
-	// because the event is not about one (push, workflow_dispatch) or because
-	// its number or head SHA are absurd. Context.PullRequest is then nil.
+	// GapPullRequest means the event is not about a pull request at all
+	// (push, workflow_dispatch): there is nothing to judge.
 	GapPullRequest GapKind = "pull_request"
-	// GapEventField means an optional field of the pull request was present
-	// and rejected. The pull request is still usable without it.
+	// GapPullRequestInvalid means the payload does carry a pull request and it
+	// is unusable: its number or its head SHA are absurd. It is deliberately
+	// not GapPullRequest, because a gate that reads "no pull request" as
+	// "nothing to judge, exit 0" would fail open on a corrupt payload.
+	GapPullRequestInvalid GapKind = "pull_request_invalid"
+	// GapEventNotAllowed means the event carries a pull request but is not one
+	// of ADR-0005 §8's (pull_request_target, workflow_run,
+	// pull_request_review_comment). No pull request is taken from it.
+	GapEventNotAllowed GapKind = "event_not_allowed"
+	// GapEventField means a field of the pull request was present and
+	// rejected, or had the wrong JSON type. The pull request is still usable
+	// without it.
 	GapEventField GapKind = "event_field"
 	// GapToken means no usable token: the gate cannot read reviews, so
 	// approvals are unavailable (ADR-0005 §5).
@@ -106,6 +148,11 @@ func (g Gap) String() string { return string(g.Kind) + ": " + g.Err.Error() }
 type PullRequest struct {
 	// HeadSHA is github.event.pull_request.head.sha, the commit the gate
 	// judges (ADR-0005 §1). It is lowercase hex, 40 or 64 characters.
+	//
+	// It is not GITHUB_SHA: on a pull_request event that variable holds the
+	// merge commit GitHub built for the run, which is neither the head nor the
+	// base. Comparing the two would fail on every pull request, so nothing
+	// here reads GITHUB_SHA.
 	HeadSHA string
 
 	// BaseBranchSHA is the TIP OF THE BASE BRANCH when GitHub built the
@@ -262,10 +309,13 @@ func (c Context) PullRequestURL() string {
 	return fmt.Sprintf("%s/%s/pull/%d", c.ServerURL, c.FullName(), c.PullRequest.Number)
 }
 
-// ApprovalsAvailable reports whether the gate can read this pull request's
-// reviews: ADR-0005 §5 needs the repository, the pull request number and a
-// token. When it is false the gate records approvals as unavailable and
-// decides on its own policy, instead of treating the environment as an error.
+// ApprovalsAvailable reports whether the gate has what it needs to try reading
+// this pull request's reviews: ADR-0005 §5 needs the repository, the pull
+// request number and a token. It says nothing about whether the call will
+// succeed — the token may lack pull-requests: read, or the API may refuse — so
+// a caller still handles that error. When it is false there is no point
+// calling: the gate records approvals as unavailable and applies its own
+// policy, instead of treating the environment as an error.
 func (c Context) ApprovalsAvailable() bool {
 	return c.FullName() != "" && c.PullRequest != nil && c.HasToken
 }
@@ -401,14 +451,37 @@ func (c *Context) loadEvent(path string, maxBytes int64) {
 		c.gap(GapEventPayload, fmt.Errorf("event payload %s is larger than %d bytes", path, maxBytes))
 		return
 	}
-	if len(bytes.TrimSpace(data)) == 0 {
+	switch trimmed := bytes.TrimSpace(data); {
+	case len(trimmed) == 0:
 		c.gap(GapEventPayload, fmt.Errorf("event payload %s is empty", path))
+		return
+	case trimmed[0] != '{':
+		// A webhook payload is an object. Anything else would decode into the
+		// zero value and be read as a payload with every field missing.
+		c.gap(GapEventPayload, fmt.Errorf("event payload %s is not a JSON object", path))
+		return
+	}
+	// encoding/json matches field tags case-insensitively and lets the last
+	// object with the same folded key win, so {"pull_request": …,
+	// "Pull_Request": …} would merge into one struct and the second could
+	// replace the number, the head SHA and the author with no trace. A payload
+	// that repeats a key, at any depth and under any casing, is not a payload
+	// GitHub wrote.
+	if err := strictjson.CheckDuplicateKeys(data); err != nil {
+		c.gap(GapEventPayload, fmt.Errorf("event payload %s: %w", path, err))
 		return
 	}
 	var p eventPayload
 	if err := json.Unmarshal(data, &p); err != nil {
-		c.gap(GapEventPayload, fmt.Errorf("event payload %s: decode: %w", path, err))
-		return
+		// A field of the wrong JSON type costs that field, not the pull
+		// request: encoding/json reports the first one and decodes the rest, so
+		// what did decode is still what GitHub sent.
+		var typeErr *json.UnmarshalTypeError
+		if !errors.As(err, &typeErr) {
+			c.gap(GapEventPayload, fmt.Errorf("event payload %s: decode: %w", path, err))
+			return
+		}
+		c.gap(GapEventField, fmt.Errorf("event payload %s: %w", path, err))
 	}
 	if p.Action != "" {
 		if err := checkName(p.Action); err != nil {
@@ -420,19 +493,35 @@ func (c *Context) loadEvent(path string, maxBytes int64) {
 	c.setPullRequest(p)
 }
 
-// setPullRequest takes the pull request from the payload. The number and the
-// head SHA are what the gate cannot work without (ADR-0005 §1 and §5): if
-// either is absurd there is no pull request at all. Every other field is
-// best-effort, and a rejected one only costs a GapEventField.
+// setPullRequest takes the pull request from the payload, and only from the
+// events of ADR-0005 §8. The number and the head SHA are what the gate cannot
+// work without (§1 and §5): if either is absurd there is no pull request, and
+// the gap says the payload was corrupt, not that there was nothing to judge.
+// Every other field is best-effort, and a rejected one costs a GapEventField.
 func (c *Context) setPullRequest(p eventPayload) {
 	pr := p.PullRequest
 	if pr == nil {
 		c.gap(GapPullRequest, fmt.Errorf("the %s payload carries no pull_request", cmp.Or(c.EventName, "event")))
 		return
 	}
-	number := cmp.Or(pr.Number, p.Number)
+	if !slices.Contains(allowedEvents, c.EventName) {
+		c.gap(GapEventNotAllowed, fmt.Errorf(
+			"event %q carries a pull request, but the gate runs only on %s (ADR-0005 §8): an event like pull_request_target or workflow_run runs with the base's permissions against an untrusted head",
+			cmp.Or(c.EventName, "(unknown)"), strings.Join(allowedEvents, " and ")))
+		return
+	}
+	number := pr.Number
+	switch {
+	case number == 0:
+		// Only a pull_request event also carries the number at the top level.
+		number = p.Number
+	case p.Number != 0 && p.Number != number:
+		c.gap(GapEventField, fmt.Errorf(
+			"the payload's number %d is not pull_request.number %d: keeping the nested one, which is the pull request the rest of the payload describes",
+			p.Number, number))
+	}
 	if number <= 0 || number > maxPRNumber {
-		c.gap(GapPullRequest, fmt.Errorf("pull request number %d is not a real number", number))
+		c.gap(GapPullRequestInvalid, fmt.Errorf("pull request number %d is not a real number", number))
 		return
 	}
 	var head string
@@ -440,7 +529,7 @@ func (c *Context) setPullRequest(p eventPayload) {
 		head = pr.Head.SHA
 	}
 	if err := checkSHA(head); err != nil {
-		c.gap(GapPullRequest, fmt.Errorf("pull_request.head.sha: %w", err))
+		c.gap(GapPullRequestInvalid, fmt.Errorf("pull_request.head.sha: %w", err))
 		return
 	}
 	out := &PullRequest{Number: int(number), HeadSHA: head, Draft: pr.Draft}
@@ -545,23 +634,31 @@ func checkSHA(s string) error {
 	return nil
 }
 
-// checkRef accepts a branch name: valid UTF-8, no control character, no space
-// and nothing that could pass for a command-line flag.
+// checkRef accepts a branch name, by the rules of git check-ref-format for a
+// single branch: valid UTF-8, no control character or space, nothing git reads
+// as a revision (.., @{, ~, ^, :, ?, *, [, \), no empty or .lock component, no
+// leading or trailing slash, no refs/ prefix (base.ref is a branch name, not a
+// full ref) and nothing that could pass for a command-line flag.
 func checkRef(s string) error {
-	if s == "" {
+	switch {
+	case s == "":
 		return errors.New("is empty")
-	}
-	if len(s) > 255 {
+	case len(s) > 255:
 		return fmt.Errorf("is longer than 255 bytes (%d)", len(s))
-	}
-	if !utf8.ValidString(s) {
+	case !utf8.ValidString(s):
 		return errors.New("is not valid UTF-8")
-	}
-	if strings.HasPrefix(s, "-") {
+	case strings.HasPrefix(s, "-"):
 		return fmt.Errorf("%q starts with a dash", s)
+	case strings.HasPrefix(s, "refs/"):
+		return fmt.Errorf("%q is a full ref, not a branch name", s)
+	case strings.HasPrefix(s, "/"), strings.HasSuffix(s, "/"), strings.Contains(s, "//"):
+		return fmt.Errorf("%q has an empty component", s)
+	case strings.Contains(s, ".."), strings.Contains(s, "@{"),
+		strings.HasSuffix(s, "."), strings.HasSuffix(s, ".lock"):
+		return fmt.Errorf("%q is not a branch name git would accept", s)
 	}
 	for _, r := range s {
-		if r < 0x20 || r == 0x7f || r == ' ' {
+		if r < 0x20 || r == 0x7f || r == ' ' || strings.ContainsRune("~^:?*[\\", r) {
 			return fmt.Errorf("has a character that cannot be in a ref: %q", r)
 		}
 	}

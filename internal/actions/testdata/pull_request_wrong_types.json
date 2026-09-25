@@ -1,0 +1,38 @@
+{
+  "action": "opened",
+  "number": 47,
+  "pull_request": {
+    "number": "47",
+    "state": "open",
+    "draft": "true",
+    "title": "feat(gate): decidir con la evidencia del bundle",
+    "head": {
+      "label": "svallejo-dev:feat/gate",
+      "ref": "feat/gate",
+      "sha": "febdd4dee1aef790a73c332ca77638e89c515ede"
+    },
+    "base": {
+      "label": "svallejo-dev:main",
+      "ref": "main",
+      "sha": 12345
+    },
+    "user": {
+      "login": "agente-bot",
+      "id": 4242,
+      "type": "User"
+    }
+  },
+  "repository": {
+    "id": 987654321,
+    "full_name": "svallejo-dev/aval",
+    "private": true,
+    "owner": {
+      "login": "svallejo-dev"
+    },
+    "default_branch": "main"
+  },
+  "sender": {
+    "login": "agente-bot",
+    "id": 4242
+  }
+}

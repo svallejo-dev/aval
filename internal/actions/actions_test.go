@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -26,14 +27,18 @@ func lookup(env map[string]string) func(string) string {
 	return func(key string) string { return env[key] }
 }
 
-// runEnv is the environment of a gate run on the given event fixture.
-func runEnv(fixture string) map[string]string {
+// runEnv is the environment of a gate run on the given event fixture. The step
+// summary points into the test's own directory: nothing here writes it, and a
+// path under testdata/ would invite a test that does.
+func runEnv(t *testing.T, fixture string) map[string]string {
+	t.Helper()
+
 	return map[string]string{
 		EnvActions:     "true",
 		EnvRepository:  "svallejo-dev/aval",
 		EnvEventName:   "pull_request",
 		EnvEventPath:   filepath.Join("testdata", fixture),
-		EnvStepSummary: filepath.Join("testdata", "never-written.md"),
+		EnvStepSummary: filepath.Join(t.TempDir(), "step-summary.md"),
 		EnvRunID:       "17123456789",
 		EnvRunAttempt:  "2",
 		EnvAPIURL:      "https://api.github.com",
@@ -89,10 +94,26 @@ func TestDetectEvents(t *testing.T) {
 			wantPR: &PullRequest{Number: 44, HeadSHA: head1, BaseBranchSHA: baseT, BaseRef: "main", Author: "sebastián-ø-测试[bot]"},
 		},
 		{
-			name: "number only at the top level, no base, no user", fixture: "pull_request_nested.json",
+			name: "number only at the top level, no base, no user", fixture: "pull_request_number_only_top_level.json",
 			event: "pull_request", action: "ready_for_review",
 			wantPR: &PullRequest{Number: 45, HeadSHA: head1},
 			gaps:   []GapKind{GapEventField},
+		},
+		{
+			// The nested number is the pull request the rest of the payload
+			// describes, so it wins, and the disagreement is reported.
+			name: "the two numbers disagree", fixture: "pull_request_number_mismatch.json",
+			event: "pull_request", action: "opened",
+			wantPR: &PullRequest{Number: 46, HeadSHA: head1, BaseBranchSHA: baseT, BaseRef: "main", Author: "agente-bot"},
+			gaps:   []GapKind{GapEventField},
+		},
+		{
+			// A field of the wrong JSON type costs that field, not the pull
+			// request: the number falls back to the top level, draft to false.
+			name: "wrong json types in optional fields", fixture: "pull_request_wrong_types.json",
+			event: "pull_request", action: "opened",
+			wantPR: &PullRequest{Number: 47, HeadSHA: head1, BaseRef: "main", Author: "agente-bot"},
+			gaps:   []GapKind{GapEventField, GapEventField},
 		},
 		{
 			name: "push carries no pull request", fixture: "push.json",
@@ -103,12 +124,32 @@ func TestDetectEvents(t *testing.T) {
 			event: "workflow_dispatch", gaps: []GapKind{GapPullRequest},
 		},
 		{
+			// issue_comment hides its pull request under issue.pull_request, as
+			// a pair of URLs. It is not a pull request payload and is not read
+			// as one.
+			name: "issue_comment carries no pull request", fixture: "issue_comment.json",
+			event: "issue_comment", action: "created", gaps: []GapKind{GapPullRequest},
+		},
+		{
+			// pull_request_target runs with the base's permissions against an
+			// untrusted head. ADR-0005 §8 does not use it, so it is refused
+			// here, where the event name is known.
+			name: "pull_request_target is refused", fixture: "pull_request_target.json",
+			event: "pull_request_target", action: "opened", gaps: []GapKind{GapEventNotAllowed},
+		},
+		{
+			name: "pull_request_review_comment is refused", fixture: "pull_request_opened.json",
+			event: "pull_request_review_comment", action: "opened", gaps: []GapKind{GapEventNotAllowed},
+		},
+		{
+			// A corrupt pull request is not the same as no pull request: a gate
+			// that read "no pull request" as "nothing to judge" would fail open.
 			name: "head sha that is not a sha", fixture: "pull_request_bad_sha.json",
-			event: "pull_request", action: "opened", gaps: []GapKind{GapPullRequest},
+			event: "pull_request", action: "opened", gaps: []GapKind{GapPullRequestInvalid},
 		},
 		{
 			name: "negative pull request number", fixture: "pull_request_negative_number.json",
-			event: "pull_request", action: "opened", gaps: []GapKind{GapPullRequest},
+			event: "pull_request", action: "opened", gaps: []GapKind{GapPullRequestInvalid},
 		},
 		{
 			// An unusable action, base sha, base ref and login cost the fields,
@@ -123,7 +164,7 @@ func TestDetectEvents(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			env := runEnv(tt.fixture)
+			env := runEnv(t, tt.fixture)
 			env[EnvEventName] = tt.event
 			c := Detect(lookup(env))
 
@@ -152,7 +193,8 @@ func TestDetectEvents(t *testing.T) {
 func TestDetectEnvironment(t *testing.T) {
 	t.Parallel()
 
-	c := Detect(lookup(runEnv("pull_request_opened.json")))
+	env := runEnv(t, "pull_request_opened.json")
+	c := Detect(lookup(env))
 	if !c.InActions {
 		t.Error("InActions = false, want true")
 	}
@@ -162,8 +204,8 @@ func TestDetectEnvironment(t *testing.T) {
 	if c.RunID != 17123456789 || c.RunAttempt != 2 {
 		t.Errorf("run = %d attempt %d, want 17123456789 attempt 2", c.RunID, c.RunAttempt)
 	}
-	if want := filepath.Join("testdata", "never-written.md"); c.StepSummaryPath != want {
-		t.Errorf("StepSummaryPath = %q, want %q", c.StepSummaryPath, want)
+	if c.StepSummaryPath != env[EnvStepSummary] {
+		t.Errorf("StepSummaryPath = %q, want %q", c.StepSummaryPath, env[EnvStepSummary])
 	}
 	if c.APIURL != "https://api.github.com" || c.ServerURL != "https://github.com" {
 		t.Errorf("urls = %q, %q", c.APIURL, c.ServerURL)
@@ -227,25 +269,39 @@ func TestDetectPayloadProblems(t *testing.T) {
 	tests := []struct {
 		name     string
 		path     string
+		raw      string // written to a file of its own when set, instead of path
 		maxEvent int64
 		want     string // substring of the gap's reason
 	}{
 		{name: "unset", path: "", want: EnvEventPath + " is not set"},
 		{name: "missing file", path: filepath.Join("testdata", "no-such-event.json"), want: "event payload"},
 		{name: "empty file", path: filepath.Join("testdata", "empty.json"), want: "is empty"},
-		{name: "malformed json", path: filepath.Join("testdata", "malformed.json"), want: "decode"},
+		{name: "only whitespace", raw: "\n\t \n", want: "is empty"},
+		{name: "malformed json", path: filepath.Join("testdata", "malformed.json"), want: "syntax"},
+		{name: "a json array, not an object", raw: "[1, 2]\n", want: "is not a JSON object"},
 		{name: "not a regular file", path: "testdata", want: "is not a regular file"},
 		{
 			name: "over the limit", path: filepath.Join("testdata", "pull_request_opened.json"),
 			maxEvent: 200, want: "larger than 200 bytes",
+		},
+		{
+			name: "a key repeated under another casing",
+			path: filepath.Join("testdata", "pull_request_folded_duplicate_key.json"),
+			want: `duplicate key "Pull_Request"`,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			env := runEnv("pull_request_opened.json")
+			env := runEnv(t, "pull_request_opened.json")
 			env[EnvEventPath] = tt.path
+			if tt.raw != "" {
+				env[EnvEventPath] = filepath.Join(t.TempDir(), "event.json")
+				if err := os.WriteFile(env[EnvEventPath], []byte(tt.raw), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
 			maxEvent := tt.maxEvent
 			if maxEvent == 0 {
 				maxEvent = MaxEventBytes
@@ -268,12 +324,36 @@ func TestDetectPayloadProblems(t *testing.T) {
 	}
 }
 
+// TestDetectRefusesFoldedDuplicateKey: encoding/json matches tags case
+// insensitively and lets the last value win, so a second pull_request object
+// spelled Pull_Request would merge into the first and replace the commit and
+// the author, with nothing to show for it. The payload is refused whole.
+func TestDetectRefusesFoldedDuplicateKey(t *testing.T) {
+	t.Parallel()
+
+	env := runEnv(t, "pull_request_folded_duplicate_key.json")
+	c := Detect(lookup(env))
+
+	if c.PullRequest != nil {
+		t.Fatalf("PullRequest = %+v, want none: the payload is not one GitHub wrote", *c.PullRequest)
+	}
+	if !c.Missing(GapEventPayload) {
+		t.Errorf("gaps = %v, want %s", gapKinds(c), GapEventPayload)
+	}
+	// Not "the first object won": nothing of either object was kept.
+	for _, unwanted := range []string{"9999", head2, "atacante", "42", head1} {
+		if strings.Contains(c.String(), unwanted) {
+			t.Errorf("String() = %q, want nothing of the payload in it (%q)", c.String(), unwanted)
+		}
+	}
+}
+
 // TestDetectMissingFileIsInspectable: the caller can tell "no event file" from
 // "unusable event file" without reading a message.
 func TestDetectMissingFileIsInspectable(t *testing.T) {
 	t.Parallel()
 
-	env := runEnv("pull_request_opened.json")
+	env := runEnv(t, "pull_request_opened.json")
 	env[EnvEventPath] = filepath.Join("testdata", "no-such-event.json")
 	c := detect(lookup(env), MaxEventBytes)
 	if len(c.Gaps) != 1 {
@@ -334,7 +414,7 @@ func TestDetectToken(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			env := runEnv("pull_request_opened.json")
+			env := runEnv(t, "pull_request_opened.json")
 			for _, key := range []string{EnvToken, EnvInputToken, EnvGHToken} {
 				delete(env, key)
 			}
@@ -447,7 +527,7 @@ func TestDetectRepository(t *testing.T) {
 		t.Run(tt.value, func(t *testing.T) {
 			t.Parallel()
 
-			env := runEnv("pull_request_opened.json")
+			env := runEnv(t, "pull_request_opened.json")
 			env[EnvRepository] = tt.value
 			c := Detect(lookup(env))
 
@@ -490,7 +570,7 @@ func TestDetectRunAndURLs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			env := runEnv("pull_request_opened.json")
+			env := runEnv(t, "pull_request_opened.json")
 			env[EnvRunID], env[EnvRunAttempt], env[EnvAPIURL] = tt.runID, tt.attempt, tt.apiURL
 			c := Detect(lookup(env))
 
@@ -531,9 +611,15 @@ func TestValidators(t *testing.T) {
 			bad: []string{"", "deadbeef", strings.ToUpper(head1), strings.Repeat("z", 40), head1 + "0"},
 		},
 		{
+			// git check-ref-format, for a single branch name.
 			name: "ref", check: checkRef,
-			ok:  []string{"main", "feat/actions", "release/v0.1", "rama-ñ"},
-			bad: []string{"", "-mal", "con espacio", "con\ttab", "con\x7fdel", "\xff\xfe", strings.Repeat("r", 256)},
+			ok: []string{"main", "feat/actions", "release/v0.1", "rama-ñ", "v2.0.1"},
+			bad: []string{
+				"", "-mal", "con espacio", "con\ttab", "con\x7fdel", "\xff\xfe", strings.Repeat("r", 256),
+				"refs/heads/main", "/main", "main/", "feat//actions", "feat/../main", "main..",
+				"main@{1}", "main.", "main.lock", "ma~in", "ma^in", "ma:in", "ma?in", "ma*in",
+				"ma[in", `ma\in`,
+			},
 		},
 		{
 			name: "login", check: checkLogin,
@@ -573,13 +659,13 @@ func TestPullRequestURLNeedsEverything(t *testing.T) {
 	t.Parallel()
 
 	for _, key := range []string{EnvServerURL, EnvRepository} {
-		env := runEnv("pull_request_opened.json")
+		env := runEnv(t, "pull_request_opened.json")
 		env[key] = ""
 		if got := Detect(lookup(env)).PullRequestURL(); got != "" {
 			t.Errorf("without %s: PullRequestURL() = %q, want empty", key, got)
 		}
 	}
-	env := runEnv("push.json")
+	env := runEnv(t, "push.json")
 	env[EnvEventName] = "push"
 	if got := Detect(lookup(env)).PullRequestURL(); got != "" {
 		t.Errorf("without a pull request: PullRequestURL() = %q, want empty", got)
@@ -593,7 +679,7 @@ func TestPullRequestURLNeedsEverything(t *testing.T) {
 func TestBaseBranchSHAIsNotTheMergeBase(t *testing.T) {
 	t.Parallel()
 
-	c := Detect(lookup(runEnv("pull_request_opened.json")))
+	c := Detect(lookup(runEnv(t, "pull_request_opened.json")))
 	if c.PullRequest == nil {
 		t.Fatal("no pull request")
 	}
