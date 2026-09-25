@@ -263,7 +263,9 @@ type collector struct {
 
 	changed []string // the paths base..head touches
 	deltas  map[obligation.ID]deltaOf
-	work    *overlay.Worktree // nil when no obligation needs fail-before
+	// work is the base tree the fail-before runs use, nil when no obligation
+	// of the delta needs one.
+	work *overlay.Tree
 
 	report gotest.Report // the full run at head
 	matrix trace.Matrix
@@ -316,7 +318,7 @@ func (c *collector) collect(ctx context.Context) (*Evidence, error) {
 	return c.ev, nil
 }
 
-// close removes the fail-before worktree, the base configuration the ratchet
+// close removes the fail-before tree, the base configuration the ratchet
 // wrote inside the repository and the temporary directory. It does nothing
 // after the first call.
 func (c *collector) close() error {

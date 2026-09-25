@@ -90,6 +90,20 @@ func (r *repo) git(args ...string) string {
 // commit writes files, removes the paths of gone and commits everything.
 func (r *repo) commit(msg string, files map[string]string, gone ...string) string {
 	r.t.Helper()
+	r.write(files, gone...)
+	return r.commitOnly(msg)
+}
+
+// commitOnly commits what is staged and returns the new commit.
+func (r *repo) commitOnly(msg string) string {
+	r.t.Helper()
+	r.git("commit", "--quiet", "--message", msg)
+	return r.git("rev-parse", "HEAD")
+}
+
+// write writes files, removes the paths of gone and stages everything.
+func (r *repo) write(files map[string]string, gone ...string) {
+	r.t.Helper()
 	for name, content := range files {
 		p := filepath.Join(r.dir, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
@@ -105,8 +119,6 @@ func (r *repo) commit(msg string, files map[string]string, gone ...string) strin
 		}
 	}
 	r.git("add", "--all")
-	r.git("commit", "--quiet", "--message", msg)
-	return r.git("rev-parse", "HEAD")
 }
 
 // assertClean checks that Collect left no worktree, nothing in tmp and no
@@ -221,6 +233,13 @@ The system SHALL take the answer from the shared module.
 #### Scenario: Asking the module
 - **WHEN** the module is asked
 - **THEN** it answers 42
+
+### Requirement: ORD-F10 The answer is 42 next door too
+The system SHALL answer 42 beside the submodule.
+
+#### Scenario: Asking next door
+- **WHEN** the package beside the submodule is asked
+- **THEN** it answers 42
 `
 
 // baseFiles is the fixture repository at the base. Its .gitattributes marks
@@ -312,6 +331,9 @@ func TestGroup(t *testing.T) {
 		"uses/uses.go":     "package uses\n\n// Greet answers a greeting.\nfunc Greet() string { return \"hi\" }\n",
 		"fixed/fixed.go":   "package fixed\n\n// Wanted is the answer.\nfunc Wanted() int { return 42 }\n",
 		"deps/deps.go":     "package deps\n\n// Wanted is the answer.\nfunc Wanted() int { return 42 }\n",
+		// subs holds a submodule's gitlink, which the base tree cannot hold:
+		// its failure there is never strong evidence, however honest it looks.
+		"subs/subs.go": "package subs\n\n// Answer is wrong at the base.\nfunc Answer() int { return 0 }\n",
 		// broken does not compile at the base, and head does not add it: a
 		// build failure that names it is no evidence at all.
 		"broken/broken.go": "package broken\n\n// Answer does not compile at the base.\nfunc Answer() int { return \"42\" }\n",
@@ -458,6 +480,19 @@ func TestDeps(t *testing.T) {
 	})
 }
 `,
+		"subs/subs.go": "package subs\n\n// Answer is 42.\nfunc Answer() int { return 42 }\n",
+		"subs/subs_test.go": `package subs
+
+import "testing"
+
+func TestSubs(t *testing.T) {
+	t.Run("ORD-F10 answers 42", func(t *testing.T) {
+		if got := Answer(); got != 42 {
+			t.Fatalf("got %d, want 42", got)
+		}
+	})
+}
+`,
 		"flaky/flaky_test.go": `package flaky
 
 import "testing"
@@ -519,6 +554,26 @@ func TestMeddle(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// aval's own temporary directory must hold the tree it read the base
+	// inputs from and nothing else: the tree the fail-before runs use comes
+	// after these tests (ADR-0005 §2).
+	if tmp := os.Getenv("AVAL_TEST_TMP"); tmp != "" {
+		dirs, err := filepath.Glob(filepath.Join(tmp, "aval-verify-*"))
+		if err != nil || len(dirs) != 1 {
+			t.Fatalf("aval's temporary directories = %q, %v; want one", dirs, err)
+		}
+		entries, err := os.ReadDir(dirs[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		if len(names) != 1 || names[0] != "base-tree" {
+			t.Errorf("aval's temporary directory holds %q while head's tests run, want only base-tree", names)
+		}
+	}
 	out, err := exec.Command("git", "worktree", "list", "--porcelain").Output()
 	if err != nil {
 		t.Skipf("git worktree list: %v", err)
@@ -537,13 +592,21 @@ func TestCollect(t *testing.T) {
 	}
 	t.Parallel()
 	r := newRepo(t)
-	base := r.commit("base", baseFiles())
+	r.commit("first", baseFiles())
+	// A submodule's gitlink in ORD-F10's package. git add --all keeps one whose
+	// directory exists, even empty, so it is in the base and in head.
+	r.write(nil)
+	if err := os.MkdirAll(filepath.Join(r.dir, "subs", "sub"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	r.git("update-index", "--add", "--cacheinfo", "160000,"+r.git("rev-parse", "HEAD")+",subs/sub")
+	base := r.commitOnly("base")
 	head := r.commit("head", headFiles())
 	tmp := t.TempDir()
 
 	ev, err := Collect(t.Context(), Options{
 		Dir: r.dir, Base: base, Head: head, Repo: "svallejo-dev/svc", AvalVersion: "test",
-		Env: goEnv, TempDir: tmp, validate: okValidate,
+		Env: append(slices.Clone(goEnv), "AVAL_TEST_TMP="+tmp), TempDir: tmp, validate: okValidate,
 	})
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
@@ -598,6 +661,9 @@ func TestCollect(t *testing.T) {
 		"ORD-F08": {evidence.Added, evidence.BuildFail, evidence.Pass, evidence.None, false, "land new dependencies"},
 		// Added, and the base does not require the module: no evidence.
 		"ORD-F09": {evidence.Added, evidence.BuildFail, evidence.Pass, evidence.None, false, "land new dependencies"},
+		// Added, and it fails at the base for what looks like the right
+		// reason, but the base tree could not hold the submodule beside it.
+		"ORD-F10": {evidence.Added, evidence.Fail, evidence.Pass, evidence.Weak, false, "subs/sub"},
 		// Outside the delta: no fail-before, and §3 re-ran it on its own.
 		"ORD-F01": {evidence.Unchanged, evidence.NotApply, evidence.Pass, evidence.None, false, ""},
 		// Outside the delta and now skipped: the gate blocks on after.
