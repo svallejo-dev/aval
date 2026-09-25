@@ -26,7 +26,7 @@ El gate defiende de un **agente** (o una persona) que quiere fusionar un cambio 
 
 **Qué queda fuera de aval y exige configuración de GitHub:** un workflow de `pull_request` ejecuta la definición del workflow **del propio PR**. Un PR podría, por tanto, editar el job del gate. La integridad del gate depende de proteger `.github/**` con CODEOWNERS y **revisión obligatoria de code owner** en el ruleset.
 
-aval informa además de cualquier edición de `.github/**`, `CODEOWNERS`, `.golangci.yml`, el `aval.yaml` raíz y `.aval/baseline.json` como `tamper` (§4). La protección fuerte, sin embargo, es la de GitHub.
+aval informa además como `tamper` (§4) de cualquier edición de `.github/**`, un `CODEOWNERS` de cualquiera de las tres ubicaciones que reconoce GitHub, `.golangci.yml`, cualquier `.gitattributes`, el `aval.yaml` raíz y `.aval/baseline.json`. La protección fuerte, sin embargo, es la de GitHub.
 
 **Límites conocidos de la v0:**
 - **La excepción es global:** una concedida por una regresión inestable también rebaja un `skip_added` del mismo PR. Los motivos quedan en el bundle y en el resumen; una excepción acotada por código (`aval:override tamper …`) queda para después de la v0.
@@ -45,9 +45,11 @@ El gate trabaja sobre un rango `base..head`:
 - **En CI:** `base` es el merge-base del PR con `main` (`fetch-depth: 0`) y `head` es `github.event.pull_request.head.sha`. El checkout usa `ref:` head, no el merge commit.
 - **En local:** `--base` y `--head` (por defecto el merge-base con `origin/main` y `HEAD`).
 
-**Orden obligatorio:** todo lo que aval obtiene con `git` se calcula **antes** de ejecutar cualquier código del PR, porque un test puede reescribir `.git/config` o `.git/info/*`. Incluye:
-- las entradas de la base: política, CODEOWNERS, baseline, specs, `.golangci.yml` y declaraciones;
+**Orden obligatorio:** todo lo que aval **lee** con `git` se lee **antes** de ejecutar cualquier código del PR, porque un test puede reescribir `.git/config` o `.git/info/*`. Incluye:
+- las entradas de la base: política, `CODEOWNERS`, baseline, specs, `.golangci.yml`, `.gitattributes` y declaraciones;
 - las del rango: diff, changes y scope (§3b).
+
+Materializar el árbol de la base (§2.1) no es una lectura más: escribe ficheros y ocurre después de la ejecución de head, por eso se hace desde los objetos y nunca por el checkout de git.
 
 **Git endurecido:** todo `git` corre con:
 - `GIT_NO_REPLACE_OBJECTS=1` y `GIT_GRAFT_FILE` apuntando a `/dev/null`, para anular replace refs y grafts;
@@ -80,7 +82,10 @@ Requiere git ≥ 2.40; con uno más antiguo, exit 3.
 ### 2. Falla-antes por superposición
 
 Aplica a las obligaciones **F, N e I** con delta `added` o `modified`:
-1. **Worktree:** `git worktree add --detach <tmp> <base>`. El worktree y la superposición del paso 2 se crean **desde los objetos de git**, no desde el árbol de trabajo, y **después** de la ejecución completa de head, justo antes de las ejecuciones en la base. Prepararlos antes permitiría que un test de head estropeara el árbol de la base —romper su código para que falle— y fabricara un `strong`. Antes de ejecutar código del PR se lee todo lo que sale de git (§1), que es otra cosa.
+1. **Árbol de la base:** se materializa en un directorio temporal **desde los objetos de git** (`git ls-tree -r -z` más `git cat-file --batch`, respetando modos y enlaces simbólicos), **después** de la ejecución completa de head y justo antes de las ejecuciones en la base.
+   - **Después,** porque prepararlo antes permitiría que un test de head alterara el árbol de la base —romper su código para que falle— y fabricara un `strong`.
+   - **Sin `git worktree add` ni `git checkout`,** porque el checkout aplica `core.autocrlf`, `core.eol` y los filtros `smudge` que declaren `.git/config` y `.git/info/attributes`, y esos dos los puede escribir un test de head. `--attr-source` **no** cubre `.git/info/attributes`, ni `core.attributesFile` lo evita: por ese camino un test reescribe el contenido de la base a voluntad.
+   - Tampoco `git archive` ni `cat-file --filters`, por lo mismo (§1).
 2. **Superposición:** en **todo el diff**, no solo en los paquetes de la obligación:
    - **primero se borran** las rutas que head eliminó o renombró (un renombre cuenta como baja más alta);
    - después se copian desde head los `*_test.go` y los ficheros de `testdata/` añadidos o modificados.
@@ -174,7 +179,7 @@ Las etiquetas no sirven: no se atan a un commit, y la hora de GitHub que podría
 Una aprobación es **válida** si cumple tres condiciones:
 1. es el **último review que no sea `COMMENTED`** de ese revisor (como hace GitHub), tiene `state: APPROVED` y **`commit_id` igual al SHA head**. Un `CHANGES_REQUESTED` o `DISMISSED` posterior la anula;
 2. su autor es un **CODEOWNER**, por una de dos vías (`GET /repos/{o}/{r}/collaborators/{user}/permission`):
-   - listado individualmente en el `CODEOWNERS` de la base para el `aval.yaml` raíz **y** con permiso de escritura (`permission` ∈ {`write`, `admin`}; `maintain` se reporta como `write`). Es lo que exige GitHub para asignar un code owner, y evita que alguien registre el login de una cuenta renombrada o borrada que siga en el fichero. Un 404, `read` o `none` significa que no es owner;
+   - listado individualmente en el `CODEOWNERS` de la base para el `aval.yaml` raíz —de las tres ubicaciones que reconoce GitHub gana la primera que exista: `.github/CODEOWNERS`, la raíz, `docs/CODEOWNERS`— **y** con permiso de escritura (`permission` ∈ {`write`, `admin`}; `maintain` se reporta como `write`). Es lo que exige GitHub para asignar un code owner, y evita que alguien registre el login de una cuenta renombrada o borrada que siga en el fichero. Un 404, `read` o `none` significa que no es owner;
    - o con `role_name` ∈ {`admin`, `maintain`}. Aquí `permission` no sirve, porque reporta `maintain` como `write`;
 3. GitHub ya impide que el autor del PR apruebe su propio PR.
 
@@ -206,7 +211,8 @@ Hay dos tipos:
 
 - **`aval verify`** escribe el bundle en `.aval/evidence/<head>.json` y el estado para hooks en `.aval/cache/verify-status.json` (formato de `internal/hook`). La clave es `HEAD` más un hash de `git diff HEAD` **y de los ficheros sin seguimiento** (ruta y contenido), salvo los de `.aval/cache/` y `.aval/evidence/`, donde `verify` escribe después de calcular la clave. Sin estado, el hook de Stop solo deja terminar si el árbol está limpio y HEAD ya está en una rama remota; un commit local sin verificar no escapa. Así, un fichero nuevo tras `verify` invalida el estado.
 - **`aval gate` ejecuta la verificación en el mismo proceso y nunca reutiliza un bundle del disco,** tampoco en local: `CheckHead` solo compara un SHA público, así que reutilizarlo sería confiar en un fichero, veredicto incluido. Recalcular cuesta poco.
-- **La configuración de lint de la base se materializa en la raíz del repo** antes de la ejecución, con los bytes leídos en la fase de git. golangci-lint ancla las rutas de su config en el directorio donde está, así que desde un temporal las exclusiones por ruta no encajarían.
+- **La configuración de lint de la base se materializa en la raíz del repo** antes de la ejecución, con los bytes leídos en la fase de git: golangci-lint ancla las rutas de su config en el directorio donde está, así que desde un temporal las exclusiones por ruta no encajarían. Es la única escritura del gate fuera de `.aval/`, y se deshace antes de cerrar —se borra, o se restauran los bytes previos si ya existía—, también cuando la ejecución falla. No la ven `tamper`, scope ni `testsource`, que se calculan desde git, y como el estado para hooks se escribe después de deshacerla, tampoco entra en su clave.
+- **Lo que no se recogió** se declara en `notCollected` con un token estable: `mutation`, `rollback`, `slo`, y `openspec_validate` cuando no hubo política de base. El schema no los enumera, así que añadir uno no sube la versión.
 - **Cierre:** el gate decide, escribe el veredicto y, en GitHub Actions, un resumen en `$GITHUB_STEP_SUMMARY`. El workflow sube el bundle como artefacto.
 
 **Bundle v2** (sube `schemaVersion`, según ADR-0004): sustituye `override` por **`approvals`**, una lista de:
