@@ -1,12 +1,9 @@
 ✗ aval: block · tier 1 · enforce
 ================================
 
-repo svallejo-dev/<script>alert("xss")</script><img src=x onerror=alert(1)> ·
-base 111111111111 → head 222222222222 · aval v0.1.0 red · generated
-2026-09-24T12:00:00Z
+repo svallejo-dev/<script>alert("xss")</script><img src=x onerror=alert(1)> · base 111111111111 → head 222222222222 · aval v0.1.0 red · generated 2026-09-24T12:00:00Z
 
-changes add-col | umn || more | cells, **bold** [link](http://evil.example)
-`code` ~~strike~~ _em_ #heading
+changes add-col | umn || more | cells, **bold** [link](http://evil.example) `code` ~~strike~~ _em_ #heading
 
 Reasons (2)
 -----------
@@ -14,10 +11,8 @@ Reasons (2)
 Blocking (2):
 
 - unverified — an added or modified obligation with no test bound to it
-  - ORD-N02: col | umn || more | cells <script>alert("xss")</script><img src=x
-    onerror=alert(1)>
-- code_**bold** [link](http://evil.example) `code` ~~strike~~ _em_ #heading — a
-  reason code this version of aval does not know, which blocks
+  - ORD-N02: col | umn || more | cells <script>alert("xss")</script><img src=x onerror=alert(1)> see https://evil.example/override, www.evil.example or ops@evil.example
+- code_**bold** [link](http://evil.example) `code` ~~strike~~ _em_ #heading — a reason code this version of aval does not know, which blocks
   - ORD-F01: start gnidne isolate zero width soft
 
 Obligations (2)
@@ -26,36 +21,25 @@ Obligations (2)
 ORD-F01
   kind: F must
   delta: added
-  bound tests: TestX/ORD-F01_col | umn || more | cells, TestX/ORD-F01_a ``` b ``
-    c ` d,
-    TestX/longidentifierlongidentifierlongidentifierlongidentifierlongidentifier
-    lon…
+  bound tests: TestX/ORD-F01_col | umn || more | cells, TestX/ORD-F01_a ``` b `` c ` d, TestX/longidentifierlongidentifierlongidentifierlongidentifierlongidentifierlon…
   before → after: fail → pass
   strength: strong
-  note: **bold** [link](http://evil.example) `code` ~~strike~~ _em_ #heading
-    <script>alert("xss")</script><img src=x onerror=alert(1)> start gnidne
-    isolate zero width soft nul bell backspace vtab tab cr lf e…
+  note: **bold** [link](http://evil.example) `code` ~~strike~~ _em_ #heading col | umn || more | cells see https://evil.example/override, www.evil.example or ops@evil.example 平文 école テスト <script>alert("xss…
 
 ORD-N02
   kind: N must-not
   delta: added
-  bound tests:
-    longidentifierlongidentifierlongidentifierlongidentifierlongidentifierlongid
-    ent…
+  bound tests: longidentifierlongidentifierlongidentifierlongidentifierlongidentifierlongident…
   before → after: pass → pass
   strength: none
-  note:
-    longidentifierlongidentifierlongidentifierlongidentifierlongidentifierlongid
-    entifierlongidentifierlongidentifierlongidentifierlongidentifierlongidentifi
-    erlongidentifierlongidentifierlongidentifierlon…
+  note: longidentifierlongidentifierlongidentifierlongidentifierlongidentifierlongidentifierlongidentifierlongidentifierlongidentifierlongidentifierlongidentifierlongidentifierlongidentifierlongidentifierlon…
 
 Tamper (1)
 ----------
 
 fingerprint_changed
   ID: ORD-F01
-  detail: fingerprint of **bold** [link](http://evil.example) `code` ~~strike~~
-    _em_ #heading changed
+  detail: fingerprint of **bold** [link](http://evil.example) `code` ~~strike~~ _em_ #heading col | umn || more | cells changed
 
 Scope
 -----
@@ -64,10 +48,7 @@ Scope
 
 222222222222
   family: mixed
-  paths: col | umn || more | cells, <script>alert("xss")</script><img src=x
-    onerror=alert(1)>, start gnidne isolate zero width soft,
-    longidentifierlongidentifierlongidentifierlongidentifierlongidentifierlongid
-    ent… (+2 more)
+  paths: col | umn || more | cells, <script>alert("xss")</script><img src=x onerror=alert(1)>, start gnidne isolate zero width soft, longidentifierlongidentifierlongidentifierlongidentifierlongidentifierlongident… (+2 more)
 
 Approvals (1)
 -------------
@@ -76,8 +57,7 @@ override
   actor: @<script>alert("xss")</script><img src=x onerror=alert(1)>
   commit: 333333333333 (not head)
   valid: no
-  reason: aval:override **bold** [link](http://evil.example) `code` ~~strike~~
-    _em_ #heading
+  reason: aval:override **bold** [link](http://evil.example) `code` ~~strike~~ _em_ #heading col | umn || more | cells see https://evil.example/override, www.evil.example or ops@evil.example
   rejection: review of an earlier commit red
 
 Checks (1)
@@ -93,8 +73,7 @@ go-test red
 Not collected (2)
 -----------------
 
-mutation col | umn || more | cells, <script>alert("xss")</script><img src=x
-onerror=alert(1)>
+mutation col | umn || more | cells, <script>alert("xss")</script><img src=x onerror=alert(1)>
 
 Reproduce
 ---------

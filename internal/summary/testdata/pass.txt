@@ -1,8 +1,7 @@
 ✓ aval: pass · tier 0 · enforce
 ===============================
 
-repo svallejo-dev/aval-sandbox · base 111111111111 → head 222222222222 · aval
-v0.1.0 · generated 2026-09-24T12:00:00Z
+repo svallejo-dev/aval-sandbox · base 111111111111 → head 222222222222 · aval v0.1.0 · generated 2026-09-24T12:00:00Z
 
 Reasons
 -------

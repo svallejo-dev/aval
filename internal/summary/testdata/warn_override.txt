@@ -1,16 +1,14 @@
 ! aval: warn · tier 3 · enforce
 ===============================
 
-repo svallejo-dev/aval-sandbox · base 111111111111 → head 222222222222 · aval
-v0.1.0 · generated 2026-09-24T12:00:00Z
+repo svallejo-dev/aval-sandbox · base 111111111111 → head 222222222222 · aval v0.1.0 · generated 2026-09-24T12:00:00Z
 
 changes add-refunds
 
 Reasons (7)
 -----------
 
-A valid override lowered the verdict to warn; the blocking reasons below still
-stand (ADR-0005 §5).
+A valid override lowered the verdict to warn; the blocking reasons below still stand (ADR-0005 §5).
 
 Blocking (5):
 
@@ -28,10 +26,8 @@ Warnings (2):
 
 - seam_touched — a feat commit touches seam paths
   - feat commit 5555555555555555555555555555555555555555 touches seam paths
-- weak_evidence — weak fail-before evidence: the failure at the base may not
-  prove the change
-  - ORD-F02: weak fail-before evidence (before=build_fail): refund.New did not
-    exist at the base
+- weak_evidence — weak fail-before evidence: the failure at the base may not prove the change
+  - ORD-F02: weak fail-before evidence (before=build_fail): refund.New did not exist at the base
 
 Obligations (5)
 ---------------
@@ -47,8 +43,7 @@ ORD-F01
 ORD-F02
   kind: F must
   delta: added
-  bound tests: TestRefunds/ORD-F02_unknown_charge,
-    TestRefunds/ORD-F02_empty_charge
+  bound tests: TestRefunds/ORD-F02_unknown_charge, TestRefunds/ORD-F02_empty_charge
   before → after: build_fail → pass
   strength: weak
   note: refund.New did not exist at the base
@@ -95,8 +90,7 @@ Scope
 
 222222222222
   family: mixed
-  paths: .golangci.yml, internal/refund/refund.go,
-    internal/refund/refund_test.go, Makefile (+1 more)
+  paths: .golangci.yml, internal/refund/refund.go, internal/refund/refund_test.go, Makefile (+1 more)
 
 Approvals (3)
 -------------
@@ -119,8 +113,7 @@ override
   actor: @lead
   commit: 222222222222
   valid: yes
-  reason: payment outage: the refund fix ships now and the evidence lands
-    tomorrow
+  reason: payment outage: the refund fix ships now and the evidence lands tomorrow
   rejection: —
 
 Checks (3)

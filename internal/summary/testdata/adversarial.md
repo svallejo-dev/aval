@@ -9,7 +9,7 @@
 ### Blocking (2)
 
 - `unverified` — an added or modified obligation with no test bound to it
-  - `ORD-N02`: col | umn || more | cells &lt;script&gt;alert("xss")&lt;/script&gt;&lt;img src=x onerror=alert(1)&gt;
+  - `ORD-N02`: col | umn || more | cells &lt;script&gt;alert("xss")&lt;/script&gt;&lt;img src=x onerror=alert(1)&gt; see https:&#47;&#47;evil.example/override, www&#46;evil.example or ops&#64;evil.example
 - ``code_**bold** [link](http://evil.example) `code` ~~strike~~ _em_ #heading`` — a reason code this version of aval does not know, which blocks
   - `ORD-F01`: start gnidne isolate zero width soft
 
@@ -17,14 +17,14 @@
 
 | ID | kind | delta | bound tests | before → after | strength | note |
 | --- | --- | --- | --- | --- | --- | --- |
-| `ORD-F01` | F must | added | `TestX/ORD-F01_col \| umn \|\| more \| cells`, ````TestX/ORD-F01_a ``` b `` c ` d````, `TestX/longidentifierlongidentifierlongidentifierlongidentifierlongidentifierlon…` | fail → pass | strong | \*\*bold\*\* \[link\](http://evil.example) \`code\` \~\~strike\~\~ \_em\_ #heading &lt;script&gt;alert("xss")&lt;/script&gt;&lt;img src=x onerror=alert(1)&gt; start gnidne isolate zero width soft nul bell backspace vtab tab cr lf e… |
+| `ORD-F01` | F must | added | `TestX/ORD-F01_col \| umn \|\| more \| cells`, ````TestX/ORD-F01_a ``` b `` c ` d````, `TestX/longidentifierlongidentifierlongidentifierlongidentifierlongidentifierlon…` | fail → pass | strong | \*\*bold\*\* \[link\](http:&#47;&#47;evil.example) \`code\` \~\~strike\~\~ \_em\_ #heading col \| umn \|\| more \| cells see https:&#47;&#47;evil.example/override, www&#46;evil.example or ops&#64;evil.example 平文 école テスト &lt;script&gt;alert("xss… |
 | `ORD-N02` | N must-not | added | `longidentifierlongidentifierlongidentifierlongidentifierlongidentifierlongident…` | pass → pass | none | longidentifierlongidentifierlongidentifierlongidentifierlongidentifierlongidentifierlongidentifierlongidentifierlongidentifierlongidentifierlongidentifierlongidentifierlongidentifierlongidentifierlon… |
 
 ## Tamper (1)
 
 | signal | ID | detail |
 | --- | --- | --- |
-| fingerprint_changed | `ORD-F01` | fingerprint of \*\*bold\*\* \[link\](http://evil.example) \`code\` \~\~strike\~\~ \_em\_ #heading changed |
+| fingerprint_changed | `ORD-F01` | fingerprint of \*\*bold\*\* \[link\](http:&#47;&#47;evil.example) \`code\` \~\~strike\~\~ \_em\_ #heading col \| umn \|\| more \| cells changed |
 
 ## Scope
 
@@ -38,7 +38,7 @@
 
 | kind | actor | commit | valid | reason | rejection |
 | --- | --- | --- | --- | --- | --- |
-| override | `@<script>alert("xss")</script><img src=x onerror=alert(1)>` | `333333333333` (not head) | no | aval:override \*\*bold\*\* \[link\](http://evil.example) \`code\` \~\~strike\~\~ \_em\_ #heading | review of an earlier commit red |
+| override | `@<script>alert("xss")</script><img src=x onerror=alert(1)>` | `333333333333` (not head) | no | aval:override \*\*bold\*\* \[link\](http:&#47;&#47;evil.example) \`code\` \~\~strike\~\~ \_em\_ #heading col \| umn \|\| more \| cells see https:&#47;&#47;evil.example/override, www&#46;evil.example or ops&#64;evil.example | review of an earlier commit red |
 
 ## Checks (1)
 

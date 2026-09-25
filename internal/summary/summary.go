@@ -16,6 +16,7 @@ package summary
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -28,9 +29,11 @@ const (
 	// maxBytes is GitHub's limit for a step summary. A larger one is
 	// rejected whole, so the report has to fit inside it.
 	maxBytes = 1 << 20
-	// textWidth is the width plain output wraps to: a CI log is read in an
-	// 80-column window (ADR-0003).
-	textWidth = 80
+	// alignWidth is the widest table aval lays out in aligned columns; a
+	// wider one becomes one record per row. It is a layout choice, not a
+	// cap: plain output is never wrapped, so a log stays greppable and no
+	// identifier is ever split (ADR-0003).
+	alignWidth = 80
 	// maxRows is how many rows of any one section a report shows. Whoever
 	// reads a step summary cannot use ten thousand rows anyway, and the
 	// bundle artifact holds them all.
@@ -65,10 +68,11 @@ func Text(b evidence.Bundle) string { return build(b).render(block.text, maxByte
 //
 //	block · tier 2 · 3 reasons · ORD-F01 fail_before_missing
 //
-// The reason it names is the first blocking one, or the first of any effect
-// when nothing blocks.
+// The result is the one judge settled on, so a line never reports a pass over
+// reasons that block. The reason it names is the first blocking one, or the
+// first of any effect when nothing blocks.
 func Line(b evidence.Bundle) string {
-	parts := []string{clean(string(b.Verdict.Result)), "tier " + strconv.Itoa(b.Tier)}
+	parts := []string{clean(string(judge(b).shown)), "tier " + strconv.Itoa(b.Tier)}
 	if n := len(b.Verdict.Reasons); n == 0 {
 		parts = append(parts, "no reasons")
 	} else {
@@ -138,9 +142,10 @@ func (d doc) render(emit func(block, *out), limit int) string {
 // way: a heading, then the rows, then a marker when there were more rows than
 // a step summary can carry.
 func build(b evidence.Bundle) doc {
+	v := judge(b)
 	blocks := make([]block, 0, 32)
-	blocks = append(blocks, title(b)...)
-	blocks = append(blocks, reasonBlocks(b.Verdict)...)
+	blocks = append(blocks, title(b, v)...)
+	blocks = append(blocks, reasonBlocks(b.Verdict, v)...)
 	blocks = append(blocks, obligationBlocks(b.Obligations)...)
 	blocks = append(blocks, tamperBlocks(b.Tamper)...)
 	blocks = append(blocks, scopeBlocks(b.Scope)...)
@@ -151,11 +156,12 @@ func build(b evidence.Bundle) doc {
 }
 
 // title states the verdict, the mode and the tier, then where the evidence
-// comes from. The result and the mode come from the bundle, so they are
-// escaped like any other untrusted value.
-func title(b evidence.Bundle) []block {
+// comes from. The verdict is the one judge settled on, not the one the bundle
+// claims; the mode comes from the bundle, so it is escaped like any other
+// untrusted value.
+func title(b evidence.Bundle, v verdict) []block {
 	h := heading{1, frag{
-		fixed(symbol(b.Verdict.Result) + " aval: "), label(string(b.Verdict.Result)),
+		fixed(symbol(v.shown) + " aval: "), label(string(v.shown)),
 		fixed(" · tier " + strconv.Itoa(b.Tier) + " · "), label(b.Mode),
 	}}
 	lead := frag{
@@ -173,28 +179,101 @@ func title(b evidence.Bundle) []block {
 }
 
 // reasonBlocks lists the reasons grouped by what they do to the verdict, the
-// blocking ones first: they are why a pull request cannot merge.
-func reasonBlocks(v evidence.Verdict) []block {
-	blocks := []block{heading{2, frag{fixed("Reasons" + countOf(len(v.Reasons)))}}}
-	if len(v.Reasons) == 0 {
+// blocking ones first: they are why a pull request cannot merge. When the
+// bundle's own result is softer than its reasons, the disagreement is stated
+// outright rather than smoothed over.
+func reasonBlocks(vd evidence.Verdict, v verdict) []block {
+	blocks := []block{heading{2, frag{fixed("Reasons" + countOf(len(vd.Reasons)))}}}
+	if len(vd.Reasons) == 0 {
 		return append(blocks, para{frag{fixed("None: every rule the gate applies is satisfied.")}})
 	}
 	var blocking, warning []evidence.Reason
-	for _, r := range v.Reasons {
+	for _, r := range vd.Reasons {
 		if gate.Effect(r.Code) == evidence.ResultBlock {
 			blocking = append(blocking, r)
 			continue
 		}
 		warning = append(warning, r)
 	}
-	if len(blocking) > 0 && v.Result != evidence.ResultBlock {
+	switch {
+	case v.overridden:
 		blocks = append(blocks, para{frag{
-			fixed("A valid override lowered the verdict to "), label(string(v.Result)),
+			fixed("A valid override lowered the verdict to "), label(string(v.stated)),
 			fixed("; the blocking reasons below still stand (ADR-0005 §5)."),
+		}})
+	case v.mismatch:
+		blocks = append(blocks, para{frag{
+			fixed("The bundle declares "), label(string(v.stated)),
+			fixed(", but its own reasons justify " + string(v.floor) + ", which is what this summary reports: "),
+			fixed("only a valid override lowers a block, and only to a warn (ADR-0005 §5)."),
 		}})
 	}
 	blocks = append(blocks, reasonGroup("Blocking", blocking)...)
 	return append(blocks, reasonGroup("Warnings", warning)...)
+}
+
+// verdict is what the report says about the outcome: the result it shows, what
+// the bundle claimed, and what its reasons justify.
+type verdict struct {
+	shown  evidence.Result // what the report states in its heading
+	stated evidence.Result // what the bundle claims
+	floor  evidence.Result // the worst effect among the reasons
+	// mismatch is set when the bundle claims a result softer than its own
+	// reasons justify and no valid override explains it.
+	mismatch bool
+	// overridden is set when a valid override explains a warn that carries
+	// blocking reasons (ADR-0005 §5).
+	overridden bool
+}
+
+// judge compares what a bundle claims with what its reasons justify. A bundle
+// is data, not testimony: a crafted one could claim a pass while carrying five
+// blocking reasons, and a summary that repeated the claim would sign off on it.
+// The reasons win, unless a valid override is there to explain the difference,
+// which is the one thing ADR-0005 §5 lets lower a block, and only to a warn.
+func judge(b evidence.Bundle) verdict {
+	v := verdict{stated: b.Verdict.Result, shown: b.Verdict.Result, floor: floorOf(b.Verdict.Reasons)}
+	v.overridden = v.floor == evidence.ResultBlock && v.stated == evidence.ResultWarn && overridden(b)
+	if !v.overridden && rank(v.floor) > rank(v.stated) {
+		v.shown, v.mismatch = v.floor, true
+	}
+	return v
+}
+
+// floorOf is the worst result the reasons themselves justify. It reads each
+// code through gate.Effect, which blocks on any code it does not know.
+func floorOf(rs []evidence.Reason) evidence.Result {
+	worst := evidence.ResultPass
+	for _, r := range rs {
+		if e := gate.Effect(r.Code); rank(e) > rank(worst) {
+			worst = e
+		}
+	}
+	return worst
+}
+
+// rank orders the results from softest to hardest. A result aval does not know
+// ranks hardest: the summary fails closed, like the gate.
+func rank(r evidence.Result) int {
+	switch r {
+	case evidence.ResultPass:
+		return 0
+	case evidence.ResultWarn:
+		return 1
+	case evidence.ResultBlock:
+		return 2
+	}
+	return 3
+}
+
+// overridden reports whether the bundle holds a review the gate would accept
+// as an override: kind override, valid, of the head commit and with a reason
+// (ADR-0005 §5).
+func overridden(b evidence.Bundle) bool {
+	return slices.ContainsFunc(b.Approvals, func(a evidence.Approval) bool {
+		return a.Kind == evidence.ApprovalOverride && a.Valid &&
+			a.CommitID == b.Head && strings.TrimSpace(a.Reason) != ""
+	})
 }
 
 // reasonGroup renders one effect's reasons: one entry per code, carrying what

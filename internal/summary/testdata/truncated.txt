@@ -1,8 +1,7 @@
 ✗ aval: block · tier 2 · enforce
 ================================
 
-repo svallejo-dev/aval-sandbox · base 111111111111 → head 222222222222 · aval
-v0.1.0 · generated 2026-09-24T12:00:00Z
+repo svallejo-dev/aval-sandbox · base 111111111111 → head 222222222222 · aval v0.1.0 · generated 2026-09-24T12:00:00Z
 
 changes add-refunds
 
@@ -20,8 +19,7 @@ Blocking (5):
 - tamper — a tampering signal: a bound test or a protected file changed
   - policy_edited: .golangci.yml
 
-... Cut here: the report reached the size limit of a step summary. The whole
-evidence bundle is in the run's artifacts.
+... Cut here: the report reached the size limit of a step summary. The whole evidence bundle is in the run's artifacts.
 
 Reproduce
 ---------

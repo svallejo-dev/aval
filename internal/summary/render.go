@@ -4,6 +4,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // out is text under construction, capped in size. Writing through it is how a
@@ -142,9 +144,9 @@ func (h heading) text(o *out) {
 	s := h.f.text()
 	switch h.level {
 	case 1:
-		o.write(s, "\n", strings.Repeat("=", utf8.RuneCountInString(s)), "\n\n")
+		o.write(s, "\n", strings.Repeat("=", width(s)), "\n\n")
 	case 2:
-		o.write(s, "\n", strings.Repeat("-", utf8.RuneCountInString(s)), "\n\n")
+		o.write(s, "\n", strings.Repeat("-", width(s)), "\n\n")
 	default:
 		o.write(s, ":\n\n")
 	}
@@ -154,7 +156,7 @@ func (h heading) text(o *out) {
 type para struct{ f frag }
 
 func (p para) markdown(o *out) { o.write(p.f.markdown(inline), "\n\n") }
-func (p para) text(o *out)     { wrapped(o, p.f.text(), "", "", textWidth); o.write("\n") }
+func (p para) text(o *out)     { o.write(p.f.text(), "\n\n") }
 
 // bullets is a list of items, each with its own nested sub-items.
 type bullets struct{ items []item }
@@ -177,9 +179,9 @@ func (b bullets) markdown(o *out) {
 
 func (b bullets) text(o *out) {
 	for _, it := range b.items {
-		wrapped(o, it.f.text(), "- ", "  ", textWidth)
+		o.write("- ", it.f.text(), "\n")
 		for _, s := range it.subs {
-			wrapped(o, s.text(), "  - ", "    ", textWidth)
+			o.write("  - ", s.text(), "\n")
 		}
 	}
 	o.write("\n")
@@ -212,20 +214,21 @@ func (t table) markdown(o *out) {
 	o.write("\n")
 }
 
-// text lays the table out in aligned columns when they fit in textWidth, and
-// as one record per row when they do not, so plain output never needs more
-// than 80 columns whatever a pull request puts in a cell.
+// text lays the table out in aligned columns when the whole table fits in
+// alignWidth, and as one record per row when it does not. Widths are display
+// widths, not rune counts, so a CJK note or a combining mark cannot push a
+// column out of line.
 func (t table) text(o *out) {
 	rows := make([][]string, 0, len(t.rows))
 	widths := make([]int, len(t.header))
 	for i, h := range t.header {
-		widths[i] = utf8.RuneCountInString(h)
+		widths[i] = width(h)
 	}
 	for _, r := range t.rows {
 		cells := make([]string, len(t.header))
 		for i := range cells {
 			cells[i] = column(r, i).text()
-			widths[i] = max(widths[i], utf8.RuneCountInString(cells[i]))
+			widths[i] = max(widths[i], width(cells[i]))
 		}
 		rows = append(rows, cells)
 	}
@@ -233,7 +236,7 @@ func (t table) text(o *out) {
 	for _, w := range widths {
 		total += w
 	}
-	if total <= textWidth {
+	if total <= alignWidth {
 		t.aligned(o, rows, widths)
 		return
 	}
@@ -248,13 +251,16 @@ func (t table) aligned(o *out, rows [][]string, widths []int) {
 	o.write("\n")
 }
 
-// records writes one row as its first column followed by an indented
-// label: value line per remaining column, each wrapped to textWidth.
+// records writes one row as its first column followed by one indented
+// label: value line per remaining column. Nothing is wrapped: a plain report
+// keeps one line per value so a log stays greppable (ADR-0003), and a long
+// note is worth more whole than split across lines.
 func (t table) records(o *out, rows [][]string) {
 	for _, r := range rows {
-		lines := []string{r[0] + "\n"}
+		lines := make([]string, 0, 2*len(r))
+		lines = append(lines, r[0], "\n")
 		for i := 1; i < len(r); i++ {
-			lines = append(lines, wrapLines(t.header[i]+": "+r[i], "  ", "    ", textWidth)...)
+			lines = append(lines, "  ", t.header[i], ": ", r[i], "\n")
 		}
 		o.write(lines...)
 		o.write("\n")
@@ -268,7 +274,7 @@ func padded(cells []string, widths []int) string {
 	for i, c := range cells {
 		o.write(c)
 		if i < len(cells)-1 {
-			o.write(strings.Repeat(" ", widths[i]-utf8.RuneCountInString(c)+2))
+			o.write(strings.Repeat(" ", widths[i]-width(c)+2))
 		}
 	}
 	return o.String()
@@ -318,7 +324,7 @@ func fence(body []string) string {
 type aside struct{ s string }
 
 func (a aside) markdown(o *out) { o.write("> ", a.s, "\n\n") }
-func (a aside) text(o *out)     { wrapped(o, "... "+a.s, "", "", textWidth); o.write("\n") }
+func (a aside) text(o *out)     { o.write("... ", a.s, "\n\n") }
 
 // escByte starts a terminal escape sequence.
 const escByte = 0x1b
@@ -390,18 +396,34 @@ const mdMarkers = "\\`*[]~"
 // line.
 const mdLeading = "-+=.#"
 
-// escapeMarkdown makes untrusted prose inert in GitHub Flavored Markdown: &,
-// < and > become entities, so neither HTML nor an autolink can be injected;
-// every inline marker is backslash-escaped, so no emphasis, code span, link or
-// strikethrough can be opened; and in a table cell a pipe is escaped too, so a
-// note can never add a column. An underscore between two word characters is
-// left alone: GFM does not open emphasis there, and escaping it would turn
-// every test name into a thicket of backslashes.
+// GFM's extended autolinks need no delimiters at all: bare text is turned
+// into a link as soon as it holds "://", starts a word with "www." or looks
+// like an email address. Written as numeric character references the same
+// glyphs reach the reader and no link is made.
+const (
+	schemeSep = "://"
+	wwwPrefix = "www."
+)
+
+// escapeMarkdown makes untrusted prose inert in GitHub Flavored Markdown:
+//   - &, < and > become entities, so no HTML can be injected;
+//   - every inline marker is backslash-escaped, so no emphasis, code span,
+//     link or strikethrough can be opened;
+//   - "://", a leading "www." and "@" become character references, so no
+//     extended autolink can form: a note must never put a clickable link on
+//     the page where a human decides an override;
+//   - in a table cell a pipe is escaped too, so a note can never add a column.
+//
+// An underscore between two word characters is left alone: GFM opens no
+// emphasis there, and escaping it would turn every test name into a thicket of
+// backslashes.
 func escapeMarkdown(s string, where escaping) string {
 	var o out
 	var prev rune
-	for i, r := range s {
-		next, _ := utf8.DecodeRuneInString(s[i+utf8.RuneLen(r):])
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		next, _ := utf8.DecodeRuneInString(s[i+size:])
+		www := (r == 'w' || r == 'W') && !isWord(prev) && hasPrefixFold(s[i:], wwwPrefix)
 		switch {
 		case r == '&':
 			o.write("&amp;")
@@ -409,6 +431,18 @@ func escapeMarkdown(s string, where escaping) string {
 			o.write("&lt;")
 		case r == '>':
 			o.write("&gt;")
+		case r == '@':
+			o.write("&#64;") // an email address would autolink
+		case r == ':' && strings.HasPrefix(s[i:], schemeSep):
+			o.write(":&#47;&#47;")
+			i += len(schemeSep)
+			prev = '/'
+			continue
+		case www:
+			o.write(s[i:i+len(wwwPrefix)-1], "&#46;")
+			i += len(wwwPrefix)
+			prev = '.'
+			continue
 		case r == '_' && isWord(prev) && isWord(next):
 			o.write("_")
 		case r == '|' && where == inline:
@@ -416,11 +450,18 @@ func escapeMarkdown(s string, where escaping) string {
 		case r == '_', r == '|', strings.ContainsRune(mdMarkers, r), i == 0 && strings.ContainsRune(mdLeading, r):
 			o.write("\\", string(r))
 		default:
-			o.write(string(r))
+			o.write(s[i : i+size])
 		}
 		prev = r
+		i += size
 	}
 	return o.String()
+}
+
+// hasPrefixFold reports whether s starts with prefix, ignoring case: GFM
+// matches "www." however it is capitalised.
+func hasPrefixFold(s, prefix string) bool {
+	return len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix)
 }
 
 // isWord reports whether r is a character an underscore can sit inside without
@@ -472,53 +513,9 @@ func clamp(s string, n int) string {
 	return s
 }
 
-// wrapped writes s over as many lines of at most width columns as it needs,
-// prefixing the first with first and the rest with rest. Every line is
-// written together, so a size cut never lands inside one entry.
-func wrapped(o *out, s, first, rest string, width int) {
-	o.write(wrapLines(s, first, rest, width)...)
-}
-
-// wrapLines breaks s into prefixed lines of at most width columns, each
-// ending in a newline. A word too long for a line of its own is split on a
-// rune boundary: an 80-column log is worth more than an unbroken identifier.
-func wrapLines(s, first, rest string, width int) []string {
-	words := strings.Fields(s)
-	if len(words) == 0 {
-		return []string{strings.TrimRight(first, " ") + "\n"}
-	}
-	lines := make([]string, 0, 2)
-	prefix, line := first, ""
-	for _, w := range words {
-		for {
-			room := width - utf8.RuneCountInString(prefix) - utf8.RuneCountInString(line)
-			if line != "" {
-				room-- // the space that would separate the words
-			}
-			switch n := utf8.RuneCountInString(w); {
-			case n <= room:
-				if line != "" {
-					line += " "
-				}
-				line += w
-			case line != "": // start a new line and try the word again
-				lines = append(lines, prefix+line+"\n")
-				prefix, line = rest, ""
-				continue
-			default: // longer than a whole line: split it
-				cut := runeIndex(w, max(width-utf8.RuneCountInString(prefix), 1))
-				lines = append(lines, prefix+w[:cut]+"\n")
-				prefix, w = rest, w[cut:]
-				continue
-			}
-			break
-		}
-	}
-	if line != "" {
-		lines = append(lines, prefix+line+"\n")
-	}
-	return lines
-}
+// width is how many terminal cells s occupies: East Asian characters take two,
+// a combining mark none, so a column lines up where a rune count would not.
+func width(s string) int { return ansi.StringWidth(s) }
 
 // runeIndex returns the byte index where s's n-th rune starts, or len(s).
 func runeIndex(s string, n int) int {

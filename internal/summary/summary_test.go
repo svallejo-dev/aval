@@ -137,6 +137,11 @@ const (
 	controlChars  = "nul\x00 bell\x07 back\bspace vtab\x0b tab\t cr\r lf\n end"
 	bidiOverride  = "start \u202e gnidne \u2066 isolate \u2069 \u200b zero \ufeff width \u00ad soft"
 	backticks     = "a ``` b `` c ` d"
+	// autolinks is what GFM turns into a clickable link with no markup at
+	// all, on the very page where a human decides an override.
+	autolinks = "see https://evil.example/override, www.evil.example or ops@evil.example"
+	// cjk is wide and combining text: a rune count would misalign it.
+	cjk = "\u5e73\u6587 e\u0301cole \u30c6\u30b9\u30c8"
 )
 
 // adversarialBundle fills every string a pull request controls with something
@@ -159,7 +164,10 @@ func adversarialBundle() evidence.Bundle {
 			{ID: "ORD-F01", Kind: "F", Source: "spec.md#ORD-F01 " + mdInjection, Delta: evidence.Added,
 				Tests:  []string{"TestX/ORD-F01_" + pipeInjection, "TestX/ORD-F01_" + backticks, "TestX/" + long},
 				Before: evidence.Fail, After: evidence.Pass, Strength: evidence.Strong,
-				Note: mdInjection + " " + htmlInjection + " " + bidiOverride + " " + controlChars},
+				// A note is prose in a table cell: the one place where a
+				// pipe would add a column and a URL would become a link.
+				Note: mdInjection + " " + pipeInjection + " " + autolinks + " " + cjk + " " +
+					htmlInjection + " " + bidiOverride + " " + controlChars},
 			{ID: "ORD-N02", Kind: "N", Source: "spec.md#ORD-N02", Delta: evidence.Added,
 				Tests: []string{long}, Before: evidence.Pass, After: evidence.Pass, Strength: evidence.None,
 				Note: long},
@@ -173,14 +181,16 @@ func adversarialBundle() evidence.Bundle {
 				Paths: []string{pipeInjection, htmlInjection, bidiOverride, long, "Makefile", "docs/adr/0006.md"}},
 		},
 		Tamper: []evidence.Finding{
-			{Kind: evidence.FingerprintChanged, ID: "ORD-F01", Detail: "fingerprint of " + mdInjection + " changed"},
+			{Kind: evidence.FingerprintChanged, ID: "ORD-F01",
+				Detail: "fingerprint of " + mdInjection + " " + pipeInjection + " changed"},
 		},
 		Approvals: []evidence.Approval{
 			{Kind: evidence.ApprovalOverride, Actor: "@" + htmlInjection, CommitID: olderSHA, SubmittedAt: reviewAt,
-				Reason: "aval:override " + mdInjection, Valid: false, Rejection: "review of an earlier commit " + ansiInjection},
+				Reason: "aval:override " + mdInjection + " " + pipeInjection + " " + autolinks,
+				Valid:  false, Rejection: "review of an earlier commit " + ansiInjection},
 		},
 		Verdict: evidence.Verdict{Result: evidence.ResultBlock, Reasons: []evidence.Reason{
-			{Code: gate.CodeUnverified, ID: "ORD-N02", Message: pipeInjection + " " + htmlInjection},
+			{Code: gate.CodeUnverified, ID: "ORD-N02", Message: pipeInjection + " " + htmlInjection + " " + autolinks},
 			{Code: "code_" + mdInjection, ID: "ORD-F01", Message: bidiOverride},
 		}},
 		NotCollected: []string{"mutation " + pipeInjection, htmlInjection},
@@ -217,8 +227,8 @@ func TestGolden(t *testing.T) {
 			assertInert(t, "markdown", md)
 			assertInert(t, "text", text)
 			assertNoHTML(t, md)
+			assertNoAutolinks(t, md)
 			assertTables(t, md)
-			assertWidth(t, text)
 		})
 	}
 }
@@ -355,6 +365,133 @@ func TestLine(t *testing.T) {
 	}
 }
 
+// TestAlignedColumnsUseDisplayWidth: a column padded by rune count falls out
+// of line as soon as a cell holds East Asian text or a combining mark, which a
+// note or a test name may well do.
+func TestAlignedColumnsUseDisplayWidth(t *testing.T) {
+	t.Parallel()
+
+	const wide = "\u5e73\u6587" // two cells each, two runes
+	const combining = "e\u0301cole"
+	if width(wide) == utf8.RuneCountInString(wide) || width(combining) == utf8.RuneCountInString(combining) {
+		t.Fatal("the probes do not tell display width from rune count")
+	}
+	var o out
+	table{header: []string{"cell", "last"}, rows: [][]frag{
+		{{prose(wide)}, {prose("a")}},
+		{{prose(combining)}, {prose("b")}},
+		{{prose("plain")}, {prose("c")}},
+	}}.text(&o)
+
+	lines := strings.Split(strings.TrimRight(o.String(), "\n"), "\n")
+	starts := make(map[int][]string, len(lines))
+	for _, l := range lines {
+		i := strings.LastIndex(l, " ") + 1
+		starts[width(l[:i])] = append(starts[width(l[:i])], l)
+	}
+	if len(starts) != 1 {
+		t.Errorf("the last column starts at %d different offsets, want 1: %v", len(starts), starts)
+	}
+}
+
+// TestVerdictFloor: a bundle is data, not testimony. Whatever result it claims,
+// the summary reports the worst its own reasons justify, unless a valid
+// override explains the difference (ADR-0005 §5).
+func TestVerdictFloor(t *testing.T) {
+	t.Parallel()
+
+	// A bundle that claims a pass over five blocking reasons.
+	lying := blockBundle()
+	lying.Verdict.Result = evidence.ResultPass
+
+	// The same claim, with a review that is not a valid override.
+	rejected := lying
+	rejected.Approvals = []evidence.Approval{{Kind: evidence.ApprovalOverride, Actor: "@dev", CommitID: olderSHA,
+		SubmittedAt: reviewAt, Reason: "hotfix", Valid: false, Rejection: "review of an earlier commit"}}
+
+	// A pass claimed over reasons that only warn.
+	softened := passBundle()
+	softened.Verdict = evidence.Verdict{Result: evidence.ResultPass, Reasons: []evidence.Reason{
+		{Code: gate.CodeWeakEvidence, ID: "ORD-F02", Message: "weak"},
+	}}
+
+	for _, tc := range []struct {
+		name         string
+		b            evidence.Bundle
+		want         evidence.Result
+		wantMismatch bool
+		wantOverride bool
+	}{
+		{"honest block", blockBundle(), evidence.ResultBlock, false, false},
+		{"honest pass", passBundle(), evidence.ResultPass, false, false},
+		{"override explains the warn", warnBundle(), evidence.ResultWarn, false, true},
+		{"pass over blocking reasons", lying, evidence.ResultBlock, true, false},
+		{"rejected override explains nothing", rejected, evidence.ResultBlock, true, false},
+		{"pass over warnings", softened, evidence.ResultWarn, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			v := judge(tc.b)
+			if v.shown != tc.want {
+				t.Errorf("judge().shown = %q, want %q", v.shown, tc.want)
+			}
+			if v.mismatch != tc.wantMismatch || v.overridden != tc.wantOverride {
+				t.Errorf("mismatch = %v, overridden = %v; want %v and %v",
+					v.mismatch, v.overridden, tc.wantMismatch, tc.wantOverride)
+			}
+			md := Markdown(tc.b)
+			if want := symbol(tc.want) + " aval: " + string(tc.want); !strings.Contains(md, want) {
+				t.Errorf("the heading does not report %q", want)
+			}
+			if got := strings.Contains(md, "The bundle declares"); got != tc.wantMismatch {
+				t.Errorf("the summary states a disagreement = %v, want %v", got, tc.wantMismatch)
+			}
+			if got := strings.Contains(md, "A valid override lowered"); got != tc.wantOverride {
+				t.Errorf("the summary credits an override = %v, want %v", got, tc.wantOverride)
+			}
+			if want := string(tc.want) + " · tier"; !strings.HasPrefix(Line(tc.b), want) {
+				t.Errorf("Line() = %q, want it to start with %q", Line(tc.b), want)
+			}
+		})
+	}
+}
+
+// TestPlainIsNotWrapped: plain output keeps one line per entry. ADR-0003 wants
+// unwrapped text so a CI log stays greppable, and wrapping would split an
+// identifier mid-token, which is the one thing a reader has to be able to copy.
+func TestPlainIsNotWrapped(t *testing.T) {
+	t.Parallel()
+
+	text := Text(adversarialBundle())
+	for _, want := range []string{
+		clamp(clean(strings.Repeat("longidentifier", 40)), maxIdent),
+		clamp(clean(pipeInjection+" "+htmlInjection+" "+autolinks), maxProse),
+	} {
+		if !containsInOneLine(text, want) {
+			t.Errorf("plain output does not hold %q whole on one line", want)
+		}
+	}
+}
+
+// TestLayoutInvariants pins what the plain layout rests on now that nothing is
+// wrapped: a record's heading is its first column, written whole, so capping
+// an identifier at or below the width that decides between an aligned table and
+// records keeps that heading no wider than any table aval would align.
+func TestLayoutInvariants(t *testing.T) {
+	t.Parallel()
+
+	if maxIdent > alignWidth {
+		t.Errorf("maxIdent = %d, want at most alignWidth = %d", maxIdent, alignWidth)
+	}
+	text := Text(blockBundle())
+	if !strings.Contains(text, "signal         ID       detail") {
+		t.Error("a table that fits in alignWidth is not laid out in aligned columns")
+	}
+	if !strings.Contains(text, "  bound tests: ") {
+		t.Error("a table wider than alignWidth is not laid out as one record per row")
+	}
+}
+
 func TestClean(t *testing.T) {
 	t.Parallel()
 
@@ -430,27 +567,38 @@ func assertNoHTML(t *testing.T, md string) {
 
 // stripCodeSpans removes every Markdown code span, and every fenced block,
 // from md: a run of n backticks opens one and the next run of exactly n closes
-// it (CommonMark). It reports false when a span is never closed.
+// it (CommonMark). A backslash escapes the byte after it, so an escaped
+// backtick in prose opens nothing; inside a span backslashes are literal, so
+// the search for the closing run ignores them. It reports false when a span is
+// never closed.
 func stripCodeSpans(md string) (string, bool) {
 	buf := make([]byte, 0, len(md))
 	for i := 0; i < len(md); {
-		if md[i] != '`' {
+		switch md[i] {
+		case '\\': // an escape: neither this byte nor the next opens a span
+			buf = append(buf, md[i])
+			if i+1 < len(md) {
+				buf = append(buf, md[i+1])
+			}
+			i += 2
+		case '`':
+			open := backtickRun(md, i)
+			end, ok := closingRun(md, i+open, open)
+			if !ok {
+				return string(buf), false
+			}
+			i = end
+		default:
 			buf = append(buf, md[i])
 			i++
-			continue
 		}
-		open := backtickRun(md, i)
-		end, ok := closingRun(md, i+open, open)
-		if !ok {
-			return string(buf), false
-		}
-		i = end
 	}
 	return string(buf), true
 }
 
 // closingRun returns the index just past the first run of exactly n backticks
-// at or after from.
+// at or after from. Backslashes are literal inside a code span, so they are
+// not treated as escapes here.
 func closingRun(md string, from, n int) (int, bool) {
 	for i := from; i < len(md); {
 		if md[i] != '`' {
@@ -478,6 +626,28 @@ func backtickRun(md string, i int) int {
 // excerpt returns the text around index i, to point at what went wrong.
 func excerpt(s string, i int) string {
 	return s[max(i-40, 0):min(i+40, len(s))]
+}
+
+// assertNoAutolinks checks that no text outside a code span can become a link.
+// GFM's extended autolinks need no markup: "://" anywhere, a word starting
+// "www." or an email address is enough, and a link on the page where a human
+// decides an override is a link aval put there. A unit test cannot run GFM
+// itself (no network, standard library only), so it asserts on the source that
+// nothing an autolink needs survives.
+func assertNoAutolinks(t *testing.T, md string) {
+	t.Helper()
+
+	stripped, _ := stripCodeSpans(md)
+	for _, bait := range []string{schemeSep, wwwPrefix, "@"} {
+		if i := indexFold(stripped, bait); i >= 0 {
+			t.Errorf("%q survived outside a code span and would autolink: %q", bait, excerpt(stripped, i))
+		}
+	}
+}
+
+// indexFold is strings.Index ignoring case.
+func indexFold(s, substr string) int {
+	return strings.Index(strings.ToLower(s), strings.ToLower(substr))
 }
 
 // assertTables checks that every row of every Markdown table has as many
@@ -522,16 +692,14 @@ func unescapedPipes(line string) int {
 	return n
 }
 
-// assertWidth checks that plain output fits the 80 columns of a CI log
-// (ADR-0003), whatever length a pull request chose for a test name.
-func assertWidth(t *testing.T, text string) {
-	t.Helper()
-
-	for i, line := range strings.Split(text, "\n") {
-		if n := utf8.RuneCountInString(line); n > textWidth {
-			t.Errorf("line %d is %d columns wide, want at most %d:\n%s", i+1, n, textWidth, line)
+// containsInOneLine reports whether some single line of text holds want.
+func containsInOneLine(text, want string) bool {
+	for line := range strings.SplitSeq(text, "\n") {
+		if strings.Contains(line, want) {
+			return true
 		}
 	}
+	return false
 }
 
 // assertGolden compares got with testdata/<name>, or rewrites it with -update.
