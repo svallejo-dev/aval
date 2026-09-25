@@ -1,0 +1,59 @@
+{
+  "action": "opened",
+  "number": 46,
+  "pull_request": {
+    "url": "https://api.github.com/repos/svallejo-dev/aval/pulls/46",
+    "id": 2101234567,
+    "node_id": "PR_kwDOabcdef",
+    "state": "open",
+    "title": "feat(gate): decidir con la evidencia del bundle",
+    "body": "Cierra ORD-F01.\n",
+    "draft": false,
+    "labels": [
+      {
+        "id": 1,
+        "name": "gate"
+      }
+    ],
+    "head": {
+      "label": "svallejo-dev:feat/gate",
+      "ref": "feat/gate",
+      "sha": "deadbeef",
+      "repo": {
+        "full_name": "svallejo-dev/aval"
+      }
+    },
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/svallejo-dev/aval/pulls/46"
+      }
+    },
+    "number": 46,
+    "base": {
+      "label": "svallejo-dev:main",
+      "ref": "main",
+      "sha": "1405df66cbe219b0bf6355bc3d60361a8376b6b4",
+      "repo": {
+        "full_name": "svallejo-dev/aval"
+      }
+    },
+    "user": {
+      "login": "agente-bot",
+      "id": 4242,
+      "type": "User"
+    }
+  },
+  "repository": {
+    "id": 987654321,
+    "full_name": "svallejo-dev/aval",
+    "private": true,
+    "owner": {
+      "login": "svallejo-dev"
+    },
+    "default_branch": "main"
+  },
+  "sender": {
+    "login": "agente-bot",
+    "id": 4242
+  }
+}

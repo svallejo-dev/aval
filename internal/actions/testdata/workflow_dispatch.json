@@ -1,0 +1,20 @@
+{
+  "inputs": {
+    "mode": "observe"
+  },
+  "ref": "refs/heads/main",
+  "workflow": ".github/workflows/gate.yml",
+  "repository": {
+    "id": 987654321,
+    "full_name": "svallejo-dev/aval",
+    "private": true,
+    "owner": {
+      "login": "svallejo-dev"
+    },
+    "default_branch": "main"
+  },
+  "sender": {
+    "login": "agente-bot",
+    "id": 4242
+  }
+}
