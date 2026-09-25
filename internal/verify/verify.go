@@ -93,7 +93,7 @@ var notCollected = []string{"mutation", "rollback", "slo"}
 // notValidated joins notCollected when the pull request touches openspec/ and
 // the base has no policy to take the pinned OpenSpec version from, so that a
 // skipped openspec validate never reads as a passing one.
-const notValidated = "spec_validation"
+const notValidated = "openspec_validate"
 
 // Options configures Collect.
 type Options struct {

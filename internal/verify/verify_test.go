@@ -968,9 +968,11 @@ func TestCollectNoBasePolicy(t *testing.T) {
 	if ev.Input.Validation != nil {
 		t.Error("Validation: head's own pinned version is not trusted, so validate must not run")
 	}
+	// The token is a contract (ADR-0005 §7), so the test names it, not the
+	// constant.
 	b := ev.Bundle(gate.Decide(ev.Input))
-	if !slices.Contains(b.NotCollected, notValidated) || b.Validate() != nil {
-		t.Errorf("notCollected = %q, want %q among them; Validate: %v", b.NotCollected, notValidated, b.Validate())
+	if !slices.Contains(b.NotCollected, "openspec_validate") || b.Validate() != nil {
+		t.Errorf("notCollected = %q, want openspec_validate among them; Validate: %v", b.NotCollected, b.Validate())
 	}
 }
 
