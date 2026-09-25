@@ -33,6 +33,7 @@ aval informa además de cualquier edición de `.github/**`, `CODEOWNERS`, `.gola
 - **Credenciales:** un agente que opera con las credenciales de una persona actúa como esa persona. Los agentes deben usar una cuenta o token propio, sin permisos de revisión.
 - **`weak` se puede provocar:** un test que referencia cualquier símbolo nuevo no compila en la base. Por eso `weak` es un aviso y el resumen lo muestra al revisor humano, nunca un pase silencioso.
 - **Fixtures fuera del paquete:** un test que lee un fichero nuevo de otro directorio (`../fixtures/in.txt`) falla en la base y da `strong`. Solo se degrada a `weak` lo que cae dentro de un paquete de la obligación; la convención es `testdata/`.
+- **`openspec validate` sin política de base:** la versión de OpenSpec se fija en el `aval.yaml` de la base y la del head no es de fiar, así que sin política no se valida y el bundle lo declara en `notCollected`. El veredicto ya es `observe` por `no_base_policy`.
 - **Git LFS:** con `--attr-source` al árbol vacío, el worktree de la base recibe punteros LFS en vez de contenido, y un test que lea esos ficheros fallaría en la base. Los repos del piloto no usan LFS.
 - **Runner comprometido:** el código del PR se ejecuta en el mismo runner que el gate, y en los runners de GitHub tiene sudo sin contraseña. Código malicioso que ataque al propio runner (sustituir el binario de aval, alterar ficheros entre pasos) queda fuera de lo que aval puede defender en la v0. Por eso el gate verifica en el mismo proceso, y la mitigación de fondo es ejecutar los tests en un entorno aislado del gate.
 
@@ -53,6 +54,8 @@ El gate trabaja sobre un rango `base..head`:
 - `--attr-source` al árbol vacío, para que el `.gitattributes` del head no cambie diffs ni merges;
 - `--ignore-submodules=none`, para que el `.gitmodules` del head no oculte cambios de submódulos;
 - `-z` y `--end-of-options`.
+
+**Nunca con `git archive`:** respeta `export-ignore` y `export-subst` del `.gitattributes` del árbol, y `--attr-source` **no** lo evita. Un `.gitattributes` en la base podría así ocultar el `aval.yaml`, el baseline o las specs, y dejar el gate en `observe` creyendo que no hay política. Los ficheros de un árbol se leen con `git ls-tree` y `git cat-file --batch`, que no consultan atributos.
 
 Requiere git ≥ 2.40; con uno más antiguo, exit 3.
 
@@ -77,7 +80,7 @@ Requiere git ≥ 2.40; con uno más antiguo, exit 3.
 ### 2. Falla-antes por superposición
 
 Aplica a las obligaciones **F, N e I** con delta `added` o `modified`:
-1. **Worktree:** `git worktree add --detach <tmp> <base>`. El worktree y la superposición del paso 2 se preparan **desde los objetos de git de head, no desde el árbol de trabajo**, y **antes** de ejecutar los tests de head, porque esos tests podrían reescribir ficheros (§1). Solo los patrones `-run` del paso 3 esperan a los nombres de la ejecución de head.
+1. **Worktree:** `git worktree add --detach <tmp> <base>`. El worktree y la superposición del paso 2 se crean **desde los objetos de git**, no desde el árbol de trabajo, y **después** de la ejecución completa de head, justo antes de las ejecuciones en la base. Prepararlos antes permitiría que un test de head estropeara el árbol de la base —romper su código para que falle— y fabricara un `strong`. Antes de ejecutar código del PR se lee todo lo que sale de git (§1), que es otra cosa.
 2. **Superposición:** en **todo el diff**, no solo en los paquetes de la obligación:
    - **primero se borran** las rutas que head eliminó o renombró (un renombre cuenta como baja más alta);
    - después se copian desde head los `*_test.go` y los ficheros de `testdata/` añadidos o modificados.
@@ -146,7 +149,7 @@ Cada regla incumplida añade un `Reason{Code, Message, ID}` al veredicto. Los c�
 | `after_not_passing` | Un test **vinculado** (del delta o no) no pasa en head | 0–3 | block |
 | `regression` | Un test **no vinculado** falla en head y no figura en el baseline de la base | 0–3 | block |
 | `build_failed` | Algún paquete no compila o `go test` falla al preparar la ejecución, en head | 0–3 | block |
-| `tamper` | `testsource.Compare` devuelve un hallazgo, o el PR edita el `aval.yaml` raíz, `.aval/baseline.json`, `.github/**`, `CODEOWNERS` o `.golangci.yml`. Esas ediciones se registran como hallazgos `policy_edited` (baseline: `baseline_edited`) | 0–3 | block |
+| `tamper` | `testsource.Compare` devuelve un hallazgo, o el PR edita el `aval.yaml` raíz, `.aval/baseline.json`, `.github/**`, un `CODEOWNERS` de cualquiera de las tres ubicaciones que reconoce GitHub, `.golangci.yml` o cualquier `.gitattributes`. Esas ediciones se registran como hallazgos `policy_edited` (baseline: `baseline_edited`) | 0–3 | block |
 | `undeclared_runtime` | Un test con ID se ejecuta sin declaración estática que lo empareje | 0–3 | block |
 | `mixed_commit` | Un commit `mixed` (§3b) | 0–3 | block |
 | `premortem_missing` | Un change de tier ≥ 2 sin `premortem.md` | según cada change | block |
@@ -202,8 +205,8 @@ Hay dos tipos:
 ### 7. Evidencia, baseline y resumen
 
 - **`aval verify`** escribe el bundle en `.aval/evidence/<head>.json` y el estado para hooks en `.aval/cache/verify-status.json` (formato de `internal/hook`). La clave es `HEAD` más un hash de `git diff HEAD` **y de los ficheros sin seguimiento** (ruta y contenido), salvo los de `.aval/cache/` y `.aval/evidence/`, donde `verify` escribe después de calcular la clave. Sin estado, el hook de Stop solo deja terminar si el árbol está limpio y HEAD ya está en una rama remota; un commit local sin verificar no escapa. Así, un fichero nuevo tras `verify` invalida el estado.
-- **`aval gate` en CI** (`GITHUB_ACTIONS=true`) ejecuta la verificación **en el mismo proceso** y **nunca reutiliza un bundle del disco**: el código del PR corre en el mismo runner y podría sobrescribir ficheros entre pasos, y `CheckHead` solo compara un SHA que es público.
-- **`aval gate` en local** puede reutilizar el bundle de `verify` si `CheckHead` coincide.
+- **`aval gate` ejecuta la verificación en el mismo proceso y nunca reutiliza un bundle del disco,** tampoco en local: `CheckHead` solo compara un SHA público, así que reutilizarlo sería confiar en un fichero, veredicto incluido. Recalcular cuesta poco.
+- **La configuración de lint de la base se materializa en la raíz del repo** antes de la ejecución, con los bytes leídos en la fase de git. golangci-lint ancla las rutas de su config en el directorio donde está, así que desde un temporal las exclusiones por ruta no encajarían.
 - **Cierre:** el gate decide, escribe el veredicto y, en GitHub Actions, un resumen en `$GITHUB_STEP_SUMMARY`. El workflow sube el bundle como artefacto.
 
 **Bundle v2** (sube `schemaVersion`, según ADR-0004): sustituye `override` por **`approvals`**, una lista de:

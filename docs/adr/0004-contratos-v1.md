@@ -54,7 +54,7 @@ Cada contrato vive en el paquete del concepto que representa, con tipos Go, JSON
 - **Tipos de manipulación:** `fingerprint_changed`, `test_removed`, `skip_added`, `policy_edited`, `baseline_edited`.
 - **La política viene de la base:** el gate lee `aval.yaml` y el baseline del SHA base, nunca del head. En modo `observe` el veredicto se informa sin bloquear; en `enforce`, un `block` bloquea.
 - **Recalcular en el mismo job:** el gate recalcula la evidencia y rechaza un bundle cuyo `head` no coincide con `HEAD` (`CheckHead`).
-- **`notCollected`** declara la evidencia que la v0 aún no reúne (`mutation`, `rollback`, `slo`), para que su ausencia sea explícita y no parezca un pase.
+- **`notCollected`** declara la evidencia que la v0 aún no reúne (`mutation`, `rollback`, `slo`) y la que se saltó en esta ejecución, como `openspec validate` sin política de base, para que ninguna ausencia parezca un pase.
 
 ## Versionado
 
