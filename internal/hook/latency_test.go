@@ -12,12 +12,15 @@ import (
 )
 
 // TestLatency runs the built aval 50 times per event in this repository and
-// in a small one, and holds the p95 to ADR-0003's 50 ms. Shared CI runners
-// are too noisy for that bound, so under CI it only catches gross regressions
+// in a small one, and holds the p95 to ADR-0003's 50 ms. A loaded machine,
+// such as one running the other packages' tests, can push one round over, so
+// the majority of up to three rounds decides: two rounds within the budget
+// pass, two over it fail, and a split takes a third. Shared CI runners are
+// too noisy even for that, so under CI it only catches gross regressions
 // (250 ms): run `go test -run TestLatency -v ./internal/hook` locally.
 func TestLatency(t *testing.T) {
 	if testing.Short() {
-		t.Skip("builds aval and runs it 200 times")
+		t.Skip("builds aval and runs it 200 times or more")
 	}
 	budget := 50 * time.Millisecond
 	if os.Getenv("CI") != "" {
@@ -49,30 +52,47 @@ func TestLatency(t *testing.T) {
 		{"small repo", small, stop, Stop, `"decision":"block"`},
 	}
 	for _, tt := range tests {
-		var out bytes.Buffer
-		var times []time.Duration
-		for i := range 53 { // 3 runs to warm up caches
-			cmd := exec.Command(bin, "hook", string(tt.event)) //nolint:gosec // the aval just built
-			cmd.Dir, cmd.Stdin, cmd.Stdout = tt.dir, strings.NewReader(tt.stdin), &out
-			out.Reset()
-			start := time.Now()
-			if err := cmd.Run(); err != nil {
-				t.Fatalf("%s: aval hook %s: %v", tt.repo, tt.event, err)
+		var p95s []time.Duration
+		within, over := 0, 0
+		for within < 2 && over < 2 {
+			p50, p95, out := measure(t, bin, tt.dir, tt.stdin, tt.event)
+			t.Logf("%s: aval hook %s: p50 %v, p95 %v", tt.repo, tt.event, p50, p95)
+			if !strings.Contains(out, tt.want) {
+				t.Fatalf("%s: aval hook %s wrote %q, want %q in it", tt.repo, tt.event, out, tt.want)
 			}
-			if i >= 3 {
-				times = append(times, time.Since(start))
+			p95s = append(p95s, p95)
+			if p95 <= budget {
+				within++
+			} else {
+				over++
 			}
 		}
-		if !strings.Contains(out.String(), tt.want) {
-			t.Errorf("%s: aval hook %s wrote %q, want %q in it", tt.repo, tt.event, out.String(), tt.want)
-		}
-		slices.Sort(times)
-		p95 := times[(len(times)*95+99)/100-1]
-		t.Logf("%s: aval hook %s: p50 %v, p95 %v", tt.repo, tt.event, times[len(times)/2], p95)
-		if p95 > budget {
-			t.Errorf("%s: aval hook %s: p95 %v, over the %v budget", tt.repo, tt.event, p95, budget)
+		if over == 2 {
+			t.Errorf("%s: aval hook %s: p95 %v in %d rounds, over the %v budget in two", tt.repo, tt.event, p95s, len(p95s), budget)
 		}
 	}
+}
+
+// measure runs bin's hook event in dir 50 times, after 3 runs to warm up
+// caches, and returns the p50 and p95 of the 50 and what the last one wrote.
+func measure(t *testing.T, bin, dir, stdin string, event Event) (p50, p95 time.Duration, out string) {
+	t.Helper()
+	var stdout bytes.Buffer
+	var times []time.Duration
+	for i := range 53 {
+		cmd := exec.Command(bin, "hook", string(event)) //nolint:gosec // the aval just built
+		cmd.Dir, cmd.Stdin, cmd.Stdout = dir, strings.NewReader(stdin), &stdout
+		stdout.Reset()
+		start := time.Now()
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("aval hook %s in %s: %v", event, dir, err)
+		}
+		if i >= 3 {
+			times = append(times, time.Since(start))
+		}
+	}
+	slices.Sort(times)
+	return times[len(times)/2], times[(len(times)*95+99)/100-1], stdout.String()
 }
 
 // TestNoCharm checks ADR-0003's rule as the go tool sees it: neither

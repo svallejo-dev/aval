@@ -20,6 +20,7 @@
 package overlay
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -33,6 +34,7 @@ import (
 	"github.com/svallejo-dev/aval/internal/evidence"
 	"github.com/svallejo-dev/aval/internal/gotest"
 	"github.com/svallejo-dev/aval/internal/obligation"
+	"github.com/svallejo-dev/aval/internal/platform/git"
 	"github.com/svallejo-dev/aval/internal/platform/gitenv"
 )
 
@@ -74,7 +76,7 @@ type Worktree struct {
 	// ones head deleted, repository-relative with "/" separators.
 	Copied, Removed []string
 
-	repo      repo            // the caller's repository
+	common    repo            // the repository's common directory, where Close runs git
 	tmp       string          // the temporary directory that holds the worktree
 	moduleDir string          // where go test runs: the worktree's counterpart of dir
 	module    string          // the module path in head's go.mod
@@ -121,8 +123,9 @@ var (
 	// ErrRevision is wrapped when base or head does not name a commit.
 	ErrRevision = errors.New("overlay: not a commit")
 	// ErrToolMissing is wrapped when git or go is not on PATH, together
-	// with the *GitError or *gotest.ToolError that found out, or git is
-	// older than 2.40. Callers map it to exit code 3.
+	// with the *git.Error or *gotest.ToolError that found out, or when git
+	// is older than 2.40; git's errors wrap git.ErrToolMissing too. Callers
+	// map it to exit code 3.
 	ErrToolMissing = errors.New("overlay: git 2.40 or later and go are required")
 	// ErrCleanup is wrapped when the worktree or its temporary directory
 	// could not be removed.
@@ -161,20 +164,24 @@ func Strength(before, after evidence.Status, characterization bool) evidence.Str
 // targets' packages: other packages' test files never build into the runs,
 // and a test may read testdata shared across packages.
 //
-// The caller must Close the Worktree. When Prepare fails, nothing is left
-// to close. Git steps that write the worktree run to completion even if ctx
-// ends, so git never leaves one half-written.
+// The caller must Close the Worktree, which works even once dir is gone.
+// When Prepare fails, nothing is left to close. Git steps that write the
+// worktree run to completion even if ctx ends, so git never leaves one
+// half-written.
 func Prepare(ctx context.Context, dir, base, head string, opts PrepareOptions) (*Worktree, error) {
-	w, err := prepare(ctx, repo{dir: dir}, base, head, opts)
+	w, err := prepare(ctx, newRepo(dir), base, head, opts)
 	return w, toolMissing(err)
 }
 
 func prepare(ctx context.Context, r repo, base, head string, opts PrepareOptions) (*Worktree, error) {
-	if err := r.checkVersion(ctx); err != nil {
+	if err := r.CheckVersion(ctx); err != nil {
+		return nil, fmt.Errorf("overlay: %w", err)
+	}
+	common, err := r.commonDir(ctx)
+	if err != nil {
 		return nil, err
 	}
-	w := &Worktree{repo: r}
-	var err error
+	w := &Worktree{common: common}
 	if w.Base, err = r.commit(ctx, base); err != nil {
 		return nil, err
 	}
@@ -193,13 +200,17 @@ func prepare(ctx context.Context, r repo, base, head string, opts PrepareOptions
 	}
 	w.Copied, w.Removed, w.others = c.copy, c.remove, c.others
 
-	if w.tmp, err = os.MkdirTemp(tempRoot(opts.TempDir), "aval-overlay-"); err != nil {
+	tmpRoot, err := tempRoot(opts.TempDir)
+	if err != nil {
+		return nil, err
+	}
+	if w.tmp, err = os.MkdirTemp(tmpRoot, "aval-overlay-"); err != nil {
 		return nil, fmt.Errorf("overlay: %w", err)
 	}
-	wt := repo{dir: filepath.Join(w.tmp, "base")}
+	wt := newRepo(filepath.Join(w.tmp, "base"))
 	w.moduleDir = filepath.Join(wt.dir, filepath.FromSlash(w.root))
 	if err := r.addWorktree(ctx, wt.dir, w.Base); err != nil {
-		return nil, errors.Join(err, r.cleanup(w.tmp, wt.dir, false))
+		return nil, errors.Join(err, common.cleanup(w.tmp, wt.dir, false))
 	}
 	w.added = newPackages(wt.dir, c.newGo)
 	if err := wt.overlay(ctx, w.Head, w.Copied, w.Removed); err != nil {
@@ -255,7 +266,7 @@ func (w *Worktree) Close() error {
 		return nil
 	}
 	w.closed = true
-	return w.repo.cleanup(w.tmp, filepath.Join(w.tmp, "base"), true)
+	return w.common.cleanup(w.tmp, filepath.Join(w.tmp, "base"), true)
 }
 
 // newPackages returns the repository-relative directories of files, the
@@ -280,18 +291,20 @@ func newPackages(wt string, files []string) map[string]bool {
 	return added
 }
 
-// toolMissing marks errors that come from a missing git or go.
+// toolMissing marks errors that come from a missing git or go, or an old git.
 func toolMissing(err error) error {
-	if errors.Is(err, exec.ErrNotFound) && !errors.Is(err, ErrToolMissing) {
+	if (errors.Is(err, exec.ErrNotFound) || errors.Is(err, git.ErrToolMissing)) && !errors.Is(err, ErrToolMissing) {
 		return fmt.Errorf("%w: %w", ErrToolMissing, err)
 	}
 	return err
 }
 
-// tempRoot returns the directory the worktree goes in; "" means os.TempDir.
-func tempRoot(dir string) string {
-	if dir != "" {
-		return dir
+// tempRoot returns the absolute directory the worktree goes in: dir, else
+// $RUNNER_TEMP, else os.TempDir(). Absolute, because git runs elsewhere.
+func tempRoot(dir string) (string, error) {
+	abs, err := filepath.Abs(cmp.Or(dir, os.Getenv("RUNNER_TEMP"), os.TempDir()))
+	if err != nil {
+		return "", fmt.Errorf("overlay: %w", err)
 	}
-	return os.Getenv("RUNNER_TEMP")
+	return abs, nil
 }

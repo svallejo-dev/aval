@@ -1,17 +1,20 @@
 package overlay
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/svallejo-dev/aval/internal/evidence"
+	"github.com/svallejo-dev/aval/internal/platform/git"
 )
 
 // goEnv keeps the developer's workspace, flags, toolchain and proxy out of
@@ -40,12 +43,13 @@ func (r testRepo) git(args ...string) string {
 }
 
 // fixtureRepo commits testdata/repo/base and then testdata/repo/head, and
-// returns the repository and both commits. The index is rebuilt from the
-// files each time, so a rename that only changes case is one on macOS too.
-func fixtureRepo(t *testing.T) (r testRepo, base, head string) {
+// returns the repository, made with the extra git init args, and both
+// commits. The index is rebuilt from the files each time, so a rename that
+// only changes case is one on macOS too.
+func fixtureRepo(t *testing.T, initArgs ...string) (r testRepo, base, head string) {
 	t.Helper()
 	r = testRepo{t: t, dir: t.TempDir()}
-	r.git("init", "--quiet")
+	r.git(append([]string{"init", "--quiet"}, initArgs...)...)
 	commit := func(tree string) string {
 		entries, err := os.ReadDir(r.dir)
 		if err != nil {
@@ -252,9 +256,9 @@ func TestPrepareRevisions(t *testing.T) {
 			t.Errorf("base %q: err = %v, want ErrRevision", rev, err)
 		}
 	}
-	var gerr *GitError
+	var gerr *git.Error
 	if _, err := Prepare(t.Context(), t.TempDir(), "HEAD~1", "HEAD", PrepareOptions{}); !errors.As(err, &gerr) || errors.Is(err, ErrRevision) {
-		t.Errorf("outside a repository: err = %v, want a *GitError", err)
+		t.Errorf("outside a repository: err = %v, want a *git.Error", err)
 	}
 }
 
@@ -297,8 +301,196 @@ func TestRunEnv(t *testing.T) {
 func TestPrepareGitMissing(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	_, err := Prepare(t.Context(), t.TempDir(), "HEAD~1", "HEAD", PrepareOptions{})
-	var gerr *GitError
+	var gerr *git.Error
 	if !errors.Is(err, ErrToolMissing) || !errors.Is(err, exec.ErrNotFound) || !errors.As(err, &gerr) {
-		t.Errorf("err = %v, want ErrToolMissing wrapping a *GitError and exec.ErrNotFound", err)
+		t.Errorf("err = %v, want ErrToolMissing wrapping a *git.Error and exec.ErrNotFound", err)
 	}
+}
+
+// TestPrepareSHA256 checks that attributes come from the repository's own
+// empty tree: git refuses the SHA-1 one in a SHA-256 repository.
+func TestPrepareSHA256(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a git repository")
+	}
+	t.Parallel()
+	probe := exec.CommandContext(t.Context(), "git", "init", "--quiet", "--object-format=sha256", t.TempDir()) //nolint:gosec // a temporary path
+	if out, err := probe.CombinedOutput(); err != nil {
+		t.Skipf("this git cannot create a SHA-256 repository: %v\n%s", err, out)
+	}
+	r, base, head := fixtureRepo(t, "--object-format=sha256")
+	tmp := t.TempDir()
+	w, err := Prepare(t.Context(), filepath.Join(r.dir, "svc"), base, head, PrepareOptions{TempDir: tmp})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for tree, file := range map[string]string{"head": "calc/calc_test.go", "base": "calc/calc.go"} {
+		want, err := os.ReadFile(filepath.Join("testdata", "repo", tree, "svc", file)) //nolint:gosec // a fixture
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := os.ReadFile(filepath.Join(w.moduleDir, file)); err != nil || !bytes.Equal(got, want) { //nolint:gosec // the worktree
+			t.Errorf("%s in the worktree = %q, %v; want %s's", file, got, err, tree)
+		}
+	}
+	if len(w.Base) != 64 || w.Base != base {
+		t.Errorf("Base = %s, want %s", w.Base, base)
+	}
+	if err := w.Close(); err != nil {
+		t.Error(err)
+	}
+	assertClean(t, r, tmp)
+}
+
+// TestCloseWithoutDir checks that Close removes the worktree once the
+// directory Prepare ran in is gone: git runs in the common directory.
+func TestCloseWithoutDir(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a git repository")
+	}
+	t.Parallel()
+	r, base, head := fixtureRepo(t)
+	dir, tmp := filepath.Join(r.dir, "svc"), t.TempDir()
+	w, err := Prepare(t.Context(), dir, base, head, PrepareOptions{TempDir: tmp})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Errorf("Close without %s: %v", dir, err)
+	}
+	assertClean(t, r, tmp)
+}
+
+// TestPrepareOldGit puts a git 2.39 first on PATH, so it cannot run in
+// parallel.
+func TestPrepareOldGit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake git is a shell script")
+	}
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\necho 'git version 2.39.5'\n"), 0o700); err != nil { //nolint:gosec // it must be executable
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	_, err := Prepare(t.Context(), t.TempDir(), "HEAD~1", "HEAD", PrepareOptions{})
+	if !errors.Is(err, ErrToolMissing) || !errors.Is(err, git.ErrToolMissing) {
+		t.Errorf("err = %v, want ErrToolMissing wrapping git.ErrToolMissing", err)
+	}
+}
+
+// planted builds a repository whose base holds the module svc with package
+// a, and whose head adds files, and returns it and both commits. change,
+// when not nil, runs on head's working tree before it is committed.
+func planted(t *testing.T, files map[string]string, change func(testRepo)) (r testRepo, base, head string) {
+	t.Helper()
+	r = testRepo{t: t, dir: t.TempDir()}
+	r.git("init", "--quiet")
+	write := func(files map[string]string) {
+		for name, content := range files {
+			p := filepath.Join(r.dir, filepath.FromSlash(name))
+			if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		r.git("add", "--all")
+	}
+	write(map[string]string{"svc/go.mod": "module example.com/svc\n", "svc/a/a.go": "package a\n"})
+	r.git("commit", "--quiet", "--message", "base")
+	base = r.git("rev-parse", "HEAD")
+	write(files)
+	if change != nil {
+		change(r)
+	}
+	r.git("commit", "--quiet", "--message", "head")
+	return r, base, r.git("rev-parse", "HEAD")
+}
+
+// prepareClean runs Prepare in r's svc, hands the Worktree to check and
+// then checks that Close leaves nothing behind.
+func prepareClean(t *testing.T, r testRepo, base, head string, check func(*Worktree)) {
+	t.Helper()
+	tmp := t.TempDir()
+	w, err := Prepare(t.Context(), filepath.Join(r.dir, "svc"), base, head, PrepareOptions{TempDir: tmp})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(w)
+	if err := w.Close(); err != nil {
+		t.Error(err)
+	}
+	assertClean(t, r, tmp)
+}
+
+// TestPrepareIgnoresHeadAttributes checks that a .gitattributes head adds
+// under testdata cannot filter what travels: with ident, git would write
+// $Id: <blob> $ into f.txt.
+func TestPrepareIgnoresHeadAttributes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a git repository")
+	}
+	t.Parallel()
+	r, base, head := planted(t, map[string]string{
+		"svc/a/testdata/.gitattributes": "* ident\n",
+		"svc/a/testdata/f.txt":          "$Id$\n",
+	}, nil)
+	prepareClean(t, r, base, head, func(w *Worktree) {
+		got, err := os.ReadFile(filepath.Join(w.moduleDir, "a", "testdata", "f.txt"))
+		if err != nil || string(got) != "$Id$\n" {
+			t.Errorf("f.txt in the worktree = %q, %v; want head's $Id$, unexpanded", got, err)
+		}
+	})
+}
+
+// TestPrepareLiteralPathspecs checks that a copied path is never read as a
+// pathspec: as magic, ":!x_test.go" alone would exclude itself and check
+// out everything else from head, production code included. Glob characters
+// alone, as in svc/[a]/x_test.go, can only reach test files that travel
+// anyway.
+func TestPrepareLiteralPathspecs(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a git repository")
+	}
+	t.Parallel()
+	r, base, head := planted(t, map[string]string{
+		":!x_test.go": "package x\n",
+		"svc/a/a.go":  "package a // head's fix\n",
+	}, nil)
+	prepareClean(t, r, base, head, func(w *Worktree) {
+		if want := []string{":!x_test.go"}; !reflect.DeepEqual(w.Copied, want) {
+			t.Fatalf("Copied = %q, want %q", w.Copied, want)
+		}
+		if got, err := os.ReadFile(filepath.Join(w.moduleDir, "a", "a.go")); err != nil || string(got) != "package a\n" {
+			t.Errorf("a.go in the worktree = %q, %v; want the base's", got, err)
+		}
+	})
+}
+
+// TestPrepareSeesIgnoredSubmodules checks that a head .gitmodules with
+// ignore = all cannot hide a gitlink head adds from the files that stay
+// behind.
+func TestPrepareSeesIgnoredSubmodules(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a git repository")
+	}
+	t.Parallel()
+	r, base, head := planted(t, map[string]string{
+		".gitmodules": "[submodule \"sub\"]\n\tpath = svc/a/sub\n\turl = ./sub\n\tignore = all\n",
+	}, func(r testRepo) {
+		// git add --all keeps a gitlink whose directory exists, even empty.
+		if err := os.MkdirAll(filepath.Join(r.dir, "svc", "a", "sub"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		r.git("update-index", "--add", "--cacheinfo", "160000,"+r.git("rev-parse", "HEAD")+",svc/a/sub")
+	})
+	prepareClean(t, r, base, head, func(w *Worktree) {
+		if want := []string{"svc/a/sub"}; !reflect.DeepEqual(w.uncopied([]string{"example.com/svc/a"}), want) {
+			t.Errorf("uncopied = %q, want %q: the gitlink stays behind", w.uncopied([]string{"example.com/svc/a"}), want)
+		}
+	})
 }

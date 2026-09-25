@@ -1,13 +1,11 @@
 package overlay
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"slices"
@@ -15,93 +13,31 @@ import (
 	"strings"
 	"time"
 
-	"github.com/svallejo-dev/aval/internal/platform/gitenv"
+	"github.com/svallejo-dev/aval/internal/platform/git"
 )
 
-// GitError reports a git command that failed or could not run.
-type GitError struct {
-	Args     []string // arguments to git
-	ExitCode int      // -1 when git did not start or did not exit on its own
-	Stderr   string
-	Err      error // the cause, if any, e.g. wrapping exec.ErrNotFound
+// settleTimeout bounds the git steps that run to completion although ctx
+// ended: adding the worktree, laying the overlay, cleaning up.
+const settleTimeout = 5 * time.Minute
+
+// repo runs hardened git in one directory.
+type repo struct {
+	*git.Runner
+	dir string
 }
 
-func (e *GitError) Error() string {
-	msg := "git " + strings.Join(e.Args, " ")
-	if e.Err != nil {
-		msg += ": " + e.Err.Error()
-	} else {
-		msg += fmt.Sprintf(": exit status %d", e.ExitCode)
-	}
-	if line, _, _ := strings.Cut(strings.TrimSpace(e.Stderr), "\n"); line != "" {
-		msg += ": " + line
-	}
-	return msg
+func newRepo(dir string) repo {
+	return repo{Runner: git.New(dir), dir: dir}
 }
 
-func (e *GitError) Unwrap() error { return e.Err }
-
-const (
-	// waitDelay bounds how long git may keep its output open once it has
-	// exited or been stopped.
-	waitDelay = 5 * time.Second
-	// settleTimeout bounds the git steps that run to completion although
-	// ctx ended: adding the worktree, laying the overlay, cleaning up.
-	settleTimeout = 5 * time.Minute
-	// attrSource makes git read attributes from the empty tree, so head's
-	// .gitattributes cannot change diffs or checkouts (ADR-0005 §1). It is
-	// the SHA-1 empty tree: SHA-256 repositories are not supported.
-	attrSource = "--attr-source=4b825dc642cb6eb9a060e54bf8d69288fbee4904"
-)
-
-// repo runs git in one directory.
-type repo struct{ dir string }
-
-// git runs git with args, without hooks, replace refs, grafts or the
-// caller's repository variables, and returns its standard output.
-func (r repo) git(ctx context.Context, stdin []byte, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-c", "core.hooksPath=" + os.DevNull}, args...)...) //nolint:gosec // no shell: fixed subcommands, full SHAs and paths git listed
-	cmd.Dir = r.dir
-	cmd.Env = append(gitenv.Clean(os.Environ()), "GIT_NO_REPLACE_OBJECTS=1", "GIT_GRAFT_FILE="+os.DevNull)
-	if stdin != nil {
-		cmd.Stdin = bytes.NewReader(stdin)
-	}
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	cmd.WaitDelay = waitDelay
-	err := cmd.Run()
-	var exitErr *exec.ExitError
-	switch {
-	case err == nil:
-		return stdout.Bytes(), nil
-	case ctx.Err() != nil:
-		return nil, fmt.Errorf("git %s: %w", strings.Join(args, " "), context.Cause(ctx))
-	case errors.As(err, &exitErr) && exitErr.Exited():
-		return nil, &GitError{Args: args, ExitCode: exitErr.ExitCode(), Stderr: stderr.String()}
-	}
-	return nil, &GitError{Args: args, ExitCode: -1, Stderr: stderr.String(), Err: err}
-}
-
-// checkVersion refuses a git older than 2.40, the first with --attr-source.
-func (r repo) checkVersion(ctx context.Context) error {
-	out, err := r.git(ctx, nil, "version")
+// commonDir returns the repository's common directory, which outlives the
+// directory r is in and every linked worktree.
+func (r repo) commonDir(ctx context.Context) (repo, error) {
+	out, err := r.Run(ctx, nil, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil {
-		return err
+		return repo{}, fmt.Errorf("overlay: %w", err)
 	}
-	if v := strings.TrimSpace(string(out)); !supported(v) {
-		return fmt.Errorf("%w: found %q", ErrToolMissing, v)
-	}
-	return nil
-}
-
-// supported reports whether version, as `git version` prints it, is 2.40
-// or later.
-func supported(version string) bool {
-	var major, minor int
-	if _, err := fmt.Sscanf(version, "git version %d.%d", &major, &minor); err != nil {
-		return false
-	}
-	return major > 2 || major == 2 && minor >= 40
+	return newRepo(strings.TrimSuffix(string(out), "\n")), nil
 }
 
 // commit resolves rev to a full commit SHA.
@@ -109,26 +45,32 @@ func (r repo) commit(ctx context.Context, rev string) (string, error) {
 	if rev == "" {
 		return "", fmt.Errorf("%w: %q", ErrRevision, rev)
 	}
-	out, err := r.git(ctx, nil, "rev-parse", "--verify", "--quiet", "--end-of-options", rev+"^{commit}")
-	var gerr *GitError
-	if errors.As(err, &gerr) && gerr.ExitCode == 1 { // --quiet: exit 1 and no message
+	out, err := r.Run(ctx, nil, "rev-parse", "--verify", "--quiet", "--end-of-options", rev+"^{commit}")
+	var gerr *git.Error
+	switch {
+	case errors.As(err, &gerr) && gerr.ExitCode == 1: // --quiet: exit 1 and no message
 		return "", fmt.Errorf("%w: %q", ErrRevision, rev)
+	case err != nil:
+		return "", fmt.Errorf("overlay: %w", err)
 	}
-	return strings.TrimSpace(string(out)), err
+	return strings.TrimSpace(string(out)), nil
 }
 
 // prefix returns the path of dir inside its work tree: "" at the top, or
 // "sub/dir".
 func (r repo) prefix(ctx context.Context) (string, error) {
-	out, err := r.git(ctx, nil, "rev-parse", "--show-prefix")
-	return strings.TrimSuffix(strings.TrimSuffix(string(out), "\n"), "/"), err
+	out, err := r.Run(ctx, nil, "rev-parse", "--show-prefix")
+	if err != nil {
+		return "", fmt.Errorf("overlay: %w", err)
+	}
+	return strings.TrimSuffix(strings.TrimSuffix(string(out), "\n"), "/"), nil
 }
 
 // modulePath reads the module path from the go.mod in root at commit.
 func (r repo) modulePath(ctx context.Context, commit, root string) (string, error) {
-	out, err := r.git(ctx, nil, "cat-file", "blob", "--end-of-options", commit+":"+path.Join(root, "go.mod"))
+	out, err := r.Run(ctx, nil, "cat-file", "blob", "--end-of-options", commit+":"+path.Join(root, "go.mod"))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("overlay: %w", err)
 	}
 	for line := range strings.Lines(string(out)) {
 		if f := strings.Fields(line); len(f) >= 2 && f[0] == "module" {
@@ -151,10 +93,10 @@ type changeSet struct {
 // changes lists the paths that differ between base and head. Renames count
 // as a deletion and an addition, so no rename heuristics apply.
 func (r repo) changes(ctx context.Context, base, head string) (changeSet, error) {
-	out, err := r.git(ctx, nil, attrSource, "diff-tree", "-r", "-z", "--no-renames", "--name-status",
+	out, err := r.Run(ctx, nil, "diff-tree", "-r", "-z", "--no-renames", "--name-status",
 		"--ignore-submodules=none", "--end-of-options", base, head)
 	if err != nil {
-		return changeSet{}, err
+		return changeSet{}, fmt.Errorf("overlay: %w", err)
 	}
 	return parseChanges(out)
 }
@@ -209,8 +151,10 @@ func settled(ctx context.Context) (context.Context, context.CancelFunc) {
 func (r repo) addWorktree(ctx context.Context, dir, commit string) error {
 	ctx, cancel := settled(ctx)
 	defer cancel()
-	_, err := r.git(ctx, nil, attrSource, "worktree", "add", "--detach", "--end-of-options", dir, commit)
-	return err
+	if _, err := r.Run(ctx, nil, "worktree", "add", "--detach", "--end-of-options", dir, commit); err != nil {
+		return fmt.Errorf("overlay: %w", err)
+	}
+	return nil
 }
 
 // overlay deletes the removed paths from the worktree r is in and then
@@ -234,21 +178,24 @@ func (r repo) overlay(ctx context.Context, commit string, copied, removed []stri
 		return nil
 	}
 	paths := []byte(strings.Join(copied, "\x00"))
-	_, err = r.git(ctx, paths, attrSource, "--literal-pathspecs", "checkout",
-		"--pathspec-from-file=-", "--pathspec-file-nul", "--end-of-options", commit)
-	return err
+	if _, err := r.Run(ctx, paths, "--literal-pathspecs", "checkout",
+		"--pathspec-from-file=-", "--pathspec-file-nul", "--end-of-options", commit); err != nil {
+		return fmt.Errorf("overlay: %w", err)
+	}
+	return nil
 }
 
 // cleanup removes the worktree at dir, if it was added, and tmp, which holds
-// it. When git could not remove the worktree, prune drops what it left in
-// the repository once tmp is gone. Pruning only then leaves the admin
-// entries of the caller's own missing worktrees alone.
+// it; r is the repository's common directory, which is still there when the
+// caller's directory is gone. When git could not remove the worktree, prune
+// drops what it left in the repository once tmp is gone. Pruning only then
+// leaves the admin entries of the caller's own missing worktrees alone.
 func (r repo) cleanup(tmp, dir string, added bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), settleTimeout)
 	defer cancel()
 	removed := false
 	if added {
-		_, err := r.git(ctx, nil, "worktree", "remove", "--force", "--force", "--end-of-options", dir)
+		_, err := r.Run(ctx, nil, "worktree", "remove", "--force", "--force", "--end-of-options", dir)
 		removed = err == nil
 	}
 	var errs []error
@@ -256,7 +203,7 @@ func (r repo) cleanup(tmp, dir string, added bool) error {
 		errs = append(errs, err)
 	}
 	if !removed {
-		if _, err := r.git(ctx, nil, "worktree", "prune"); err != nil {
+		if _, err := r.Run(ctx, nil, "worktree", "prune"); err != nil {
 			errs = append(errs, err)
 		}
 	}
