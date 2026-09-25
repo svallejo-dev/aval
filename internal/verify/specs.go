@@ -37,24 +37,39 @@ func needsFailBefore(d deltaOf) bool {
 // unchanged, and RENAMED is not part of the delta at all: it keeps the ID, so
 // the test need not change (ADR-0005 §1).
 func (c *collector) touched() ([]gate.Change, map[obligation.ID]deltaOf, error) {
-	heads := make(map[string]openspec.Change, len(c.headSpecs.Changes))
+	heads, headIDs := map[string]openspec.Change{}, map[string]bool{}
 	for _, ch := range c.headSpecs.Changes {
-		heads[ch.Dir] = ch
+		heads[ch.Dir], headIDs[ch.ID] = ch, true
 	}
-	bases := map[string]openspec.Change{}
+	basesByDir, basesByID := map[string]openspec.Change{}, map[string]openspec.Change{}
 	if c.baseSpecs != nil {
 		for _, ch := range c.baseSpecs.Changes {
-			bases[ch.ID] = ch
+			basesByDir[ch.Dir], basesByID[ch.ID] = ch, ch
 		}
 	}
 
 	changes := []gate.Change{}
+	seen := map[string]bool{}
 	deltas := map[obligation.ID]deltaOf{}
 	for _, dir := range changeDirs(c.changed) {
-		ch, ok := heads[dir]
-		if !ok {
-			continue // the pull request deleted the change, deltas and all
+		ch, atHead := heads[dir]
+		if !atHead {
+			// The pull request deleted the change, or archived it, in which
+			// case its new directory carries it. A deletion still keeps the
+			// tier the base gave it: head may raise the tier, never lower it
+			// (ADR-0005 §1), and with it the premortem the tier asks for.
+			base, atBase := basesByDir[dir]
+			if !atBase || headIDs[base.ID] || seen[base.ID] {
+				continue
+			}
+			seen[base.ID] = true
+			changes = append(changes, gate.Change{ID: base.ID, BaseTier: tierOf(base.Manifest)})
+			continue
 		}
+		if seen[ch.ID] {
+			continue
+		}
+		seen[ch.ID] = true
 		var ids []obligation.ID
 		for _, d := range ch.Deltas {
 			for _, q := range []openspec.Requirement{d.Requirement, d.From, d.To} {
@@ -78,7 +93,7 @@ func (c *collector) touched() ([]gate.Change, map[obligation.ID]deltaOf, error) 
 			return nil, nil, err
 		}
 		changes = append(changes, gate.Change{
-			ID: ch.ID, Tier: tierOf(ch.Manifest), BaseTier: tierOf(bases[ch.ID].Manifest), Premortem: pm,
+			ID: ch.ID, Tier: tierOf(ch.Manifest), BaseTier: tierOf(basesByID[ch.ID].Manifest), Premortem: pm,
 		})
 	}
 	return changes, deltas, nil
@@ -192,15 +207,19 @@ func (c *collector) newFindings() []openspec.Finding {
 		return head
 	}
 	moved := c.archivedHere()
-	seen := make(map[[3]string]bool)
+	// A count, not a set: two identical findings at head where the base had
+	// one is one new finding, and the pull request answers for it.
+	was := make(map[[3]string]int)
 	for _, f := range c.baseSpecs.Check(openspec.CheckOptions{}) {
-		seen[findingKey(f, nil)] = true
+		was[findingKey(f, nil)]++
 	}
 	out := []openspec.Finding{}
 	for _, f := range head {
-		if !seen[findingKey(f, moved)] {
-			out = append(out, f)
+		if k := findingKey(f, moved); was[k] > 0 {
+			was[k]--
+			continue
 		}
+		out = append(out, f)
 	}
 	return out
 }

@@ -52,6 +52,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/svallejo-dev/aval/internal/baseline"
+	"github.com/svallejo-dev/aval/internal/codeowners"
 	"github.com/svallejo-dev/aval/internal/evidence"
 	"github.com/svallejo-dev/aval/internal/gate"
 	"github.com/svallejo-dev/aval/internal/gotest"
@@ -89,6 +90,11 @@ const lintConfig = ".golangci.yml"
 // that its absence is explicit in every bundle instead of reading as a pass.
 var notCollected = []string{"mutation", "rollback", "slo"}
 
+// notValidated joins notCollected when the pull request touches openspec/ and
+// the base has no policy to take the pinned OpenSpec version from, so that a
+// skipped openspec validate never reads as a passing one.
+const notValidated = "spec_validation"
+
 // Options configures Collect.
 type Options struct {
 	// Dir is any directory of the repository; Collect works from its root,
@@ -100,13 +106,6 @@ type Options struct {
 	// Base is the merge base of the pull request with the target branch and
 	// Head its head commit (ADR-0005 §1).
 	Base, Head string
-	// Policy is the base policy when the caller has already read it, together
-	// with PolicySource; Collect then trusts it as read. Nil means Collect
-	// reads the root aval.yaml of the base commit itself, and a base without
-	// one leaves Input.Policy nil, which makes the gate observe.
-	Policy *manifest.Repo
-	// PolicySource says where Policy came from, for the command's report.
-	PolicySource string
 	// Approvals are the pull request's reviews, already judged (ADR-0005 §5).
 	// Collect makes no network call: the gate command reads them.
 	Approvals []evidence.Approval
@@ -150,6 +149,7 @@ type Evidence struct {
 	// Root is the repository root Collect worked from.
 	Root string
 
+	notCollected      []string
 	repo, avalVersion string
 	generatedAt       time.Time
 	key               hook.Key // the working tree as it was before anything ran
@@ -172,6 +172,9 @@ func Collect(ctx context.Context, o Options) (*Evidence, error) {
 	if err != nil {
 		return nil, classify(err)
 	}
+	// Deferred as well as called, so that a panic does not leave a worktree
+	// registered and a temporary directory behind; close does nothing twice.
+	defer func() { _ = c.close() }()
 	ev, err := c.collect(ctx)
 	if cerr := c.close(); err == nil {
 		err = cerr
@@ -201,7 +204,7 @@ func (e *Evidence) Bundle(verdict evidence.Verdict) evidence.Bundle {
 		Tamper:        e.Input.Tamper,
 		Approvals:     e.Input.Approvals,
 		Verdict:       verdict,
-		NotCollected:  slices.Clone(notCollected),
+		NotCollected:  slices.Clone(e.notCollected),
 	}
 }
 
@@ -249,7 +252,10 @@ type collector struct {
 	baseline  baseline.Baseline
 	baseSpecs *openspec.Repo // nil when the base has no openspec/
 	baseDecls []testsource.Declaration
-	baseLint  string // path of the base .golangci.yml, "" when it has none
+	// baseLint is the content of the base .golangci.yml, nil when it has
+	// none, and lintFile the copy the ratchet writes inside the repository.
+	baseLint []byte
+	lintFile string
 
 	headSpecs *openspec.Repo
 	headDecls []testsource.Declaration
@@ -261,6 +267,7 @@ type collector struct {
 
 	report gotest.Report // the full run at head
 	matrix trace.Matrix
+	closed bool
 }
 
 func newCollector(ctx context.Context, o Options) (*collector, error) {
@@ -279,6 +286,7 @@ func newCollector(ctx context.Context, o Options) (*collector, error) {
 		ev: &Evidence{
 			Root: root, Changes: []string{}, Checks: []evidence.Check{},
 			PolicySource: "the base commit has no root aval.yaml",
+			notCollected: slices.Clone(notCollected),
 			repo:         o.Repo, avalVersion: o.AvalVersion,
 			generatedAt: time.Now().UTC(), key: key,
 		},
@@ -289,10 +297,6 @@ func newCollector(ctx context.Context, o Options) (*collector, error) {
 	}
 	if c.ev.Head, err = c.commit(ctx, o.Head); err != nil {
 		return nil, err
-	}
-	if o.Policy != nil {
-		c.ev.Input.Policy = o.Policy
-		c.ev.PolicySource = cmp.Or(o.PolicySource, "given by the caller")
 	}
 	if c.tmp, err = os.MkdirTemp(tempRoot(o.TempDir), "aval-verify-"); err != nil {
 		return nil, fmt.Errorf("verify: %w", err)
@@ -312,11 +316,22 @@ func (c *collector) collect(ctx context.Context) (*Evidence, error) {
 	return c.ev, nil
 }
 
-// close removes the fail-before worktree and the temporary directory.
+// close removes the fail-before worktree, the base configuration the ratchet
+// wrote inside the repository and the temporary directory. It does nothing
+// after the first call.
 func (c *collector) close() error {
+	if c.closed {
+		return nil
+	}
+	c.closed = true
 	var errs []error
 	if c.work != nil {
 		errs = append(errs, c.work.Close())
+	}
+	if c.lintFile != "" {
+		if err := os.Remove(c.lintFile); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, err)
+		}
 	}
 	if err := os.RemoveAll(c.tmp); err != nil {
 		errs = append(errs, err)
@@ -359,15 +374,6 @@ func (c *collector) readGit(ctx context.Context) error {
 		return err
 	}
 
-	changes, deltas, err := c.touched()
-	if err != nil {
-		return err
-	}
-	c.ev.Input.Changes, c.deltas = changes, deltas
-	for _, ch := range changes {
-		c.ev.Changes = append(c.ev.Changes, ch.ID)
-	}
-
 	second, ctx2 := c.group(ctx)
 	second.Go(func() error {
 		var err error
@@ -384,9 +390,22 @@ func (c *collector) readGit(ctx context.Context) error {
 		c.baseDecls, err = scanTests(c.baseDir)
 		return err
 	})
-	second.Go(func() error { return c.prepare(ctx2) })
 	second.Go(func() error { return c.validateSpecs(ctx2) })
-	return wait(second)
+	if err := wait(second); err != nil {
+		return err
+	}
+
+	// Last, because it needs both trees: which changes the range touches, what
+	// their deltas claim and what tier they carry at each end.
+	changes, deltas, err := c.touched()
+	if err != nil {
+		return err
+	}
+	c.ev.Input.Changes, c.deltas = changes, deltas
+	for _, ch := range changes {
+		c.ev.Changes = append(c.ev.Changes, ch.ID)
+	}
+	return nil
 }
 
 // group returns an errgroup bounded by Options.Concurrency.
@@ -432,10 +451,12 @@ func (c *collector) readBaseTree(ctx context.Context) error {
 			return fmt.Errorf("%w: at %s: %w", ErrUsage, c.ev.Base, err)
 		}
 	}
-	if _, ok, err := c.baseFile(lintConfig); err != nil {
+	// The bytes, not the path: the temporary tree is still on disk when
+	// head's tests run, and one of them could rewrite the file there.
+	if data, ok, err := c.baseFile(lintConfig); err != nil {
 		return err
 	} else if ok {
-		c.baseLint = filepath.Join(c.baseDir, lintConfig)
+		c.baseLint = data
 	}
 	return nil
 }
@@ -454,32 +475,18 @@ func (c *collector) classify(ctx context.Context) ([]evidence.Commit, error) {
 	return commits, nil
 }
 
-// prepare lays head's test files over the base in a temporary worktree, from
-// git objects alone and before head's tests run (ADR-0005 §2). It is skipped
-// when no obligation of the delta needs fail-before evidence.
-func (c *collector) prepare(ctx context.Context) error {
-	needed := false
-	for _, d := range c.deltas {
-		needed = needed || needsFailBefore(d)
-	}
-	if !needed {
-		return nil
-	}
-	w, err := overlay.Prepare(ctx, c.ev.Root, c.ev.Base, c.ev.Head, overlay.PrepareOptions{TempDir: c.tmp})
-	if err != nil {
-		return fmt.Errorf("verify: %w", err)
-	}
-	c.work = w
-	return nil
-}
-
 // validateSpecs runs openspec validate, but only when the pull request
 // touches openspec/ and the base pins a version to run (ADR-0005 §1).
 func (c *collector) validateSpecs(ctx context.Context) error {
-	p := c.ev.Input.Policy
-	if p == nil || !slices.ContainsFunc(c.changed, func(f string) bool {
+	if !slices.ContainsFunc(c.changed, func(f string) bool {
 		return f == openspec.Dir || strings.HasPrefix(f, openspec.Dir+"/")
 	}) {
+		return nil
+	}
+	p := c.ev.Input.Policy
+	if p == nil {
+		// Only the base pins the version, and head's pin is not trusted.
+		c.ev.notCollected = append(c.ev.notCollected, notValidated)
 		return nil
 	}
 	validate := openspec.Validate
@@ -530,7 +537,10 @@ func (c *collector) tamper() []evidence.Finding {
 		switch {
 		case f == baseline.Path:
 			kind = evidence.BaselineEdited
-		case f == "aval.yaml", f == "CODEOWNERS", f == lintConfig, strings.HasPrefix(f, ".github/"):
+		// .gitattributes at any depth: it steers what git reports, so an edit
+		// of one is an edit of the policy's own machinery.
+		case f == "aval.yaml", f == lintConfig, strings.HasPrefix(f, ".github/"),
+			slices.Contains(codeowners.Locations(), f), path.Base(f) == ".gitattributes":
 		default:
 			continue
 		}

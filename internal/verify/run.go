@@ -137,13 +137,23 @@ func newState(id obligation.ID, d deltaOf, src string, characterization bool, te
 	}
 }
 
-// failBefore runs the targets' tests at the base, over the worktree phase 1
-// prepared, and records what they showed (ADR-0005 §2).
+// failBefore lays head's test files over the base in a temporary worktree and
+// runs the targets' tests there (ADR-0005 §2).
+//
+// The worktree is built here, after head's own tests and not in phase 1,
+// although overlay builds it from git objects either way: one standing while
+// head's tests run is a tree they could rewrite, and a failure they planted
+// there reads as strong evidence. Nothing about it is read from git later.
 func (c *collector) failBefore(ctx context.Context, obs []*state, targets []overlay.Target) error {
-	if len(targets) == 0 || c.work == nil {
+	if len(targets) == 0 {
 		return nil
 	}
-	res, err := c.work.Run(ctx, targets, overlay.RunOptions{Timeout: c.o.TestTimeout, Env: c.o.Env})
+	w, err := overlay.Prepare(ctx, c.ev.Root, c.ev.Base, c.ev.Head, overlay.PrepareOptions{TempDir: c.tmp})
+	if err != nil {
+		return fmt.Errorf("verify: %w", err)
+	}
+	c.work = w
+	res, err := w.Run(ctx, targets, overlay.RunOptions{Timeout: c.o.TestTimeout, Env: c.o.Env})
 	if err != nil {
 		return fmt.Errorf("verify: %w", err)
 	}
@@ -276,8 +286,8 @@ func selector(id obligation.ID, name string) string {
 	return strings.Join(levels, "/")
 }
 
-// rank orders statuses from best to worst; an empty or unknown one ranks
-// lowest. A package that did not build ran none of its tests.
+// rank orders statuses from best to worst. A package that did not build ran
+// none of its tests.
 var rank = map[evidence.Status]int{
 	evidence.Pass:      1,
 	evidence.Skipped:   2,
@@ -286,12 +296,20 @@ var rank = map[evidence.Status]int{
 	evidence.BuildFail: 5,
 }
 
-// worse returns the worse of a and b.
+// worse returns the worse of a and b. A status aval does not know, the empty
+// one included, ranks worst: it fails closed, never as a pass.
 func worse(a, b evidence.Status) evidence.Status {
-	if rank[b] > rank[a] {
+	if rankOf(b) > rankOf(a) {
 		return b
 	}
 	return a
+}
+
+func rankOf(s evidence.Status) int {
+	if r, ok := rank[s]; ok {
+		return r
+	}
+	return len(rank) + 1
 }
 
 // reportStatus is what one go test run did as a whole: build_fail when a

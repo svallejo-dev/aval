@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -41,28 +43,34 @@ type lintReport struct {
 	} `json:"Issues"`
 }
 
-// ratchet runs golangci-lint with the .golangci.yml of the base commit, which
-// phase 1 extracted from git, and --new-from-merge-base, so that only what the
-// range adds counts (ADR-0005 §4, lint_new_issues). A base without a
-// configuration switches the rule off; a run that does not finish leaves
-// Ran false, which blocks.
+// ratchet runs golangci-lint with the .golangci.yml of the base commit, whose
+// bytes phase 1 read from the object database, and --new-from-merge-base, so
+// that only what the range adds counts (ADR-0005 §4, lint_new_issues). A base
+// without a configuration switches the rule off; a run that does not finish
+// leaves Ran false, which blocks.
 //
 // The error wraps ErrTool when golangci-lint is missing or is not version 2:
 // the flags the ratchet needs are that version's.
 func (c *collector) ratchet(ctx context.Context) (gate.Lint, error) {
-	if c.baseLint == "" {
+	if c.baseLint == nil {
 		return gate.Lint{}, nil
 	}
 	lint := gate.Lint{BaseConfig: true}
 	if err := c.lintToolVersion(ctx); err != nil {
 		return lint, err
 	}
+	cfg, err := c.writeBaseLint()
+	if err != nil {
+		return lint, err
+	}
 	args := []string{
-		"run", "--config", c.baseLint, "--new-from-merge-base", c.ev.Base,
+		"run", "--config", cfg, "--new-from-merge-base", c.ev.Base,
 		"--issues-exit-code=0", "--output.json.path", "stdout", "./...",
 	}
 	start := time.Now()
-	out, code, err := c.lintRun(ctx, args...)
+	// Only what golangci-lint wrote to standard output decides: its warnings
+	// go to standard error, where they cannot break the report.
+	out, _, code, err := c.lintRun(ctx, args...)
 	if err != nil {
 		return lint, err
 	}
@@ -85,13 +93,33 @@ func (c *collector) ratchet(ctx context.Context) (gate.Lint, error) {
 	return lint, nil
 }
 
+// writeBaseLint writes the base configuration inside the repository root, as
+// .golangci.base-<base>.yml, immediately before the run and never earlier.
+// golangci-lint anchors a configuration's own relative paths at the directory
+// the file is in, so one outside the repository would silently void every
+// path rule the base configuration has and report issues it excludes. The name
+// is not the one the policy watches, and git never reported it, so it appears
+// in no diff, no scope and no tamper finding; close removes it.
+func (c *collector) writeBaseLint() (string, error) {
+	name := filepath.Join(c.ev.Root, ".golangci.base-"+c.ev.Base+".yml")
+	if err := os.WriteFile(name, c.baseLint, 0o600); err != nil {
+		return "", fmt.Errorf("verify: write the base lint configuration: %w", err)
+	}
+	c.lintFile = name
+	return name, nil
+}
+
 // lintToolVersion checks that golangci-lint is on PATH and is version 2.
 func (c *collector) lintToolVersion(ctx context.Context) error {
-	out, _, err := c.lintRun(ctx, "version")
+	out, stderr, _, err := c.lintRun(ctx, "version")
 	if err != nil {
 		return err
 	}
 	m := lintVersion.FindSubmatch(out)
+	if m == nil {
+		m = lintVersion.FindSubmatch(stderr)
+		out = stderr
+	}
 	if m == nil {
 		return fmt.Errorf("%w: %s version says %q", ErrTool, lintTool, bytes.TrimSpace(out))
 	}
@@ -102,29 +130,29 @@ func (c *collector) lintToolVersion(ctx context.Context) error {
 }
 
 // lintRun runs golangci-lint in the repository root and returns what it wrote
-// to standard output and standard error together, capped, and its exit
-// status. A non-zero status is not an error: the caller decides.
-func (c *collector) lintRun(ctx context.Context, args ...string) ([]byte, int, error) {
+// to standard output and to standard error, each capped and kept apart so that
+// a "level=warning" line cannot end up in the report aval decodes, and its
+// exit status. A non-zero status is not an error: the caller decides.
+func (c *collector) lintRun(ctx context.Context, args ...string) (stdout, stderr []byte, code int, err error) {
 	cmd := exec.CommandContext(ctx, lintTool, args...) //nolint:gosec // no shell: a fixed command with aval's own arguments
 	cmd.Dir = c.ev.Root
 	cmd.Env = append(c.testEnv(), c.o.Env...)
-	var out capped
-	out.max = maxLintOutput
-	cmd.Stdout, cmd.Stderr = &out, &out
+	out, errs := capped{max: maxLintOutput}, capped{max: maxLintOutput}
+	cmd.Stdout, cmd.Stderr = &out, &errs
 	cmd.WaitDelay = lintWaitDelay
-	err := cmd.Run()
+	err = cmd.Run()
 	var exit *exec.ExitError
 	switch {
 	case ctx.Err() != nil:
-		return nil, -1, fmt.Errorf("verify: %s: %w", lintTool, context.Cause(ctx))
+		return nil, nil, -1, fmt.Errorf("verify: %s: %w", lintTool, context.Cause(ctx))
 	case errors.Is(err, exec.ErrNotFound):
-		return nil, -1, fmt.Errorf("%w: %s: %w", ErrTool, lintTool, err)
+		return nil, nil, -1, fmt.Errorf("%w: %s: %w", ErrTool, lintTool, err)
 	case err != nil && !errors.As(err, &exit):
-		return nil, -1, fmt.Errorf("verify: %s: %w", lintTool, err)
-	case out.truncated:
-		return nil, -1, fmt.Errorf("verify: %s wrote more than %d bytes", lintTool, maxLintOutput)
+		return nil, nil, -1, fmt.Errorf("verify: %s: %w", lintTool, err)
+	case out.truncated || errs.truncated:
+		return nil, nil, -1, fmt.Errorf("verify: %s wrote more than %d bytes", lintTool, maxLintOutput)
 	}
-	return out.buf.Bytes(), cmd.ProcessState.ExitCode(), nil
+	return out.buf.Bytes(), errs.buf.Bytes(), cmd.ProcessState.ExitCode(), nil
 }
 
 // capped keeps the first max bytes written to it and drops the rest, so a
