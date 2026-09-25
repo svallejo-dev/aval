@@ -4,21 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
-	"os"
 	"path"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/svallejo-dev/aval/internal/platform/git"
 )
-
-// settleTimeout bounds the git steps that run to completion although ctx
-// ended: adding the worktree, laying the overlay, cleaning up.
-const settleTimeout = 5 * time.Minute
 
 // repo runs hardened git in one directory.
 type repo struct {
@@ -28,16 +20,6 @@ type repo struct {
 
 func newRepo(dir string) repo {
 	return repo{Runner: git.New(dir), dir: dir}
-}
-
-// commonDir returns the repository's common directory, which outlives the
-// directory r is in and every linked worktree.
-func (r repo) commonDir(ctx context.Context) (repo, error) {
-	out, err := r.Run(ctx, nil, "rev-parse", "--path-format=absolute", "--git-common-dir")
-	if err != nil {
-		return repo{}, fmt.Errorf("overlay: %w", err)
-	}
-	return newRepo(strings.TrimSuffix(string(out), "\n")), nil
 }
 
 // commit resolves rev to a full commit SHA.
@@ -138,77 +120,4 @@ func testFile(name string) bool {
 // goFile reports whether file names a non-test Go file.
 func goFile(file string) bool {
 	return strings.HasSuffix(file, ".go") && !strings.HasSuffix(file, "_test.go")
-}
-
-// settled returns a context that outlives ctx's cancellation for a bounded
-// time, for git steps that must not stop half-way.
-func settled(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(ctx), settleTimeout)
-}
-
-// addWorktree checks commit out, detached, in a new worktree at dir. It runs
-// to completion even if ctx ends, so git never leaves it half-created.
-func (r repo) addWorktree(ctx context.Context, dir, commit string) error {
-	ctx, cancel := settled(ctx)
-	defer cancel()
-	if _, err := r.Run(ctx, nil, "worktree", "add", "--detach", "--end-of-options", dir, commit); err != nil {
-		return fmt.Errorf("overlay: %w", err)
-	}
-	return nil
-}
-
-// overlay deletes the removed paths from the worktree r is in and then
-// copies the copied ones from commit. Deleting first keeps a rename that
-// only changes case, on a case-insensitive file system, from deleting the
-// file it just copied. It runs to completion even if ctx ends.
-func (r repo) overlay(ctx context.Context, commit string, copied, removed []string) error {
-	ctx, cancel := settled(ctx)
-	defer cancel()
-	root, err := os.OpenRoot(r.dir)
-	if err != nil {
-		return fmt.Errorf("overlay: %w", err)
-	}
-	defer root.Close()
-	for _, name := range removed {
-		if err := root.Remove(filepath.FromSlash(name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("overlay: %w", err)
-		}
-	}
-	if len(copied) == 0 {
-		return nil
-	}
-	paths := []byte(strings.Join(copied, "\x00"))
-	if _, err := r.Run(ctx, paths, "--literal-pathspecs", "checkout",
-		"--pathspec-from-file=-", "--pathspec-file-nul", "--end-of-options", commit); err != nil {
-		return fmt.Errorf("overlay: %w", err)
-	}
-	return nil
-}
-
-// cleanup removes the worktree at dir, if it was added, and tmp, which holds
-// it; r is the repository's common directory, which is still there when the
-// caller's directory is gone. When git could not remove the worktree, prune
-// drops what it left in the repository once tmp is gone. Pruning only then
-// leaves the admin entries of the caller's own missing worktrees alone.
-func (r repo) cleanup(tmp, dir string, added bool) error {
-	ctx, cancel := context.WithTimeout(context.Background(), settleTimeout)
-	defer cancel()
-	removed := false
-	if added {
-		_, err := r.Run(ctx, nil, "worktree", "remove", "--force", "--force", "--end-of-options", dir)
-		removed = err == nil
-	}
-	var errs []error
-	if err := os.RemoveAll(tmp); err != nil {
-		errs = append(errs, err)
-	}
-	if !removed {
-		if _, err := r.Run(ctx, nil, "worktree", "prune"); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	if len(errs) > 0 {
-		return fmt.Errorf("%w: %s: %w", ErrCleanup, dir, errors.Join(errs...))
-	}
-	return nil
 }

@@ -107,12 +107,12 @@ func TestRunRejectsTargets(t *testing.T) {
 		"ID in two places": {valid, valid},
 	}
 	for name, targets := range tests {
-		// Validation comes first: this worktree was never prepared.
-		if _, err := new(Worktree).Run(t.Context(), targets, RunOptions{}); !errors.Is(err, ErrInvalidTarget) {
+		// Validation comes first: this tree was never prepared.
+		if _, err := new(Tree).Run(t.Context(), targets, RunOptions{}); !errors.Is(err, ErrInvalidTarget) {
 			t.Errorf("%s: err = %v, want ErrInvalidTarget", name, err)
 		}
 	}
-	if res, err := new(Worktree).Run(t.Context(), nil, RunOptions{}); err != nil || !reflect.DeepEqual(res, Result{}) {
+	if res, err := new(Tree).Run(t.Context(), nil, RunOptions{}); err != nil || !reflect.DeepEqual(res, Result{}) {
 		t.Errorf("no targets: Run = %+v, %v; want a zero Result", res, err)
 	}
 }

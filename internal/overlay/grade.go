@@ -15,7 +15,7 @@ import (
 // from their absence. A failed build is weak only when it is t's own test
 // build or a package head adds, and none otherwise: a package the base
 // already has, or a missing module.
-func (w *Worktree) grade(t Target, rep gotest.Report) Obligation {
+func (w *Tree) grade(t Target, rep gotest.Report) Obligation {
 	o := Obligation{ID: t.ID, Before: rep.Status(t.ID, t.Packages...), After: t.After}
 	o.Strength = Strength(o.Before, o.After, t.Characterization)
 	switch o.Strength {
@@ -53,7 +53,7 @@ func ownBuild(p gotest.Package) bool {
 
 // uncopied returns the files that head adds or modifies under the
 // directories of pkgs and that did not travel.
-func (w *Worktree) uncopied(pkgs []string) []string {
+func (w *Tree) uncopied(pkgs []string) []string {
 	var dirs []string
 	for _, pkg := range pkgs {
 		if dir, ok := w.dir(pkg); ok {
@@ -71,7 +71,7 @@ func (w *Worktree) uncopied(pkgs []string) []string {
 
 // dir returns the repository-relative directory of pkg, an import path, or
 // false when pkg is outside the module.
-func (w *Worktree) dir(pkg string) (string, bool) {
+func (w *Tree) dir(pkg string) (string, bool) {
 	if pkg == w.module {
 		return w.root, true
 	}
