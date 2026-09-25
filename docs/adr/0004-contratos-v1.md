@@ -53,8 +53,8 @@ Cada contrato vive en el paquete del concepto que representa, con tipos Go, JSON
 - **Commit mixto:** es `mixed` exactamente cuando toca `dx` **y** `feat`, y las lista en `families`; `seam` y `other` nunca lo hacen mixto (enmendado por ADR-0005 §3b).
 - **Tipos de manipulación:** `fingerprint_changed`, `test_removed`, `skip_added`, `policy_edited`, `baseline_edited`.
 - **La política viene de la base:** el gate lee `aval.yaml` y el baseline del SHA base, nunca del head. En modo `observe` el veredicto se informa sin bloquear; en `enforce`, un `block` bloquea.
-- **Recalcular en el mismo job:** el gate recalcula la evidencia y rechaza un bundle cuyo `head` no coincide con `HEAD` (`CheckHead`).
-- **`notCollected`** declara la evidencia que la v0 aún no reúne (`mutation`, `rollback`, `slo`), para que su ausencia sea explícita y no parezca un pase.
+- **Recalcular en el mismo job:** el gate siempre recalcula la evidencia y nunca reutiliza un bundle del disco (ADR-0005 §7). `CheckHead` comprueba la coherencia del bundle que él mismo acaba de calcular; no es permiso para leer uno ajeno.
+- **`notCollected`** declara con tokens estables la evidencia que la v0 aún no reúne (`mutation`, `rollback`, `slo`) y la que se saltó en esta ejecución (`openspec_validate` sin política de base), para que ninguna ausencia parezca un pase. El schema no los enumera: añadir un token no cambia la forma ni sube la versión.
 
 ## Versionado
 
