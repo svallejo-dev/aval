@@ -273,7 +273,7 @@ func (b Bundle) Validate() error {
 		errs = append(errs, errors.New("verdict: a warn or block needs at least one reason"))
 	}
 	for _, o := range b.Obligations {
-		if err := o.validate(); err != nil {
+		if err := o.Validate(); err != nil {
 			errs = append(errs, fmt.Errorf("obligation %s: %w", o.ID, err))
 		}
 	}
@@ -293,8 +293,11 @@ func (b Bundle) Validate() error {
 	return nil
 }
 
-// validate checks that an obligation's strength matches its statuses.
-func (o Obligation) validate() error {
+// Validate checks that an obligation is consistent: its strength matches its
+// statuses, fail-before strength is only claimed for an added or modified
+// obligation, and its kind is its ID's kind letter. The gate treats an
+// inconsistent obligation as missing its fail-before evidence.
+func (o Obligation) Validate() error {
 	switch o.Strength {
 	case Strong:
 		if o.Before != Fail || o.After != Pass {
