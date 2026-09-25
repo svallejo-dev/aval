@@ -21,15 +21,22 @@ const (
 	gitlinkMode = "160000" // a submodule's commit
 )
 
-// blobBudget bounds how much blob content one git cat-file --batch holds in
-// memory. A blob larger than it is streamed straight into its file.
-const blobBudget = 8 << 20
+const (
+	// blobBudget bounds how much blob content one git cat-file --batch holds
+	// in memory. A blob larger than it is streamed straight into its file.
+	blobBudget = 8 << 20
+	// blobBatch bounds how many entries one git cat-file --batch asks for, so
+	// that a tree of many tiny blobs does not grow its input and output
+	// without bound either.
+	blobBatch = 4096
+	// hexSHA256 is the length of an object ID in a SHA-256 repository.
+	hexSHA256 = 64
+)
 
-// hexSHA256 is the length of an object ID in a SHA-256 repository.
-const hexSHA256 = 64
-
-// noConversion keeps a git of ours from turning line endings around,
-// whatever the developer's own configuration says.
+// noConversion tells the git commands initRepo runs to convert no line
+// ending. None of them writes a file of the tree, so today it changes
+// nothing: what keeps every file byte for byte is that materialize writes
+// the blobs itself. It keeps a command added later from converting one.
 var noConversion = []string{"-c", "core.autocrlf=false", "-c", "core.eol=lf"}
 
 // treeEntry is one entry of a git tree, as ls-tree -l reports it.
@@ -78,9 +85,12 @@ func parseEntries(out []byte) ([]treeEntry, error) {
 
 // merge returns the entries of the tree to materialize: base's, without the
 // paths head deleted and without the ones head's own entries replace, then
-// head's entries for the files that travel. Leaving the base's out before
-// adding head's keeps a rename that only changes case, on a
-// case-insensitive file system, from losing the file head added.
+// head's entries for the files that travel.
+//
+// What keeps a rename that only changes case from losing the file head added
+// is that the base's entry is dropped, not the order of the two loops: on a
+// case-insensitive file system the two names are one file, and only head's
+// content is ever written to it.
 func merge(base, head []treeEntry, copied, removed []string) ([]treeEntry, error) {
 	drop := make(map[string]bool, len(removed)+len(copied))
 	for _, name := range removed {
@@ -144,7 +154,7 @@ func (r repo) materialize(ctx context.Context, dir string, files []treeEntry) ([
 			}
 			continue
 		}
-		if budget += e.size; budget > blobBudget {
+		if budget += e.size; budget > blobBudget || len(batch) == blobBatch {
 			if err := r.write(ctx, root, batch, &skipped); err != nil {
 				return nil, err
 			}
@@ -232,19 +242,27 @@ func mkdirAll(root *os.Root, name string) error {
 	if dir == "." {
 		return nil
 	}
-	if err := root.MkdirAll(filepath.FromSlash(dir), 0o750); err != nil {
+	if err := root.MkdirAll(filepath.FromSlash(dir), dirPerm); err != nil {
 		return fmt.Errorf("overlay: %w", err)
 	}
 	return nil
 }
 
-// perm is the permission a tree mode asks for. Only aval and the tests it
-// runs read the temporary tree, so nothing outside the user needs access.
+// The modes a checkout writes, git's 0666 and 0777 less the umask. A test at
+// the base may assert the mode it reads, or need a file a stricter mode of
+// ours would hide from it, and would then fail there and pass at head.
+const (
+	dirPerm  fs.FileMode = 0o755
+	filePerm fs.FileMode = 0o644
+	execPerm fs.FileMode = 0o755
+)
+
+// perm is the permission a tree mode asks for.
 func perm(mode string) fs.FileMode {
 	if mode == execMode {
-		return 0o700
+		return execPerm
 	}
-	return 0o600
+	return filePerm
 }
 
 // insideTree reports whether the symlink at link, a repository-relative

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,9 +14,17 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/goleak"
+
 	"github.com/svallejo-dev/aval/internal/evidence"
 	"github.com/svallejo-dev/aval/internal/platform/git"
 )
+
+// TestMain checks that no run at the base, and no cancellation of one,
+// leaves a goroutine of aval's behind.
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 // goEnv keeps the developer's workspace, flags, toolchain and proxy out of
 // the runs in the fixture module.
@@ -578,13 +587,35 @@ func TestPrepareMaterializesModes(t *testing.T) {
 	}, map[string]string{"svc/a/a_test.go": "package a\n"}, nil)
 
 	prepareClean(t, r, base, head, func(w *Tree) {
-		run, err := os.Lstat(filepath.Join(w.moduleDir, "a", "run.sh"))
-		if err != nil || run.Mode().Perm()&0o100 == 0 {
-			t.Errorf("run.sh = %v, %v; want it executable", run, err)
-		}
-		plain, err := os.Lstat(filepath.Join(w.moduleDir, "a", "a.go"))
-		if err != nil || plain.Mode().Perm()&0o111 != 0 {
-			t.Errorf("a.go = %v, %v; want it not executable", plain, err)
+		// A checkout writes 0666 and 0777 less the umask, so what to expect
+		// is the mode of a file or a directory made the same way.
+		for _, tt := range []struct {
+			name string
+			mode fs.FileMode
+			dir  bool
+		}{
+			{name: "a/a.go", mode: 0o644},
+			{name: "a/run.sh", mode: 0o755},
+			{name: "a", mode: 0o755, dir: true},
+		} {
+			ref := filepath.Join(t.TempDir(), "ref")
+			var err error
+			if tt.dir {
+				err = os.Mkdir(ref, tt.mode)
+			} else {
+				err = os.WriteFile(ref, nil, tt.mode) //nolint:gosec // the mode a checkout writes
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, err := os.Lstat(ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.Lstat(filepath.Join(w.moduleDir, filepath.FromSlash(tt.name)))
+			if err != nil || got.Mode().Perm() != want.Mode().Perm() {
+				t.Errorf("%s is %v, %v; want %v, what a checkout writes", tt.name, got.Mode().Perm(), err, want.Mode().Perm())
+			}
 		}
 		link, err := os.Readlink(filepath.Join(w.moduleDir, "a", "link.txt"))
 		if err != nil || link != "testdata/in.txt" {
@@ -663,6 +694,62 @@ func TestPrepareTreeIsRepository(t *testing.T) {
 		}
 		if want := filepath.Join(caller, ".git", "objects"); !filepath.IsAbs(alternates) || alternates != want {
 			t.Errorf("alternates = %q, want the absolute %q", alternates, want)
+		}
+	})
+}
+
+// TestPrepareFromLinkedWorktree runs Prepare from a linked worktree of the
+// caller's repository, as this repository is itself developed. The objects
+// must come from the common directory: a linked worktree's own git directory
+// holds none, so the tree would have no history and every git call in it
+// would fail, which forges fail-before evidence.
+func TestPrepareFromLinkedWorktree(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a git repository")
+	}
+	t.Parallel()
+	r, base, head := planted(t, nil, map[string]string{"svc/a/a_test.go": "package a\n"}, nil)
+	linked := filepath.Join(t.TempDir(), "linked")
+	r.git("worktree", "add", "--quiet", "--detach", linked, head)
+	from := testRepo{t: t, dir: linked}
+
+	tmp := t.TempDir()
+	w, err := Prepare(t.Context(), filepath.Join(linked, "svc"), base, head, PrepareOptions{TempDir: tmp})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := testRepo{t: t, dir: w.moduleDir}
+	if got := tree.git("rev-parse", "HEAD"); got != base {
+		t.Errorf("rev-parse HEAD in the tree = %s, want the base %s", got, base)
+	}
+	alternates := strings.TrimSpace(readFile(t, filepath.Join(w.tmp, "base", ".git", "objects", "info", "alternates")))
+	if want := from.git("rev-parse", "--path-format=absolute", "--git-common-dir"); alternates != filepath.Join(want, "objects") {
+		t.Errorf("alternates = %q, want the common directory's objects, %q", alternates, filepath.Join(want, "objects"))
+	}
+	if err := w.Close(); err != nil {
+		t.Error(err)
+	}
+	r.git("worktree", "remove", "--force", linked)
+	assertClean(t, r, tmp)
+}
+
+// TestPrepareIgnoresTemplateDir checks that git init plants no template of
+// the developer's in the tree: its hooks would run for every git command a
+// test at the base makes. It changes the environment, so it cannot run in
+// parallel.
+func TestPrepareIgnoresTemplateDir(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a git repository")
+	}
+	template := t.TempDir()
+	writeFiles(t, template, map[string]string{"hooks/post-commit": "#!/bin/sh\nexit 1\n"})
+	t.Setenv("GIT_TEMPLATE_DIR", template)
+	r, base, head := planted(t, nil, map[string]string{"svc/a/a_test.go": "package a\n"}, nil)
+
+	prepareClean(t, r, base, head, func(w *Tree) {
+		hook := filepath.Join(w.tmp, "base", ".git", "hooks", "post-commit")
+		if _, err := os.Lstat(hook); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("the tree holds %s: %v, want no hook from the template", hook, err)
 		}
 	})
 }

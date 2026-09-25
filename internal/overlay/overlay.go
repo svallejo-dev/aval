@@ -38,6 +38,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path"
@@ -91,9 +92,9 @@ type Tree struct {
 	// Skipped lists, sorted, what the base tree holds and the directory
 	// cannot: the gitlinks of submodules, and symlinks that point out of the
 	// tree, which a test at the base could follow outside it. A test that
-	// needs one of them fails at the base for a reason of its own, so the
-	// gate caps at weak, as it does with Result.Uncopied, the strength of an
-	// obligation whose packages hold one.
+	// needs one of them fails at the base for a reason of its own, so Run
+	// caps at weak, as it does with Result.Uncopied, the strength of an
+	// obligation whose packages hold one, and says so in its Note.
 	Skipped []string
 
 	tmp       string          // the temporary directory that holds the tree
@@ -240,8 +241,10 @@ func prepare(ctx context.Context, r repo, base, head string, opts PrepareOptions
 	}
 	dir, template := filepath.Join(w.tmp, "base"), filepath.Join(w.tmp, "template")
 	w.moduleDir = filepath.Join(dir, filepath.FromSlash(w.root))
-	for _, d := range []string{dir, template} {
-		if err := os.Mkdir(d, 0o700); err != nil {
+	// The tree's own root is a directory of the checkout it stands for; the
+	// empty template is aval's, and nothing reads it but git init.
+	for d, mode := range map[string]fs.FileMode{dir: dirPerm, template: 0o700} {
+		if err := os.Mkdir(d, mode); err != nil {
 			return nil, errors.Join(fmt.Errorf("overlay: %w", err), w.Close())
 		}
 	}

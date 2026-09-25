@@ -3,6 +3,7 @@ package overlay
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/svallejo-dev/aval/internal/evidence"
@@ -160,5 +161,82 @@ func TestOwnBuild(t *testing.T) {
 		if got := ownBuild(gotest.Package{Name: "m/p", FailedBuild: failed}); got != want {
 			t.Errorf("ownBuild(FailedBuild %q) = %v, want %v", failed, got, want)
 		}
+	}
+}
+
+// TestGradeCapsStrength checks that a failure at the base is only strong
+// when nothing in the obligation's packages could have caused it by itself.
+func TestGradeCapsStrength(t *testing.T) {
+	t.Parallel()
+	f01 := id(t, "ORD-F01")
+	const pkg = "example.com/svc/a"
+	failed := gotest.Report{Tests: []gotest.TestOutcome{{
+		Package: pkg, Name: "TestA/ORD-F01_x", Status: evidence.Fail,
+		Bindings: []gotest.Binding{{ID: f01, Owner: "TestA/ORD-F01_x"}},
+	}}}
+	target := Target{ID: f01, Tests: []string{"TestA/ORD-F01_x"}, Packages: []string{pkg}, After: evidence.Pass}
+	tests := []struct {
+		name            string
+		others, skipped []string
+		want            evidence.Strength
+		note            string
+	}{
+		{name: "nothing in the way", want: evidence.Strong},
+		{
+			name: "a fixture head adds outside testdata", others: []string{"svc/a/fixtures/in.txt"},
+			want: evidence.Weak, note: "head-only files: svc/a/fixtures/in.txt",
+		},
+		{
+			name: "a path the tree cannot hold", skipped: []string{"svc/a/sub"},
+			want: evidence.Weak, note: "cannot hold: svc/a/sub",
+		},
+		{
+			name: "both", others: []string{"svc/a/fixtures/in.txt"}, skipped: []string{"svc/a/out.txt"},
+			want: evidence.Weak, note: "in.txt; and from paths the base tree cannot hold: svc/a/out.txt",
+		},
+		{
+			name: "both, but in another package", others: []string{"svc/b/in.txt"}, skipped: []string{"svc/b/sub"},
+			want: evidence.Strong,
+		},
+	}
+	for _, tt := range tests {
+		w := &Tree{module: "example.com/svc", root: "svc", others: tt.others, Skipped: tt.skipped}
+		got := w.grade(target, failed)
+		if got.Strength != tt.want || (tt.note == "") != (got.Note == "") || !strings.Contains(got.Note, tt.note) {
+			t.Errorf("%s: grade = %+v, want %s with a note ~%q", tt.name, got, tt.want, tt.note)
+		}
+	}
+}
+
+// TestMerge checks which entries the tree is made of: not the ones head
+// deleted, head's own where both trees hold the path, and not a base file
+// whose path head turned into a directory. A rename that only changes case
+// is two paths here, and only head's is materialized, so on a
+// case-insensitive file system the file head added is what survives.
+func TestMerge(t *testing.T) {
+	t.Parallel()
+	base := []treeEntry{
+		{path: "a/Case_test.go", oid: "b1"}, {path: "a/keep.go", oid: "b2"},
+		{path: "a/gone_test.go", oid: "b3"}, {path: "a/over_test.go", oid: "b4"},
+		{path: "a/x", oid: "b5"}, // head turns it into a directory
+	}
+	head := []treeEntry{
+		{path: "a/case_test.go", oid: "h1"}, {path: "a/keep.go", oid: "h2"},
+		{path: "a/over_test.go", oid: "h3"}, {path: "a/x/y_test.go", oid: "h4"},
+	}
+	copied := []string{"a/case_test.go", "a/over_test.go", "a/x/y_test.go"}
+	got, err := merge(base, head, copied, []string{"a/gone_test.go", "a/Case_test.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []treeEntry{
+		{path: "a/keep.go", oid: "b2"}, // head's production code stays behind
+		{path: "a/case_test.go", oid: "h1"}, {path: "a/over_test.go", oid: "h3"}, {path: "a/x/y_test.go", oid: "h4"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("merge = %+v, want %+v", got, want)
+	}
+	if _, err := merge(base, head, []string{"a/nowhere_test.go"}, nil); err == nil {
+		t.Error("merge with a path head does not have = nil error")
 	}
 }
