@@ -1,0 +1,30 @@
+# ✗ aval: block · tier 2 · enforce
+
+**repo** `svallejo-dev/aval-sandbox` · **base** `111111111111` → **head** `222222222222` · **aval** `v0.1.0` · **generated** `2026-09-24T12:00:00Z`
+
+**changes** `add-refunds`
+
+## Reasons (7)
+
+### Blocking (5)
+
+- `fail_before_missing` — no valid evidence that the test failed before the change
+  - `ORD-N01`: no valid fail-before (before=pass, after=pass)
+- `mixed_commit` — one commit touches dx and feat paths at once
+  - commit 2222222222222222222222222222222222222222 touches dx and feat paths
+- `open_question` — an added or modified open question: a human has to resolve it
+  - `ORD-O01`: added open question: a human must resolve it
+- `tamper` — a tampering signal: a bound test or a protected file changed
+  - policy_edited: .golangci.yml
+
+> Cut here: the report reached the size limit of a step summary. The whole evidence bundle is in the run's artifacts.
+
+## Reproduce
+
+```sh
+base=1111111111111111111111111111111111111111
+head=2222222222222222222222222222222222222222
+git fetch origin && git checkout "$head"
+aval verify --base "$base" --head "$head"
+aval gate --base "$base" --head "$head"
+```
