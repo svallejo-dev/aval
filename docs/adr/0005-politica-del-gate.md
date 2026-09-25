@@ -29,6 +29,7 @@ El gate defiende de un **agente** (o una persona) que quiere fusionar un cambio 
 aval informa además de cualquier edición de `.github/**`, `CODEOWNERS`, `.golangci.yml`, el `aval.yaml` raíz y `.aval/baseline.json` como `tamper` (§4). La protección fuerte, sin embargo, es la de GitHub.
 
 **Límites conocidos de la v0:**
+- **La excepción es global:** una concedida por una regresión inestable también rebaja un `skip_added` del mismo PR. Los motivos quedan en el bundle y en el resumen; una excepción acotada por código (`aval:override tamper …`) queda para después de la v0.
 - **Credenciales:** un agente que opera con las credenciales de una persona actúa como esa persona. Los agentes deben usar una cuenta o token propio, sin permisos de revisión.
 - **`weak` se puede provocar:** un test que referencia cualquier símbolo nuevo no compila en la base. Por eso `weak` es un aviso y el resumen lo muestra al revisor humano, nunca un pase silencioso.
 - **Fixtures fuera del paquete:** un test que lee un fichero nuevo de otro directorio (`../fixtures/in.txt`) falla en la base y da `strong`. Solo se degrada a `weak` lo que cae dentro de un paquete de la obligación; la convención es `testdata/`.
@@ -54,6 +55,11 @@ El gate trabaja sobre un rango `base..head`:
 - `-z` y `--end-of-options`.
 
 Requiere git ≥ 2.40; con uno más antiguo, exit 3.
+
+**Excepción: la clave del estado para hooks** (`hook.CurrentKey`, §7) se calcula sin `--attr-source`, que costaría un `git hash-object` en serie en cada invocación del hook (presupuesto p95 < 50 ms).
+- Cubre **los dos lados**: el hook que lee la clave y `aval verify` que la escribe. Si no calcularan `git diff HEAD` igual, un `.gitattributes` con `eol`, `text` o LFS haría que nunca coincidieran.
+- Es aceptable porque la clave es consultiva y se calcula sobre el árbol de trabajo del propio agente: quien puede plantar un `.gitattributes` también puede escribir a mano el fichero de estado.
+- El gate y todo lo demás que ejecuta `verify` nunca usan esta excepción.
 
 | Entrada | De dónde sale |
 |---|---|
@@ -156,7 +162,7 @@ Cada regla incumplida añade un `Reason{Code, Message, ID}` al veredicto. Los c�
 
 Códigos **reservados** para hitos posteriores: `contract_breaking` y `contract_lint` (M4), y `change_not_archived` (M3).
 
-**El resultado del veredicto** es `block` si alguna regla bloquea, `warn` si solo hay avisos, y `pass` si no hay motivos.
+**El resultado del veredicto** es `block` si alguna regla bloquea, `warn` si solo hay avisos, y `pass` si no hay motivos. Una excepción válida (§5) rebaja `block` a `warn`.
 
 ### 5. Aprobaciones y excepciones: reviews ligados al SHA
 
@@ -164,7 +170,9 @@ Las etiquetas no sirven: no se atan a un commit, y la hora de GitHub que podría
 
 Una aprobación es **válida** si cumple tres condiciones:
 1. es el **último review que no sea `COMMENTED`** de ese revisor (como hace GitHub), tiene `state: APPROVED` y **`commit_id` igual al SHA head**. Un `CHANGES_REQUESTED` o `DISMISSED` posterior la anula;
-2. su autor es un **CODEOWNER**: un usuario listado individualmente en el `CODEOWNERS` de la base para el `aval.yaml` raíz, o con `role_name` ∈ {`admin`, `maintain`} (`GET /repos/{o}/{r}/collaborators/{user}/permission`; el campo `permission` no sirve porque reporta `maintain` como `write`);
+2. su autor es un **CODEOWNER**, por una de dos vías (`GET /repos/{o}/{r}/collaborators/{user}/permission`):
+   - listado individualmente en el `CODEOWNERS` de la base para el `aval.yaml` raíz **y** con permiso de escritura (`permission` ∈ {`write`, `admin`}; `maintain` se reporta como `write`). Es lo que exige GitHub para asignar un code owner, y evita que alguien registre el login de una cuenta renombrada o borrada que siga en el fichero. Un 404, `read` o `none` significa que no es owner;
+   - o con `role_name` ∈ {`admin`, `maintain`}. Aquí `permission` no sirve, porque reporta `maintain` como `write`;
 3. GitHub ya impide que el autor del PR apruebe su propio PR.
 
 Hay dos tipos:
@@ -172,15 +180,15 @@ Hay dos tipos:
 | Tipo | Requisito extra | Efecto |
 |---|---|---|
 | **Aprobación humana** | Ninguno | Satisface `approval_missing`; nada más |
-| **Excepción (override)** | Una línea `aval:override <motivo>` en el cuerpo del review, con motivo no vacío | Convierte un `block` en `warn`; los motivos se conservan |
+| **Excepción (override)** | Una línea que empieza, sin sangría, por `aval:override <motivo>` en el cuerpo del review, fuera de bloques de código cercados (```` ``` ```` o `~~~`), con motivo no vacío. Si hay varias, cuenta la primera con motivo | Rebaja el veredicto de `block` a `warn`, sea cual sea el motivo (`tamper` incluido). Los motivos se conservan, `approval_missing` también, como aviso. Es la vía para cambiar la política: editar el `aval.yaml` raíz siempre es `tamper` |
 
-- **Todas las aprobaciones se registran en el bundle,** también las inválidas, con su `rejection`.
+- **Todas las aprobaciones se registran en el bundle,** también las inválidas, con su `rejection`. Un `aval:override` sin motivo es una excepción inválida, no una aprobación.
 - **Un review de un commit anterior no cuenta.** Cuando llega un commit nuevo, hace falta volver a aprobar.
 - **Los equipos de GitHub** exigen un token con `read:org` y quedan fuera de la v0.
 
 ### 6. Modos y códigos de salida
 
-- **El modo sale de la política del SHA base.** Cambiarlo en el PR dispara `tamper` y no tiene efecto hasta fusionarse.
+- **El modo sale de la política del SHA base.** Cambiarlo en el PR dispara `tamper` y no tiene efecto hasta fusionarse, lo que en `enforce` exige una excepción válida (§5).
 - **`observe`:** el gate calcula e informa el veredicto y sale con 0.
 - **`enforce`:** sale con 1 si el veredicto es `block`.
 
