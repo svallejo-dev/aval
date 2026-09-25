@@ -161,19 +161,9 @@ func (c *collector) failBefore(ctx context.Context, obs []*state, targets []over
 		c.check("fail-before "+run.ID.String()+" "+run.Test, command(run.Options),
 			run.Report.ExitCode, run.Duration, reportStatus(run.Report))
 	}
-	for i, o := range res.Obligations {
-		// A failure the base tree may have caused by itself is not strong
-		// evidence: a test that reads a submodule, or follows a symlink out of
-		// the tree, fails there whatever the behavior under review does. The
-		// paths overlay could not hold are graded like the files that did not
-		// travel (ADR-0005 §2), so the gate warns and a human looks.
-		if i < len(targets) && o.Before == evidence.Fail &&
-			(o.Strength == evidence.Strong || o.Strength == evidence.Weak) {
-			if left := skippedIn(c.module, w.Skipped, targets[i].Packages); len(left) > 0 {
-				o.Strength = evidence.Weak
-				o.Note = withNote(o.Note, "base failure may come from paths the base tree cannot hold: "+strings.Join(left, ", "))
-			}
-		}
+	// The grade is overlay's: it owns both the statuses and what the base tree
+	// could not hold, and caps the strength accordingly (ADR-0005 §2).
+	for _, o := range res.Obligations {
 		for _, s := range obs {
 			if s.id == o.ID {
 				s.ob.Before, s.ob.Strength, s.ob.Note = o.Before, o.Strength, o.Note
@@ -181,38 +171,6 @@ func (c *collector) failBefore(ctx context.Context, obs []*state, targets []over
 		}
 	}
 	return nil
-}
-
-// skippedIn returns the paths of skipped that lie in the directory tree of one
-// of pkgs, the import paths of an obligation's packages. Both are relative to
-// the repository root, which is the module root Collect works from.
-func skippedIn(module string, skipped, pkgs []string) []string {
-	var dirs []string
-	for _, pkg := range pkgs {
-		switch rel, ok := strings.CutPrefix(pkg, module+"/"); {
-		case pkg == module:
-			dirs = append(dirs, "")
-		case ok:
-			dirs = append(dirs, rel)
-		}
-	}
-	var out []string
-	for _, p := range skipped {
-		if slices.ContainsFunc(dirs, func(dir string) bool {
-			return dir == "" || p == dir || strings.HasPrefix(p, dir+"/")
-		}) {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
-// withNote joins what a note already says and what else there is to say.
-func withNote(note, add string) string {
-	if note == "" {
-		return add
-	}
-	return note + "; " + add
 }
 
 // regressions runs at head, on their own, the tests of every obligation that

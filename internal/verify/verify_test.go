@@ -662,7 +662,8 @@ func TestCollect(t *testing.T) {
 		// Added, and the base does not require the module: no evidence.
 		"ORD-F09": {evidence.Added, evidence.BuildFail, evidence.Pass, evidence.None, false, "land new dependencies"},
 		// Added, and it fails at the base for what looks like the right
-		// reason, but the base tree could not hold the submodule beside it.
+		// reason, but the base tree could not hold the submodule beside it, so
+		// overlay caps the evidence and names the path.
 		"ORD-F10": {evidence.Added, evidence.Fail, evidence.Pass, evidence.Weak, false, "subs/sub"},
 		// Outside the delta: no fail-before, and §3 re-ran it on its own.
 		"ORD-F01": {evidence.Unchanged, evidence.NotApply, evidence.Pass, evidence.None, false, ""},
