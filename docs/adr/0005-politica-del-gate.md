@@ -34,7 +34,7 @@ aval informa además como `tamper` (§4) de cualquier edición de `.github/**`, 
 - **`weak` se puede provocar:** un test que referencia cualquier símbolo nuevo no compila en la base. Por eso `weak` es un aviso y el resumen lo muestra al revisor humano, nunca un pase silencioso.
 - **Fixtures fuera del paquete:** un test que lee un fichero nuevo de otro directorio (`../fixtures/in.txt`) falla en la base y da `strong`. Solo se degrada a `weak` lo que cae dentro de un paquete de la obligación; la convención es `testdata/`.
 - **`openspec validate` sin política de base:** la versión de OpenSpec se fija en el `aval.yaml` de la base y la del head no es de fiar, así que sin política no se valida y el bundle lo declara en `notCollected`. El veredicto ya es `observe` por `no_base_policy`.
-- **Git LFS:** con `--attr-source` al árbol vacío, el worktree de la base recibe punteros LFS en vez de contenido, y un test que lea esos ficheros fallaría en la base. Los repos del piloto no usan LFS.
+- **Git LFS:** el árbol de la base se materializa desde los objetos, así que de un fichero LFS recibe el puntero y no el contenido, y un test que lo lea fallaría en la base. Los repos del piloto no usan LFS.
 - **Runner comprometido:** el código del PR se ejecuta en el mismo runner que el gate, y en los runners de GitHub tiene sudo sin contraseña. Código malicioso que ataque al propio runner (sustituir el binario de aval, alterar ficheros entre pasos) queda fuera de lo que aval puede defender en la v0. Por eso el gate verifica en el mismo proceso, y la mitigación de fondo es ejecutar los tests en un entorno aislado del gate.
 
 ## Decisión
@@ -85,10 +85,10 @@ Aplica a las obligaciones **F, N e I** con delta `added` o `modified`:
 1. **Árbol de la base:** se materializa en un directorio temporal **desde los objetos de git** (`git ls-tree -r -z` más `git cat-file --batch`, respetando modos y enlaces simbólicos), **después** de la ejecución completa de head y justo antes de las ejecuciones en la base.
    - **Después,** porque prepararlo antes permitiría que un test de head alterara el árbol de la base —romper su código para que falle— y fabricara un `strong`.
    - **Sin `git worktree add` ni `git checkout`,** porque el checkout aplica `core.autocrlf`, `core.eol` y los filtros `smudge` que declaren `.git/config` y `.git/info/attributes`, y esos dos los puede escribir un test de head. `--attr-source` **no** cubre `.git/info/attributes`, ni `core.attributesFile` lo evita: por ese camino un test reescribe el contenido de la base a voluntad.
-   - Tampoco `git archive` ni `cat-file --filters`, por lo mismo (§1).
+   - Tampoco `git archive` ni `cat-file --filters`, por lo mismo (§1). La prohibición cubre cualquier operación que escriba ficheros pasando por el checkout de git: `checkout-index`, `restore`, `stash` y las que vengan.
 2. **Superposición:** en **todo el diff**, no solo en los paquetes de la obligación:
    - **primero se borran** las rutas que head eliminó o renombró (un renombre cuenta como baja más alta);
-   - después se copian desde head los `*_test.go` y los ficheros de `testdata/` añadidos o modificados.
+   - después se copian los `*_test.go` y los ficheros de `testdata/` añadidos o modificados, **desde los objetos de git de head, nunca desde el árbol de trabajo**: la superposición ocurre después de la ejecución de head, y copiar del árbol permitiría la misma falsificación que cierra el paso 1.
 
    Limitarlo a los paquetes daría un `strong` falso si un test nuevo lee `testdata/` compartido.
 3. **Selección exacta:**
