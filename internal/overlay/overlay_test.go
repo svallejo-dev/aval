@@ -430,9 +430,9 @@ func readFile(t *testing.T, name string) string {
 	return string(data)
 }
 
-// prepareClean runs Prepare in r's svc, hands the Worktree to check and
-// then checks that Close leaves nothing behind.
-func prepareClean(t *testing.T, r testRepo, base, head string, check func(*Worktree)) {
+// prepareClean runs Prepare in r's svc, hands the Tree to check and then
+// checks that Close leaves nothing behind.
+func prepareClean(t *testing.T, r testRepo, base, head string, check func(*Tree)) {
 	t.Helper()
 	tmp := t.TempDir()
 	w, err := Prepare(t.Context(), filepath.Join(r.dir, "svc"), base, head, PrepareOptions{TempDir: tmp})

@@ -105,11 +105,6 @@ type Tree struct {
 	closed    bool
 }
 
-// Worktree is the name Tree had while Prepare added a git worktree.
-//
-// Deprecated: use Tree.
-type Worktree = Tree
-
 // Result is what the base says about each target.
 type Result struct {
 	Obligations []Obligation // one per target, in the same order
