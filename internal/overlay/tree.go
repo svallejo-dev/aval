@@ -25,6 +25,13 @@ const (
 // memory. A blob larger than it is streamed straight into its file.
 const blobBudget = 8 << 20
 
+// hexSHA256 is the length of an object ID in a SHA-256 repository.
+const hexSHA256 = 64
+
+// noConversion keeps a git of ours from turning line endings around,
+// whatever the developer's own configuration says.
+var noConversion = []string{"-c", "core.autocrlf=false", "-c", "core.eol=lf"}
+
 // treeEntry is one entry of a git tree, as ls-tree -l reports it.
 type treeEntry struct {
 	size int64  // the blob's size; -1 when the entry is not a blob
@@ -250,4 +257,62 @@ func insideTree(link, target string) bool {
 	}
 	resolved := path.Join(path.Dir(link), target)
 	return resolved != ".." && !strings.HasPrefix(resolved, "../")
+}
+
+// objectStore returns the absolute path of the repository's object store,
+// which the materialized tree borrows instead of copying objects.
+func (r repo) objectStore(ctx context.Context) (string, error) {
+	out, err := r.Run(ctx, nil, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return "", fmt.Errorf("overlay: %w", err)
+	}
+	common := strings.TrimSuffix(string(out), "\n")
+	// objects/info/alternates holds one path per line, and a line that opens
+	// with a quote is a C-quoted string.
+	if !filepath.IsAbs(common) || strings.ContainsAny(common, "\n\"") {
+		return "", fmt.Errorf("overlay: git reported the common directory as %q", common)
+	}
+	return filepath.Join(common, "objects"), nil
+}
+
+// initRepo makes the materialized tree at dir a repository of its own, so
+// that a test at the base that shells out to git finds one: HEAD is the base
+// commit, the index holds its tree, and every object comes from the caller's
+// store, at objects, through objects/info/alternates. So a test that reads
+// the base's history passes there as it does at head, instead of failing for
+// want of a repository and forging fail-before evidence.
+//
+// Nothing here writes a file of the tree: git checks nothing out, and no
+// filter can rewrite what materialize wrote. The tree is a plain repository,
+// not a worktree of the caller's, so it shares no index, no refs and no
+// config with it; what it borrows it only reads.
+//
+// git init runs in the caller's repository, r, where the hardened runner can
+// resolve the empty tree it reads attributes from. template is an empty
+// directory, so no init template of the developer's installs hooks in the
+// tree.
+func (r repo) initRepo(ctx context.Context, dir, template, base, objects string) error {
+	format := "sha1"
+	if len(base) == hexSHA256 {
+		format = "sha256"
+	}
+	init := append(slices.Clone(noConversion), "init", "--quiet",
+		"--template="+template, "--object-format="+format, "--end-of-options", dir)
+	if _, err := r.Run(ctx, nil, init...); err != nil {
+		return fmt.Errorf("overlay: %w", err)
+	}
+	alternates := filepath.Join(dir, ".git", "objects", "info", "alternates")
+	if err := os.WriteFile(alternates, []byte(objects+"\n"), 0o600); err != nil {
+		return fmt.Errorf("overlay: %w", err)
+	}
+	tree := newRepo(dir)
+	for _, args := range [][]string{
+		{"update-ref", "--no-deref", "--end-of-options", "HEAD", base}, // detached at the base
+		{"read-tree", "--end-of-options", base},                        // so git status sees only the overlay
+	} {
+		if _, err := tree.Run(ctx, nil, append(slices.Clone(noConversion), args...)...); err != nil {
+			return fmt.Errorf("overlay: %w", err)
+		}
+	}
+	return nil
 }

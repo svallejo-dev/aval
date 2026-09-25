@@ -13,11 +13,14 @@
 // instead, which return the objects as they are, and writes the files
 // itself.
 //
-// The directory is not a git repository, and the base tree cannot hold a
-// submodule's gitlink or a symlink that leaves it: Tree.Skipped lists what
-// stayed out. A test that needs any of them, git included, fails at the base
-// for a reason that has nothing to do with the behavior under review, and
-// the gate only sees the failure.
+// The directory is a repository of its own, detached at the base commit,
+// which borrows the caller's objects: a test that shells out to git finds
+// the base's history there, and does not fail for want of a repository,
+// which would forge fail-before evidence. Nothing is ever checked out into
+// it.
+//
+// What the tree cannot hold is a submodule's gitlink or a symlink that
+// leaves it; Tree.Skipped lists those.
 //
 // Only *_test.go files and files under testdata/ travel from head. A test
 // that reads data kept anywhere else fails at the base whether or not the
@@ -87,7 +90,10 @@ type Tree struct {
 	Copied, Removed []string
 	// Skipped lists, sorted, what the base tree holds and the directory
 	// cannot: the gitlinks of submodules, and symlinks that point out of the
-	// tree, which a test at the base could follow outside it.
+	// tree, which a test at the base could follow outside it. A test that
+	// needs one of them fails at the base for a reason of its own, so the
+	// gate caps at weak, as it does with Result.Uncopied, the strength of an
+	// obligation whose packages hold one.
 	Skipped []string
 
 	tmp       string          // the temporary directory that holds the tree
@@ -171,11 +177,12 @@ func Strength(before, after evidence.Status, characterization bool) evidence.Str
 }
 
 // Prepare writes base's tree into a temporary directory, without the test
-// files and testdata head deleted, and with head's added and modified
-// *_test.go and testdata/ files over it. Both trees and every file come from
-// git's objects, never from a checkout or the working tree, so a change's
-// own .git or working tree cannot alter what the base is. dir is the root of
-// the Go module; base should be the merge-base of the change.
+// files and testdata head deleted and with head's added and modified
+// *_test.go and testdata/ files over it, and makes that directory a
+// repository detached at base. Both trees and every file come from git's
+// objects, never from a checkout or the working tree, so a change's own .git
+// or working tree cannot alter what the base is. dir is the root of the Go
+// module; base should be the merge-base of the change.
 //
 // Test files and testdata travel from the whole diff, not only from the
 // targets' packages: other packages' test files never build into the runs,
@@ -206,6 +213,10 @@ func prepare(ctx context.Context, r repo, base, head string, opts PrepareOptions
 	if w.module, err = r.modulePath(ctx, w.Head, w.root); err != nil {
 		return nil, err
 	}
+	objects, err := r.objectStore(ctx)
+	if err != nil {
+		return nil, err
+	}
 	c, err := r.changes(ctx, w.Base, w.Head)
 	if err != nil {
 		return nil, err
@@ -232,12 +243,17 @@ func prepare(ctx context.Context, r repo, base, head string, opts PrepareOptions
 	if w.tmp, err = os.MkdirTemp(tmpRoot, "aval-overlay-"); err != nil {
 		return nil, fmt.Errorf("overlay: %w", err)
 	}
-	dir := filepath.Join(w.tmp, "base")
+	dir, template := filepath.Join(w.tmp, "base"), filepath.Join(w.tmp, "template")
 	w.moduleDir = filepath.Join(dir, filepath.FromSlash(w.root))
-	if err := os.Mkdir(dir, 0o700); err != nil {
-		return nil, errors.Join(fmt.Errorf("overlay: %w", err), w.Close())
+	for _, d := range []string{dir, template} {
+		if err := os.Mkdir(d, 0o700); err != nil {
+			return nil, errors.Join(fmt.Errorf("overlay: %w", err), w.Close())
+		}
 	}
 	if w.Skipped, err = r.materialize(ctx, dir, files); err != nil {
+		return nil, errors.Join(err, w.Close())
+	}
+	if err := r.initRepo(ctx, dir, template, w.Base, objects); err != nil {
 		return nil, errors.Join(err, w.Close())
 	}
 	return w, nil

@@ -625,3 +625,44 @@ func TestPrepareStreamsLargeBlob(t *testing.T) {
 		}
 	})
 }
+
+// TestPrepareTreeIsRepository checks that the materialized tree is a
+// repository of its own, detached at the base: a test that shells out to git
+// finds the base's history, through the caller's objects, and a clean tree
+// but for what head laid over it. Without one, such a test would fail at the
+// base for want of a repository and forge fail-before evidence.
+func TestPrepareTreeIsRepository(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a git repository")
+	}
+	t.Parallel()
+	r, base, head := planted(t, nil, map[string]string{"svc/a/a_test.go": "package a\n"}, nil)
+	prepareClean(t, r, base, head, func(w *Tree) {
+		tree := testRepo{t: t, dir: w.moduleDir} // as a test at the base would
+		if got := tree.git("rev-parse", "HEAD"); got != base {
+			t.Errorf("rev-parse HEAD = %s, want the base %s", got, base)
+		}
+		if got := tree.git("log", "-1", "--format=%H"); got != base {
+			t.Errorf("log -1 = %s, want the base %s", got, base)
+		}
+		if got := tree.git("show", "--name-only", "--format=%H", "HEAD"); !strings.Contains(got, base) ||
+			!strings.Contains(got, "svc/a/a.go") {
+			t.Errorf("show = %q, want the base commit and its files", got)
+		}
+		if got := tree.git("rev-parse", "--show-toplevel"); got == r.dir {
+			t.Errorf("rev-parse --show-toplevel = %s, want the tree, not the caller's repository", got)
+		}
+		// Only head's test file is new: the rest matches the base's tree.
+		if got := tree.git("status", "--porcelain"); got != "?? svc/a/a_test.go" {
+			t.Errorf("status = %q, want only head's test file", got)
+		}
+		alternates := strings.TrimSpace(readFile(t, filepath.Join(w.tmp, "base", ".git", "objects", "info", "alternates")))
+		caller, err := filepath.EvalSymlinks(r.dir) // git reports the path resolved
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := filepath.Join(caller, ".git", "objects"); !filepath.IsAbs(alternates) || alternates != want {
+			t.Errorf("alternates = %q, want the absolute %q", alternates, want)
+		}
+	})
+}
