@@ -167,7 +167,9 @@ func mustValidate(t *testing.T, approvals []evidence.Approval) {
 	b := evidence.Bundle{
 		SchemaVersion: evidence.SchemaVersion,
 		Repo:          "svallejo-dev/aval-sandbox",
-		Base:          baseSHA,
+		TrustBase:     baseSHA,
+		ChangeBase:    baseSHA,
+		BaseRef:       "main",
 		Head:          headSHA,
 		AvalVersion:   "v0.0.0-test",
 		GeneratedAt:   t0,

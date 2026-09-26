@@ -15,7 +15,8 @@ var update = flag.Bool("update", false, "rewrite golden files")
 
 const (
 	goldenPath = "testdata/bundle.golden.json"
-	baseSHA    = "1111111111111111111111111111111111111111"
+	trustSHA   = "1111111111111111111111111111111111111111"
+	baseSHA    = "4444444444444444444444444444444444444444"
 	headSHA    = "2222222222222222222222222222222222222222"
 	olderSHA   = "3333333333333333333333333333333333333333" // an earlier head of the same PR
 )
@@ -31,7 +32,9 @@ func sampleBundle() Bundle {
 	return Bundle{
 		SchemaVersion: SchemaVersion,
 		Repo:          "svallejo-dev/aval-sandbox",
-		Base:          baseSHA,
+		TrustBase:     trustSHA,
+		ChangeBase:    baseSHA,
+		BaseRef:       "main",
 		Head:          headSHA,
 		AvalVersion:   "v0.0.0-test",
 		GeneratedAt:   genAt,
@@ -100,7 +103,7 @@ func TestNilSlicesAreArrays(t *testing.T) {
 	t.Parallel()
 
 	b := Bundle{
-		SchemaVersion: SchemaVersion, Repo: "r", Base: baseSHA, Head: headSHA, AvalVersion: "v0", GeneratedAt: genAt,
+		SchemaVersion: SchemaVersion, Repo: "r", TrustBase: trustSHA, ChangeBase: baseSHA, BaseRef: "main", Head: headSHA, AvalVersion: "v0", GeneratedAt: genAt,
 		Mode: "observe", Tier: 0, Verdict: Verdict{Result: ResultPass},
 		Obligations: []Obligation{{ID: "ORD-F01", Kind: "F", Source: "s", Delta: Unchanged, Before: NotApply, After: NotRun, Strength: None, Note: "no bound test"}},
 		Scope:       []Commit{{SHA: headSHA, Family: FamilyFeat}},
@@ -237,10 +240,11 @@ func TestValidate(t *testing.T) {
 		wantErr string // "" means valid
 	}{
 		{name: "sample is valid", mutate: func(*Bundle) {}},
-		{name: "v1 schema version", mutate: func(b *Bundle) { b.SchemaVersion = 1 }, wantErr: "schema"},
-		{name: "future schema version", mutate: func(b *Bundle) { b.SchemaVersion = 3 }, wantErr: "schema"},
+		{name: "v2 schema version", mutate: func(b *Bundle) { b.SchemaVersion = 2 }, wantErr: "schema"},
+		{name: "future schema version", mutate: func(b *Bundle) { b.SchemaVersion = 4 }, wantErr: "schema"},
 		{name: "short head sha", mutate: func(b *Bundle) { b.Head = "2222222" }, wantErr: "schema"},
-		{name: "invalid base sha", mutate: func(b *Bundle) { b.Base = "not-a-sha" }, wantErr: "schema"},
+		{name: "invalid change base sha", mutate: func(b *Bundle) { b.ChangeBase = "not-a-sha" }, wantErr: "schema"},
+		{name: "invalid trust base sha", mutate: func(b *Bundle) { b.TrustBase = "not-a-sha" }, wantErr: "schema"},
 		{name: "unknown mode", mutate: func(b *Bundle) { b.Mode = "audit" }, wantErr: "schema"},
 		{name: "tier too high", mutate: func(b *Bundle) { b.Tier = 4 }, wantErr: "schema"},
 		{name: "negative tier", mutate: func(b *Bundle) { b.Tier = -1 }, wantErr: "schema"},

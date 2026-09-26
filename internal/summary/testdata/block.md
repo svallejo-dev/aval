@@ -1,6 +1,6 @@
 # ✗ aval: block · tier 2 · enforce
 
-**repo** `svallejo-dev/aval-sandbox` · **base** `111111111111` → **head** `222222222222` · **aval** `v0.1.0` · **generated** `2026-09-24T12:00:00Z`
+**repo** `svallejo-dev/aval-sandbox` · **trust base** `111111111111` · **change base** `444444444444` (main) → **head** `222222222222` · **aval** `v0.1.0` · **generated** `2026-09-24T12:00:00Z`
 
 **changes** `add-refunds`
 
@@ -72,9 +72,10 @@
 ## Reproduce
 
 ```sh
-base=1111111111111111111111111111111111111111
+trust=1111111111111111111111111111111111111111
+change=4444444444444444444444444444444444444444
 head=2222222222222222222222222222222222222222
 git fetch origin && git checkout "$head"
-aval verify --base "$base" --head "$head"
-aval gate --base "$base" --head "$head"
+aval verify --trust-base "$trust" --change-base "$change" --head "$head"
+aval gate --trust-base "$trust" --change-base "$change" --head "$head"
 ```

@@ -1368,3 +1368,315 @@ func TestChangeDirs(t *testing.T) {
 		t.Errorf("changeDirs = %q, want %q", got, want)
 	}
 }
+
+// TestCollectTwoBases is the hole ADR-0005 §1 closes: a branch cut from before
+// aval was adopted. The merge base carries no policy, so a gate that read the
+// policy from there would observe and pass everything; the tip of the default
+// branch carries it, and that is where it comes from.
+//
+// The same fixture, read the old way, is the control: with the merge base as the
+// only base there is no policy at all.
+func TestCollectTwoBases(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a git repository and runs go test")
+	}
+	t.Parallel()
+	r := newRepo(t)
+
+	// Before adoption: no aval.yaml, no baseline, no lint configuration, and a
+	// change the branch point declares at tier 1.
+	before := cleanBase()
+	delete(before, "aval.yaml")
+	before["flaky/flaky_test.go"] = "package flaky\n\nimport \"testing\"\n\nfunc TestOld(t *testing.T) { t.Fatal(\"failing since before aval\") }\n"
+	before["openspec/changes/raise-tier/aval.yaml"] = "version: 1\ntier: 1\n"
+	cut := r.commit("chore: before aval", before)
+	def := r.git("rev-parse", "--abbrev-ref", "HEAD") // whatever git init named it
+
+	// The branch is cut here. Head touches the change, so it is in the delta, and
+	// declares it at tier 1 as the branch point did.
+	r.git("checkout", "--quiet", "-b", "work")
+	head := r.commit("feat: refund lowers the total", map[string]string{
+		"orders/orders.go": strings.Replace(before["orders/orders.go"],
+			"func Refund(total, amount int) int { return total }",
+			"func Refund(total, amount int) int { return total - amount }", 1),
+		"openspec/changes/raise-tier/aval.yaml": "version: 1\ntier: 1\nowner: \"@orders\"\n",
+	})
+
+	// The default branch adopts aval afterwards, with a baseline that excuses the
+	// failing test, a lint configuration, and the change raised to tier 2.
+	r.git("checkout", "--quiet", def)
+	trust := r.commit("chore: adopt aval", map[string]string{
+		"aval.yaml": policy,
+		".aval/baseline.json": "{\n  \"version\": 1,\n  \"failing\": [\n" +
+			"    {\"package\": \"example.com/svc/flaky\", \"test\": \"TestOld\"}\n  ]\n}\n",
+		"openspec/changes/raise-tier/aval.yaml": "version: 1\ntier: 2\n",
+	})
+	r.git("checkout", "--quiet", "work")
+
+	tmp := t.TempDir()
+	ev, err := Collect(t.Context(), Options{
+		Dir: r.dir, TrustBase: trust, Base: cut, Head: head,
+		Env: goEnv, TempDir: tmp, Validator: openspec.Validator{Run: okValidate},
+	})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	assertClean(t, r, tmp)
+	if ev.Input.Policy == nil || ev.Input.Mode() != manifest.Enforce {
+		t.Fatalf("Policy = %+v in mode %s, want the trust base's policy and enforce",
+			ev.Input.Policy, ev.Input.Mode())
+	}
+	if ev.TrustBase != trust || ev.Base != cut {
+		t.Errorf("bases = trust %s, change %s; want trust %s and change %s", ev.TrustBase, ev.Base, trust, cut)
+	}
+	if !strings.Contains(ev.PolicySource, trust) {
+		t.Errorf("PolicySource = %q, want it to name the trust base %s", ev.PolicySource, trust)
+	}
+	// The range is measured from the merge base, so main's own adoption commit
+	// is not in it: attributing it here would make the pull request answer for
+	// somebody else's work.
+	b := ev.Bundle(gate.Decide(ev.Input))
+	if b.ChangeBase != cut || b.TrustBase != trust {
+		t.Errorf("bundle bases = %s..%s, want %s as the trust base and %s as the change base",
+			b.TrustBase, b.ChangeBase, trust, cut)
+	}
+	for _, f := range b.Tamper {
+		if strings.Contains(f.Detail, "aval.yaml") {
+			t.Errorf("tamper = %+v, want no policy_edited: the pull request did not touch aval.yaml", f)
+		}
+	}
+
+	// The baseline comes from the trust base too, not only the policy: the merge
+	// base has none, and reading it from there would turn a test the baseline
+	// excuses into a regression (ADR-0005 §1). The lint configuration is
+	// TestCollectLintConfigComesFromTheTrustBase's.
+	if !ev.Input.Baseline.Contains("example.com/svc/flaky", "TestOld") {
+		t.Errorf("Baseline = %+v, want the trust base's, which excuses flaky TestOld", ev.Input.Baseline)
+	}
+	// And the tier a change already carried is the highest of the three, so
+	// cutting the branch before a tier went up does not undo it.
+	var change gate.Change
+	for _, ch := range ev.Input.Changes {
+		if ch.ID == "raise-tier" {
+			change = ch
+		}
+	}
+	if change.ID == "" || change.BaseTier != 2 {
+		t.Errorf("change = %+v, want raise-tier with BaseTier 2: the trust base raised it to 2", change)
+	}
+	if ev.Input.Tier() < 2 {
+		t.Errorf("Tier() = %d, want at least 2", ev.Input.Tier())
+	}
+
+	// The control: with the merge base as the only base, the policy is gone.
+	tmp2 := t.TempDir()
+	old, err := Collect(t.Context(), Options{
+		Dir: r.dir, Base: cut, Head: head, Env: goEnv, TempDir: tmp2, Validator: openspec.Validator{Run: okValidate},
+	})
+	if err != nil {
+		t.Fatalf("Collect with one base: %v", err)
+	}
+	assertClean(t, r, tmp2)
+	if old.Input.Policy != nil || old.Input.Mode() != manifest.Observe {
+		t.Errorf("one base: Policy = %+v in mode %s, want none and observe — that is the hole",
+			old.Input.Policy, old.Input.Mode())
+	}
+}
+
+// TestCollectTamperUnionsBothBases checks ADR-0005 §4's union. A bound test that
+// the default branch carries and the merge base does not would, compared against
+// the merge base alone, read as an addition: head could then bring it back with
+// its assertions gutted and the gate would see new work, not a weakened test.
+func TestCollectTamperUnionsBothBases(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a git repository and runs go test")
+	}
+	t.Parallel()
+	r := newRepo(t)
+
+	base := cleanBase()
+	// The merge base has no test for ORD-F04 at all.
+	base["orders/orders_test.go"] = strings.Split(base["orders/orders_test.go"], `	t.Run("ORD-F04`)[0] + "}\n"
+	cut := r.commit("chore: base", base)
+	def := r.git("rev-parse", "--abbrev-ref", "HEAD")
+
+	r.git("checkout", "--quiet", "-b", "work")
+	// Head declares ORD-F04 and skips it: the manipulation testsource reports.
+	head := r.commit("feat: bring back the rounding test", map[string]string{
+		"orders/orders_test.go": strings.TrimSuffix(base["orders/orders_test.go"], "}\n") +
+			"\tt.Run(\"ORD-F04 rounds down\", func(t *testing.T) { t.Skip(\"flaky\") })\n}\n",
+	})
+
+	// The default branch has the same test, unskipped.
+	r.git("checkout", "--quiet", def)
+	trust := r.commit("chore: the rounding test lives here", map[string]string{
+		"orders/orders_test.go": strings.TrimSuffix(base["orders/orders_test.go"], "}\n") +
+			"\tt.Run(\"ORD-F04 rounds down\", func(t *testing.T) {\n\t\tif got := Round(17); got != 10 {\n\t\t\tt.Fatalf(\"got %d, want 10\", got)\n\t\t}\n\t})\n}\n",
+	})
+	r.git("checkout", "--quiet", "work")
+
+	tmp := t.TempDir()
+	ev, err := Collect(t.Context(), Options{
+		Dir: r.dir, TrustBase: trust, Base: cut, Head: head,
+		Env: goEnv, TempDir: tmp, Validator: openspec.Validator{Run: okValidate},
+	})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	assertClean(t, r, tmp)
+	var found evidence.Finding
+	for _, f := range ev.Input.Tamper {
+		if f.ID == "ORD-F04" {
+			found = f
+		}
+	}
+	if found.ID == "" {
+		t.Fatalf("Tamper = %+v, want a finding for ORD-F04: the default branch has the test unskipped", ev.Input.Tamper)
+	}
+	// No reason code of its own: the detail says which base the declaration came
+	// from, so a reviewer can tell somebody else's change from this one's, and
+	// says that the remedy for the first is a rebase (ADR-0005 §1).
+	if !strings.Contains(found.Detail, "differs from the trust base") || !strings.Contains(found.Detail, "rebase") {
+		t.Errorf("detail = %q, want it to name the trust base and point at a rebase", found.Detail)
+	}
+}
+
+// TestCollectSpecFindingsNeedBothBases pins ADR-0005 §4's subtraction: a finding
+// is only excused when BOTH bases have it. Reintroducing an error the default
+// branch already fixed is new.
+//
+// The fixture is a spec rule broken at the branch point and still broken at head,
+// which the default branch fixed in the meantime. Subtracting against the change
+// base alone would excuse it — and the change base is the one the author chose,
+// so that is a laundry: cut the branch from a commit that already carries the
+// finding and it never shows.
+func TestCollectSpecFindingsNeedBothBases(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a git repository and runs go test")
+	}
+	t.Parallel()
+	r := newRepo(t)
+
+	// A requirement whose name carries no obligation ID: openspec.Check reports
+	// invalid-id, an error.
+	const broken = "\n### Requirement: Refunds are audited\nThe system SHALL audit refunds.\n\n" +
+		"#### Scenario: A refund\n- **WHEN** a refund happens\n- **THEN** it is audited\n"
+	base := cleanBase()
+	base["openspec/specs/orders/spec.md"] += broken
+	cut := r.commit("chore: base with a broken requirement name", base)
+	def := r.git("rev-parse", "--abbrev-ref", "HEAD")
+
+	// Head leaves the spec exactly as the branch point had it and changes code.
+	r.git("checkout", "--quiet", "-b", "work")
+	head := r.commit("feat: refund lowers the total", map[string]string{
+		"orders/orders.go": strings.Replace(base["orders/orders.go"],
+			"func Refund(total, amount int) int { return total }",
+			"func Refund(total, amount int) int { return total - amount }", 1),
+	})
+
+	// The default branch fixed it after the branch was cut.
+	r.git("checkout", "--quiet", def)
+	fixed := cleanBase()
+	trust := r.commit("fix: name the requirement properly", map[string]string{
+		"openspec/specs/orders/spec.md": fixed["openspec/specs/orders/spec.md"],
+	})
+	r.git("checkout", "--quiet", "work")
+
+	tmp := t.TempDir()
+	ev, err := Collect(t.Context(), Options{
+		Dir: r.dir, TrustBase: trust, Base: cut, Head: head,
+		Env: goEnv, TempDir: tmp, Validator: openspec.Validator{Run: okValidate},
+	})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	assertClean(t, r, tmp)
+	var found bool
+	for _, f := range ev.Input.SpecFindings {
+		if f.Rule == openspec.RuleInvalidID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("SpecFindings = %+v, want the invalid-id finding reported: the default branch fixed it, "+
+			"so head carrying it is new however the branch was cut", ev.Input.SpecFindings)
+	}
+
+	// The control: with that one base, the finding is excused, which is the hole.
+	tmp2 := t.TempDir()
+	one, err := Collect(t.Context(), Options{
+		Dir: r.dir, Base: cut, Head: head,
+		Env: goEnv, TempDir: tmp2, Validator: openspec.Validator{Run: okValidate},
+	})
+	if err != nil {
+		t.Fatalf("Collect with one base: %v", err)
+	}
+	assertClean(t, r, tmp2)
+	for _, f := range one.Input.SpecFindings {
+		if f.Rule == openspec.RuleInvalidID {
+			t.Errorf("one base: invalid-id reported, want it excused — the control should show the hole, got %+v", f)
+		}
+	}
+}
+
+// TestCollectLintConfigComesFromTheTrustBase checks which .golangci.yml the
+// ratchet is handed: the trust base's, whose bytes phase 1 kept, and not the merge
+// base's, which whoever cut the branch chose — cut from before the configuration
+// existed and the ratchet would simply switch off (ADR-0005 §1, §7).
+//
+// It plants a fake golangci-lint that copies the file it was given, so the check
+// is on the bytes and needs neither the real tool nor a CI step order.
+//
+// Not parallel: it puts a directory on PATH.
+func TestCollectLintConfigComesFromTheTrustBase(t *testing.T) {
+	if testing.Short() || runtime.GOOS == "windows" {
+		t.Skip("builds a git repository, runs go test and a shell script")
+	}
+	r := newRepo(t)
+	// The branch point has no lint configuration at all.
+	before := cleanBase()
+	cut := r.commit("chore: before the lint ratchet", before)
+	def := r.git("rev-parse", "--abbrev-ref", "HEAD")
+
+	r.git("checkout", "--quiet", "-b", "work")
+	head := r.commit("feat: refund lowers the total", map[string]string{
+		"orders/orders.go": strings.Replace(before["orders/orders.go"],
+			"func Refund(total, amount int) int { return total }",
+			"func Refund(total, amount int) int { return total - amount }", 1),
+	})
+
+	const trustConfig = "version: \"2\"\nlinters:\n  default: standard\n"
+	r.git("checkout", "--quiet", def)
+	trust := r.commit("chore: adopt the lint ratchet", map[string]string{lintConfig: trustConfig})
+	r.git("checkout", "--quiet", "work")
+
+	bin := t.TempDir()
+	seen := filepath.Join(bin, "config-seen")
+	script := "#!/bin/sh\ncase \"$1\" in version) echo 'golangci-lint has version 2.13.2 built with go1.27.0'; exit 0;; esac\n" +
+		"prev=''\nfor a in \"$@\"; do\n  if [ \"$prev\" = --config ]; then cat \"$a\" > " + seen + "; fi\n  prev=\"$a\"\ndone\n" +
+		"printf '%s\\n' '{\"Issues\":[]}'\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(bin, lintTool), []byte(script), 0o700); err != nil { //nolint:gosec // it must be executable
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	tmp := t.TempDir()
+	ev, err := Collect(t.Context(), Options{
+		Dir: r.dir, TrustBase: trust, Base: cut, Head: head,
+		Env: goEnv, TempDir: tmp, Validator: openspec.Validator{Run: okValidate},
+	})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	assertClean(t, r, tmp)
+	if !ev.Input.Lint.BaseConfig || !ev.Input.Lint.Ran {
+		t.Errorf("Lint = %+v, want the trust base's configuration to switch the ratchet on and run it", ev.Input.Lint)
+	}
+	got, err := os.ReadFile(seen) //nolint:gosec // a path this test wrote
+	if err != nil {
+		t.Fatalf("the ratchet was handed no configuration: %v", err)
+	}
+	if string(got) != trustConfig {
+		t.Errorf("golangci-lint was given:\n%s\nwant the trust base's:\n%s", got, trustConfig)
+	}
+}

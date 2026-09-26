@@ -100,12 +100,27 @@ func (c *collector) ratchet(ctx context.Context) (gate.Lint, error) {
 // path rule the base configuration has and report issues it excludes. The name
 // is not the one the policy watches, and git never reported it, so it appears
 // in no diff, no scope and no tamper finding; close removes it.
+//
+// The bytes are the ones phase 1 read from the trust base's tree, not a file on
+// disk: this runs after every test of head, and one of them may have rewritten
+// the extracted tree. The name is derived from the base, so a test can guess it,
+// which is why the open refuses a symlink and truncates rather than appends:
+// otherwise a test could point it at a file outside the repository and have aval
+// write through it.
 func (c *collector) writeBaseLint() (string, error) {
 	name := filepath.Join(c.ev.Root, ".golangci.base-"+c.ev.Base+".yml")
-	if err := os.WriteFile(name, c.baseLint, 0o600); err != nil {
+	f, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|noFollow, 0o600) //nolint:gosec // aval's own name below the repository root; symlinks are refused
+	if err != nil {
 		return "", fmt.Errorf("verify: write the base lint configuration: %w", err)
 	}
-	c.lintFile = name
+	c.lintFile = name // recorded before the write, so close removes it either way
+	_, err = f.Write(c.baseLint)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return "", fmt.Errorf("verify: write the base lint configuration: %w", err)
+	}
 	return name, nil
 }
 

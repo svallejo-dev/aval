@@ -27,16 +27,58 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Build and test
-        run: make build test
-
       - name: Read golangci-lint version
         id: tools
         run: echo "golangci=v$(awk '$1 == "golangci-lint" {print $2}' .tool-versions)" >> "$GITHUB_OUTPUT"
 
-      - uses: golangci/golangci-lint-action@v9
-        with:
-          version: ${{ steps.tools.outputs.golangci }}
+      # Installed before the tests, not only for the lint step: internal/verify
+      # runs the real golangci-lint in a few tests and skips without it, and a
+      # test that skips pins nothing.
+      #
+      # The binary is fetched here rather than through golangci-lint-action,
+      # because that action always runs `golangci-lint run` and has no
+      # install-only mode, and because one install serves both the tests and
+      # `make lint` — the same target, and the same binary, that a developer runs.
+      # The version comes from .tool-versions, read once in the step above, so it
+      # is never written down twice.
+      - name: Install golangci-lint
+        env:
+          VERSION: ${{ steps.tools.outputs.golangci }}
+        run: |
+          set -euo pipefail
+          name="golangci-lint-${VERSION#v}-linux-amd64"
+          base="https://github.com/golangci/golangci-lint/releases/download/${VERSION}"
+          dir="$(mktemp -d)"
+          curl -sSfL --retry 3 -o "${dir}/${name}.tar.gz" "${base}/${name}.tar.gz"
+          curl -sSfL --retry 3 -o "${dir}/checksums.txt" \
+            "${base}/golangci-lint-${VERSION#v}-checksums.txt"
+          # The digest, not just the transport: this lands in /usr/local/bin as
+          # root and then runs over the repository. grep for our own asset, since
+          # the file lists every platform's — and with pipefail, an asset that has
+          # been renamed upstream fails the step instead of skipping the check.
+          ( cd "${dir}" && grep " ${name}.tar.gz\$" checksums.txt | sha256sum -c - )
+          tar -xzf "${dir}/${name}.tar.gz" -C "${dir}"
+          sudo install -m 0755 "${dir}/${name}/golangci-lint" /usr/local/bin/golangci-lint
+
+      # The install is only useful if it reaches the tests' PATH, and the version
+      # only if it is the pinned one. Asserted, because the alternative is those
+      # tests skipping in silence.
+      - name: golangci-lint is the pinned one, on PATH
+        env:
+          VERSION: ${{ steps.tools.outputs.golangci }}
+        run: golangci-lint version | grep -F "${VERSION#v}"
+
+      - name: Build and test
+        run: make build test
+
+      # A step of its own, so the hooks' p95 is measured with the machine to
+      # itself: beside `go test -race ./...` the number is the runner's load and
+      # not aval's (ADR-0003's 50 ms budget, internal/hook/latency_test.go).
+      - name: Hook latency
+        run: make latency
+
+      - name: Lint
+        run: make lint
 
   # Differential test of internal/openspec against the real OpenSpec CLI
   # (ADR-0002). It needs Node and npm, and installs OpenSpec from the npm

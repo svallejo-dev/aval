@@ -1,0 +1,127 @@
+# aval verify gathers the evidence for a range, applies the gate's rules to it,
+# writes the bundle and the status the agent hooks read, and prints the report.
+# Here the range is one commit that only touches dx paths and no OpenSpec change,
+# so the pull request is tier 0 and every rule is satisfied.
+#
+# The range has two bases (ADR-0005 §1): the trust base is the tip of the default
+# branch, where the policy comes from, and the change base is its merge base with
+# the head, where the range starts. Both are in the report and in the bundle.
+#
+# It also pins the shape of --json: the envelope of ADR-0003 with the evidence
+# bundle of ADR-0004 as its data.
+
+[!exec:git] skip 'needs git'
+[!exec:go] skip 'needs the go command'
+
+env GIT_CONFIG_NOSYSTEM=1
+env GIT_AUTHOR_NAME=aval
+env GIT_AUTHOR_EMAIL=aval@example.com
+env GIT_COMMITTER_NAME=aval
+env GIT_COMMITTER_EMAIL=aval@example.com
+
+cd repo
+exec git init -q -b main
+exec git add -A
+exec git commit -q -m 'chore: adopt aval'
+
+# The pull request: one commit under docs/**, which the base policy calls dx, so
+# nothing raises the tier above 0.
+exec git checkout -q -b work
+cp $WORK/notes.md docs/notes.md
+exec git add -A
+exec git commit -q -m 'docs: write down the refund rules'
+
+exec aval verify --plain
+stdout '^✓ aval: pass · tier 0 · enforce$'
+stdout '^None: every rule the gate applies is satisfied\.$'
+stdout '^ORD-F01$'
+stdout '^  bound tests: TestRefund/ORD-F01_refunds_once$'
+# The policy came from the tip of the default branch, so the gate enforces.
+stdout 'trust base [0-9a-f]+ · change base [0-9a-f]+ \(main\)'
+! stderr .
+
+# The bundle goes where the workflow and the hooks look for it, git ignores the
+# directory, and the status lets the agent stop (ADR-0005 §7).
+exists .aval/evidence/.gitignore
+exists .aval/cache/verify-status.json
+grep '"passed": true' .aval/cache/verify-status.json
+
+exec aval verify --json
+stdout '"command": "verify"'
+stdout '"ok": true'
+stdout '"errors": \[\]'
+stdout '"schemaVersion": 3'
+stdout '"mode": "enforce"'
+stdout '"tier": 0'
+stdout '"result": "pass"'
+stdout '"reasons": \[\]'
+stdout '"trustBase": "[0-9a-f]{40}"'
+stdout '"changeBase": "[0-9a-f]{40}"'
+stdout '"baseRef": "main"'
+# verify makes no network call, so the reviews it did not read are named rather
+# than left as an empty list that would read as nobody having approved.
+stdout '^ +"approvals"$'
+! stderr .
+
+# The range is explicit too, with revisions and not only SHAs.
+exec aval verify --plain --trust-base main --head work
+stdout '^✓ aval: pass · tier 0 · enforce$'
+
+# An empty range is never a pass: naming the head as the change base is exit 2.
+! exec aval verify --json --change-base work
+stdout '"code": "usage"'
+stdout 'is the head commit: the range is empty'
+
+-- notes.md --
+# Refunds
+
+A refund is processed at most once per key.
+-- repo/go.mod --
+module example.com/shop
+
+go 1.22
+-- repo/aval.yaml --
+version: 1
+context: ORD
+mode: enforce
+tierDefault: 1
+openspec:
+  version: 1.13.1
+paths:
+  dx:
+    - docs/**
+  feat:
+    - refund/**
+-- repo/docs/README.md --
+# shop
+-- repo/openspec/specs/refunds/spec.md --
+# refunds Specification
+
+## Requirements
+
+### Requirement: ORD-F01 Refund is idempotent
+The system SHALL process a refund at most once per key.
+
+#### Scenario: Duplicate key
+- **WHEN** a refund arrives with a processed key
+- **THEN** the first result is returned
+-- repo/refund/refund.go --
+package refund
+
+// Once reports whether a refund for a key that was seen may go through.
+func Once(seen bool) bool { return !seen }
+-- repo/refund/refund_test.go --
+package refund
+
+import "testing"
+
+func TestRefund(t *testing.T) {
+	t.Run("ORD-F01 refunds once", func(t *testing.T) {
+		if !Once(false) {
+			t.Fatal("the first refund must go through")
+		}
+		if Once(true) {
+			t.Fatal("a refund of a seen key must not go through")
+		}
+	})
+}

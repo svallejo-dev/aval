@@ -440,7 +440,7 @@ func TestVerdictIsAValidBundleVerdict(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		in := genInput(t)
 		v := Decide(in)
-		b := evidence.Bundle{SchemaVersion: evidence.SchemaVersion, Repo: "o/r", Base: other, Head: head, AvalVersion: "v0.0.0-test",
+		b := evidence.Bundle{SchemaVersion: evidence.SchemaVersion, Repo: "o/r", TrustBase: other, ChangeBase: other, BaseRef: "main", Head: head, AvalVersion: "v0.0.0-test",
 			GeneratedAt: time.Date(2026, 9, 22, 0, 0, 0, 0, time.UTC), Mode: string(in.Mode()), Tier: int(in.Tier()), Verdict: v}
 		if err := b.Validate(); err != nil {
 			t.Fatalf("bundle with verdict %+v: %v", v, err)

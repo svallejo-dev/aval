@@ -10,12 +10,12 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-// Schema is the JSON Schema of bundle version 2 (schema/bundle.v2.json).
+// Schema is the JSON Schema of bundle version 3 (schema/bundle.v3.json).
 //
-//go:embed schema/bundle.v2.json
+//go:embed schema/bundle.v3.json
 var Schema []byte
 
-const schemaURL = "https://github.com/svallejo-dev/aval/schema/bundle.v2.json"
+const schemaURL = "https://github.com/svallejo-dev/aval/schema/bundle.v3.json"
 
 // compiledSchema compiles Schema once. A broken embedded schema is a build
 // defect, so the error surfaces on every validation instead of panicking.
