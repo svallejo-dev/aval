@@ -75,6 +75,8 @@ Usar la base del cambio para lo segundo es lo correcto: con un tip, los cambios 
 - de la base del cambio: specs, declaraciones y `.gitattributes`;
 - del rango: diff, changes y scope (§3b).
 
+Los árboles que se materializan **para leer** (specs, declaraciones, bytes de la política, del baseline y de la config de lint) se crean en esta fase y de ellos no se ejecuta nada. El árbol de la falla-antes es otro, y §2.1 fija cuándo se crea.
+
 Materializar el árbol de la base del cambio (§2.1) no es una lectura más: escribe ficheros y ocurre después de la ejecución de head, por eso se hace desde los objetos y nunca por el checkout de git.
 
 **Git endurecido:** todo `git` corre con:
