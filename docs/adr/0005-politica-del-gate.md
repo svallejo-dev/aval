@@ -93,7 +93,7 @@ Aplica a las obligaciones **F, N e I** con delta `added` o `modified`:
    Limitarlo a los paquetes daría un `strong` falso si un test nuevo lee `testdata/` compartido.
 3. **Selección exacta:**
    - a partir de los **nombres completos** de sus tests en la ejecución de head (por ejemplo `TestSuite/TestX/ORD-F01_…`) se construye un patrón anclado por nivel: `-run '^TestSuite$/^TestX$/^ORD-F01([_#]|$)'`, con cada nivel escapado;
-   - se ejecuta **un proceso de test por (Test de primer nivel, ID)**, para que un hermano con un bug en la base no cambie el estado de otro ID;
+   - se ejecuta **un proceso de test por cada ruta padre distinta de los nombres de ese ID**, para que un hermano con un bug en la base no cambie el estado de otro ID. Se agrupan como alternativas solo los nombres hermanos, los que comparten ruta padre: `go test` parte el `-run` por `/` antes de mirar las alternativas, así que unir `TestX/ORD-F01` con `TestX/Sub/ORD-F01` en un mismo patrón dejaría el segundo sin ejecutar, con su estado desconocido;
    - para abaratarlo, se puede compilar el binario de test de cada paquete una vez (`go test -c`) y ejecutarlo por ID a través de `go tool test2json`.
 4. **Estado:** el de cada ID sale de `gotest.Report.Status(id, <paquetes de sus tests en head>)`.
 5. **Limpieza:** el worktree se elimina siempre.
@@ -114,7 +114,7 @@ La fuerza (ADR-0004) exige **además** que el estado en head sea `pass`:
 
 ### 3. Regresiones aisladas
 
-Las obligaciones F, N e I **fuera del delta** que tienen tests vinculados se ejecutan en head **aisladas**, con la selección exacta de §2.3 y un proceso por (Test de primer nivel, ID), igual que la falla-antes. Así ni los subtests hermanos ni los Tests anteriores pueden alterar su estado. Tienen que pasar.
+Las obligaciones F, N e I **fuera del delta** que tienen tests vinculados se ejecutan en head **aisladas**, con la selección exacta de §2.3 y su mismo aislamiento, un proceso por ruta padre. Así ni los subtests hermanos ni los Tests anteriores pueden alterar su estado. Tienen que pasar.
 
 ### 3b. Clasificación de commits (scope)
 
