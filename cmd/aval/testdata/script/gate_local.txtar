@@ -3,9 +3,11 @@
 # recomputes the evidence every time, so a bundle already on disk is never the
 # verdict (§7).
 #
-# Inside Actions it takes the pull request from the event instead, and refuses an
-# event ADR-0005 §8 does not allow or a checkout that is not the commit the event
-# is about — both as invalid invocations of the workflow, exit 2.
+# Inside Actions the range is the event's and the flags that name it are refused,
+# for the whole of GITHUB_ACTIONS and not only for a pull request event: a
+# workflow the pull request itself wrote could otherwise run on push and pick its
+# own trust base. It also refuses an event ADR-0005 §8 does not allow and a
+# checkout that is not the commit the event is about — all exit 2.
 
 [!exec:git] skip 'needs git'
 [!exec:go] skip 'needs the go command'
@@ -36,7 +38,7 @@ stdout '^None: no review of this pull request was considered\.$'
 exists .aval/evidence/.gitignore
 
 # Explicit revisions work as well as SHAs.
-exec aval gate --plain --base main --head work
+exec aval gate --plain --trust-base main --head work
 stdout '^✓ aval: pass · tier 0 · enforce$'
 
 exec aval gate --json
@@ -45,20 +47,31 @@ stdout '"ok": true'
 stdout '"result": "pass"'
 
 # An unknown revision is an invalid invocation, never a pass.
-! exec aval gate --json --base nope
+! exec aval gate --json --trust-base nope
 stdout '"code": "usage"'
-stdout '--base \\"nope\\" names no commit'
+stdout '--trust-base \\"nope\\" names no commit'
+! exec aval gate --json --change-base nope
+stdout '--change-base \\"nope\\" names no commit'
 
-# In Actions, only the events of ADR-0005 §8 carry a pull request to judge.
+# In Actions the workflow may not name the range, whatever the event is.
 env GITHUB_ACTIONS=true
 env GITHUB_EVENT_NAME=push
+! exec aval gate --json --trust-base main
+stdout '"code": "usage"'
+stdout 'not allowed when GITHUB_ACTIONS is set'
+! exec aval gate --json --change-base main
+stdout 'not allowed when GITHUB_ACTIONS is set'
+
+# And only the events of ADR-0005 §8 carry a pull request to judge.
 ! exec aval gate --json
 stdout '"code": "usage"'
 stdout 'not on \\"push\\"'
 ! stderr .
 
 # A pull_request event whose head is not what the job checked out: the workflow
-# is checking out the merge commit actions/checkout builds by default.
+# is checking out the merge commit actions/checkout builds by default. The payload
+# names only the base branch and no base.sha, which a script cannot know, so this
+# also exercises the fallback from the commit to the branch name.
 env GITHUB_EVENT_NAME=pull_request
 env GITHUB_EVENT_PATH=$WORK/event.json
 ! exec aval gate --json
@@ -73,10 +86,11 @@ A refund is processed at most once per key.
 {
   "action": "synchronize",
   "number": 7,
+  "repository": {"default_branch": "main"},
   "pull_request": {
     "number": 7,
     "head": {"sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-    "base": {"sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "ref": "main"},
+    "base": {"ref": "main"},
     "user": {"login": "agent"}
   }
 }

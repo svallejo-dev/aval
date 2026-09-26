@@ -1,10 +1,15 @@
-# aval verify fails only for a block an agent can act on.
+# The exit code and the status the agent hooks read answer different questions.
 #
-# It reads no review, so at tier 3 the verdict always carries approval_missing
-# (ADR-0005 §5). That is the one reason the agent cannot resolve, and a Stop hook
-# that treated it as a failure would keep the agent working for ever. So a block
-# that rests on approval_missing alone exits 0 and leaves the hook status passed,
-# while any other blocking reason exits 1 in enforce mode and does not.
+# aval reads no review locally, so at tier 3 the verdict always carries
+# approval_missing (ADR-0005 §5). The exit code is §6 unchanged: a block in
+# enforce mode is 1, for both commands, even when that approval is the only thing
+# blocking — the gate grants no agent exemption, and a human running verify before
+# pushing sees the failure.
+#
+# The status is where the exemption lives, and only for that one code: it says
+# passed and records which code it passed in spite of, so a Stop hook lets the
+# agent finish instead of holding it for an approval it cannot obtain. Any other
+# blocking reason is work, and then the status says not passed and claims nothing.
 
 [!exec:git] skip 'needs git'
 [!exec:go] skip 'needs the go command'
@@ -27,15 +32,27 @@ cp $WORK/grown.go refund/refund.go
 exec git add -A
 exec git commit -q -m 'feat: answer whether a key was refunded twice'
 
-exec aval verify --plain
+! exec aval verify --plain
 stdout '^✗ aval: block · tier 3 · enforce$'
 stdout '^- approval_missing'
 ! stdout '^- after_not_passing'
-! stderr .
-grep '"passed": true' .aval/cache/verify-status.json
+stderr '^aval: verify failed: block · tier 3 · 1 reason · approval_missing$'
 
-# Now break the bound test. after_not_passing is the agent's to fix, so verify
-# fails, reports why on stderr and marks the status not passed.
+# The status passes, and names the code it passed in spite of. A hook that found
+# any other code there would refuse the status rather than trust a claim it
+# cannot check.
+grep '"schemaVersion": 2' .aval/cache/verify-status.json
+grep '"passed": true' .aval/cache/verify-status.json
+grep '"approval_missing"' .aval/cache/verify-status.json
+
+# The gate has no exemption at all: same range, same verdict, exit 1.
+! exec aval gate --plain
+stdout '^✗ aval: block · tier 3 · enforce$'
+stdout '^- approval_missing'
+stderr '^aval: gate failed: block · tier 3 · 1 reason · approval_missing$'
+
+# Now break the bound test. after_not_passing is the agent's to fix, so the
+# status says not passed and claims no exemption.
 cp $WORK/broken.go refund/refund.go
 exec git add -A
 exec git commit -q -m 'feat: break the refund rule'
@@ -46,6 +63,7 @@ stdout '^- after_not_passing — a bound test does not pass at head$'
 stdout '^- approval_missing'
 stderr '^aval: verify failed: block · tier 3 · 2 reasons · ORD-F01 after_not_passing$'
 grep '"passed": false' .aval/cache/verify-status.json
+! grep '"exempt"' .aval/cache/verify-status.json
 
 # The same range in json mode: the reasons make the envelope's ok false (ADR-0003).
 ! exec aval verify --json

@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -67,8 +68,23 @@ func pushedHead(ctx context.Context, dir string) <-chan bool {
 // repository root (ADR-0005 §7).
 const StatusFile = ".aval/cache/verify-status.json"
 
-// StatusVersion is the schemaVersion that WriteStatus stamps.
-const StatusVersion = 1
+// StatusVersion is the schemaVersion that WriteStatus stamps. Version 2 added
+// Exempt.
+const StatusVersion = 2
+
+// ExemptApprovalMissing is the only reason code a status may claim it passed in
+// spite of: the approval a tier-3 change needs, which no agent can obtain
+// (ADR-0005 §5, §7). Every other blocking reason is work the agent has left.
+//
+// It is spelled here rather than imported from internal/gate, which reaches
+// openspec, yaml and a JSON Schema compiler: a hook has 50 ms (ADR-0003). A test
+// of a package that imports both keeps the two spellings equal.
+const ExemptApprovalMissing = "approval_missing"
+
+// exemptCodes are the codes a status may list. One that names any other was
+// written by something this build does not agree with, and counts as not passed
+// rather than as a pass it cannot check.
+var exemptCodes = []string{ExemptApprovalMissing}
 
 // maxStatus caps what ReadStatus reads: a status is a few hundred bytes.
 const maxStatus = 1 << 16
@@ -93,10 +109,11 @@ var emptyDigest = hex.EncodeToString(sha256.New().Sum(nil))
 // Status is the outcome of the last `aval verify`, stored in StatusFile:
 //
 //	{
-//	  "schemaVersion": 1,
+//	  "schemaVersion": 2,
 //	  "head": "<commit SHA>",
 //	  "diff": "<hex SHA-256, see Key>",
 //	  "passed": true,
+//	  "exempt": ["approval_missing"],
 //	  "verifiedAt": "2026-09-22T10:00:00Z"
 //	}
 //
@@ -105,8 +122,25 @@ var emptyDigest = hex.EncodeToString(sha256.New().Sum(nil))
 type Status struct {
 	SchemaVersion int `json:"schemaVersion"`
 	Key
-	Passed     bool      `json:"passed"` // verify found nothing that blocks
+	Passed bool `json:"passed"` // verify found nothing the agent can act on
+	// Exempt lists the blocking reason codes this status passed in spite of. It
+	// is empty unless Passed is true over a verdict that blocks, and the only
+	// code it may hold is ExemptApprovalMissing: an exemption a hook cannot
+	// check is no exemption, so any other code makes the status unusable.
+	Exempt     []string  `json:"exempt,omitempty"`
 	VerifiedAt time.Time `json:"verifiedAt"`
+}
+
+// Valid reports whether s claims only exemptions this build grants. An
+// unrecognised code means the file was written under another policy, and a hook
+// treats it as not passed rather than trusting a claim it cannot check.
+func (s Status) Valid() bool {
+	for _, code := range s.Exempt {
+		if !slices.Contains(exemptCodes, code) {
+			return false
+		}
+	}
+	return true
 }
 
 // ErrNoStatus is wrapped by ReadStatus's error when there is no usable
@@ -176,6 +210,9 @@ func ReadStatus(root string) (Status, error) {
 	}
 	if s.SchemaVersion != StatusVersion {
 		return Status{}, fmt.Errorf("%w: %s has schemaVersion %d, want %d", ErrNoStatus, name, s.SchemaVersion, StatusVersion)
+	}
+	if !s.Valid() {
+		return Status{}, fmt.Errorf("%w: %s claims exemptions this build does not grant: %v", ErrNoStatus, name, s.Exempt)
 	}
 	return s, nil
 }

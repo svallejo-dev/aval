@@ -2,12 +2,12 @@
 # blocks with unverified (ADR-0005 §4): the change raises the tier to its own,
 # and at tier 1 an added F/N/I obligation has to have a test.
 #
-# The base carries no aval.yaml on purpose. A pull request that touches
-# openspec/ makes aval run `openspec validate` with the version the base policy
-# pins, and that means installing the OpenSpec CLI from npm, which this script
-# cannot do offline. Without a base policy the validation is declared in
-# notCollected instead, and the gate observes, so the verdict still blocks and
-# the exit code is 0 (ADR-0005 §6). The enforce side is verify_status.txtar's.
+# The default branch carries no aval.yaml on purpose. A pull request that touches
+# openspec/ makes aval run `openspec validate` with the version the policy pins,
+# and that means installing the OpenSpec CLI from npm, which this script cannot
+# do offline. Without a policy the validation is declared in notCollected
+# instead, and the gate observes, so the verdict still blocks and the exit code
+# is 0 (ADR-0005 §6). The enforce side is verify_status.txtar's.
 
 [!exec:git] skip 'needs git'
 [!exec:go] skip 'needs the go command'
@@ -47,6 +47,7 @@ stdout 'openspec_validate, approvals'
 # whether CI blocks the merge, and the status whether the agent has work left,
 # and a missing test is work left whatever the mode says.
 grep '"passed": false' .aval/cache/verify-status.json
+! grep '"exempt"' .aval/cache/verify-status.json
 
 exec aval verify --json
 stdout '"ok": true'

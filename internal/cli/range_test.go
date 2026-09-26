@@ -50,6 +50,14 @@ func (r *gitRepo) commit(msg string, files map[string]string) string {
 	return r.git("rev-parse", "HEAD")
 }
 
+// commitOn makes a commit on top of parent without moving any branch, and
+// returns it: for a case that needs a ref to point somewhere else.
+func (r *gitRepo) commitOn(t *testing.T, name, parent string) string {
+	t.Helper()
+	tree := r.git("rev-parse", parent+"^{tree}")
+	return r.git("commit-tree", tree, "-p", parent, "-m", name)
+}
+
 // history builds the shape every range test needs: a base commit on main and a
 // head commit on the branch work, with main left where it was.
 func (r *gitRepo) history() (base, head string) {
@@ -67,54 +75,67 @@ func TestResolveRange(t *testing.T) {
 		name string
 		// setup prepares the refs the case needs; it runs after history() and
 		// may move the head, in which case it returns the new one.
-		setup    func(r *gitRepo, base, head string) string
-		flags    func(base, head string) rangeFlags
-		wantBase func(base, head string) string
-		wantCode int
-		wantErr  string // substring of the error message
+		setup     func(r *gitRepo, base, head string) string
+		flags     func(base, head string) rangeFlags
+		wantTrust func(r *gitRepo, base, head string) string
+		wantBase  func(r *gitRepo, base, head string) string
+		wantRef   string
+		wantCode  int
+		wantErr   string // substring of the error message
 	}{
 		{
-			name:     "explicit base and head",
-			flags:    func(base, head string) rangeFlags { return rangeFlags{base: base, head: head} },
-			wantBase: func(base, _ string) string { return base },
+			name:      "explicit bases and head",
+			flags:     func(base, head string) rangeFlags { return rangeFlags{trustBase: base, changeBase: base, head: head} },
+			wantTrust: func(_ *gitRepo, base, _ string) string { return base },
+			wantBase:  func(_ *gitRepo, base, _ string) string { return base },
+			wantRef:   "", // the flag's own text; the case fills it below
 		},
 		{
-			name:     "a short base resolves to the full SHA",
-			flags:    func(base, _ string) rangeFlags { return rangeFlags{base: base[:8]} },
-			wantBase: func(base, _ string) string { return base },
+			name:      "a short trust base resolves to the full SHA",
+			flags:     func(base, _ string) rangeFlags { return rangeFlags{trustBase: base[:8]} },
+			wantTrust: func(_ *gitRepo, base, _ string) string { return base },
+			wantBase:  func(_ *gitRepo, base, _ string) string { return base },
 		},
 		{
-			name: "the default base is the merge base with origin/main",
+			name: "the change base is the merge base with the trust base",
 			setup: func(r *gitRepo, base, _ string) string {
 				r.git("update-ref", "refs/remotes/origin/main", base)
 				return ""
 			},
-			wantBase: func(base, _ string) string { return base },
+			wantTrust: func(_ *gitRepo, base, _ string) string { return base },
+			wantBase:  func(_ *gitRepo, base, _ string) string { return base },
+			wantRef:   "origin/main",
 		},
 		{
-			name: "origin/main wins over the upstream and over main",
-			setup: func(r *gitRepo, base, head string) string {
-				r.git("update-ref", "refs/remotes/origin/main", head)
-				r.git("update-ref", "refs/remotes/up/main", base)
-				r.git("config", "branch.work.remote", "up")
-				r.git("config", "branch.work.merge", "refs/heads/main")
-				return ""
-			},
-			wantBase: func(_, head string) string { return head },
-		},
-		{
-			name: "without origin/main the configured upstream decides",
+			// The remote's own main is the default branch; a local main that
+			// moved on is not what the policy comes from.
+			name: "origin/main wins over a local main",
 			setup: func(r *gitRepo, base, _ string) string {
-				r.git("update-ref", "refs/remotes/up/main", base)
-				r.git("config", "branch.work.remote", "up")
-				r.git("config", "branch.work.merge", "refs/heads/main")
+				r.git("update-ref", "refs/remotes/origin/main", base)
+				r.git("update-ref", "refs/heads/main", r.commitOn(t, "main-moved", base))
 				return ""
 			},
-			wantBase: func(base, _ string) string { return base },
+			wantTrust: func(_ *gitRepo, base, _ string) string { return base },
+			wantBase:  func(_ *gitRepo, base, _ string) string { return base },
+			wantRef:   "origin/main",
 		},
 		{
-			name:     "without a remote the local main decides",
-			wantBase: func(base, _ string) string { return base },
+			name: "origin/HEAD names the default branch when it is not main",
+			setup: func(r *gitRepo, base, _ string) string {
+				r.git("update-ref", "refs/remotes/origin/trunk", base)
+				r.git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
+				r.git("update-ref", "-d", "refs/heads/main")
+				return ""
+			},
+			wantTrust: func(_ *gitRepo, base, _ string) string { return base },
+			wantBase:  func(_ *gitRepo, base, _ string) string { return base },
+			wantRef:   "refs/remotes/origin/trunk",
+		},
+		{
+			name:      "without a remote the local main decides",
+			wantTrust: func(_ *gitRepo, base, _ string) string { return base },
+			wantBase:  func(_ *gitRepo, base, _ string) string { return base },
+			wantRef:   "main",
 		},
 		{
 			name:     "an unknown head is a usage error",
@@ -123,28 +144,50 @@ func TestResolveRange(t *testing.T) {
 			wantErr:  `--head "nope" names no commit`,
 		},
 		{
-			name:     "an unknown base is a usage error",
-			flags:    func(_, _ string) rangeFlags { return rangeFlags{base: "nope"} },
+			name:     "an unknown trust base is a usage error",
+			flags:    func(_, _ string) rangeFlags { return rangeFlags{trustBase: "nope"} },
 			wantCode: ExitUsage,
-			wantErr:  `--base "nope" names no commit`,
+			wantErr:  `--trust-base "nope" names no commit`,
 		},
 		{
-			name:     "a base that looks like a flag is a usage error",
-			flags:    func(_, _ string) rangeFlags { return rangeFlags{base: "--upload-pack=touch"} },
+			name:     "an unknown change base is a usage error",
+			flags:    func(_, _ string) rangeFlags { return rangeFlags{changeBase: "nope"} },
 			wantCode: ExitUsage,
-			wantErr:  `--base "--upload-pack=touch" names no commit`,
+			wantErr:  `--change-base "nope" names no commit`,
+		},
+		{
+			name:     "a trust base that looks like a flag is a usage error",
+			flags:    func(_, _ string) rangeFlags { return rangeFlags{trustBase: "--upload-pack=touch"} },
+			wantCode: ExitUsage,
+			wantErr:  `--trust-base "--upload-pack=touch" names no commit`,
+		},
+		{
+			// The quietest pass there is: nothing in the range, so every rule
+			// is satisfied by having nothing to judge.
+			name:     "a change base equal to the head is refused",
+			flags:    func(_, head string) rangeFlags { return rangeFlags{changeBase: head} },
+			wantCode: ExitUsage,
+			wantErr:  "is the head commit: the range is empty",
+		},
+		{
+			name: "a head already on the default branch is refused",
+			setup: func(r *gitRepo, _, _ string) string {
+				r.git("checkout", "--quiet", "main")
+				return r.git("rev-parse", "HEAD")
+			},
+			wantCode: ExitUsage,
+			wantErr:  "the head is already on it, so the range would be empty",
 		},
 		{
 			// An orphan branch shares no history with main, so no candidate
-			// yields a merge base and the error has to name all three.
-			name: "no candidate resolves, and the error says which were tried",
+			// yields a merge base at all.
+			name: "no merge base at all is refused, naming what was tried",
 			setup: func(r *gitRepo, _, _ string) string {
 				r.git("checkout", "--quiet", "--orphan", "lonely")
 				return r.commit("feat: alone", map[string]string{"c.txt": "c\n"})
 			},
-			flags:    func(_, _ string) rangeFlags { return rangeFlags{} },
 			wantCode: ExitUsage,
-			wantErr:  `"origin/main", "@{upstream}", "main"`,
+			wantErr:  `"main" (no merge base with the head)`,
 		},
 	}
 	for _, tt := range tests {
@@ -169,7 +212,7 @@ func TestResolveRange(t *testing.T) {
 				t.Errorf("root = %q, want %q", root, r.dir)
 			}
 
-			gotBase, gotHead, err := resolveRange(t.Context(), g, f, defaultBaseRefs)
+			got, err := resolveRange(t.Context(), g, f, trustRefs(t.Context(), g, ""), nil)
 			if tt.wantCode != 0 {
 				assertExitCode(t, err, tt.wantCode, tt.wantErr)
 				return
@@ -177,13 +220,40 @@ func TestResolveRange(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolveRange: %v", err)
 			}
-			if want := tt.wantBase(base, head); gotBase != want {
-				t.Errorf("base = %s, want %s", gotBase, want)
+			if want := tt.wantTrust(r, base, head); got.trust != want {
+				t.Errorf("trust base = %s, want %s", got.trust, want)
 			}
-			if gotHead != head {
-				t.Errorf("head = %s, want %s", gotHead, head)
+			if want := tt.wantBase(r, base, head); got.change != want {
+				t.Errorf("change base = %s, want %s", got.change, want)
+			}
+			if tt.wantRef != "" && got.ref != tt.wantRef {
+				t.Errorf("base ref = %q, want %q", got.ref, tt.wantRef)
+			}
+			if got.head != head {
+				t.Errorf("head = %s, want %s", got.head, head)
 			}
 		})
+	}
+}
+
+// TestResolveTrustWithoutADefaultBranch checks that a repository whose default
+// branch aval cannot find is exit 2 and not a run with no policy: without the
+// trust base there is nothing to judge against, and observing would pass.
+func TestResolveTrustWithoutADefaultBranch(t *testing.T) {
+	t.Parallel()
+	r := newGitRepo(t)
+	base, _ := r.history()
+	r.git("update-ref", "-d", "refs/heads/main")
+	_, g, err := openRepo(t.Context(), r.dir)
+	if err != nil {
+		t.Fatalf("openRepo: %v", err)
+	}
+	_, err = resolveRange(t.Context(), g, rangeFlags{}, trustRefs(t.Context(), g, ""), nil)
+	assertExitCode(t, err, ExitUsage, "cannot find the tip of the default branch")
+	// Named explicitly, it works: the flag is the escape hatch.
+	got, err := resolveRange(t.Context(), g, rangeFlags{trustBase: base}, nil, nil)
+	if err != nil || got.trust != base {
+		t.Errorf("resolveRange with --trust-base = %+v, %v; want trust %s", got, err, base)
 	}
 }
 
@@ -197,7 +267,7 @@ func TestResolveRangeEmptyRepository(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openRepo: %v", err)
 	}
-	_, _, err = resolveRange(t.Context(), g, rangeFlags{}, defaultBaseRefs)
+	_, err = resolveRange(t.Context(), g, rangeFlags{}, fallbackTrustRefs, nil)
 	assertExitCode(t, err, ExitUsage, "this repository has no commits yet")
 }
 

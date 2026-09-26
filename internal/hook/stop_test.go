@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -151,6 +152,7 @@ func TestStatusFile(t *testing.T) {
 	want := Status{
 		Key:        Key{Head: "0123456789abcdef0123456789abcdef01234567", Diff: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
 		Passed:     true,
+		Exempt:     []string{ExemptApprovalMissing},
 		VerifiedAt: time.Date(2026, 9, 22, 10, 0, 0, 0, time.UTC),
 	}
 	for range 2 { // the second write replaces the file
@@ -159,10 +161,13 @@ func TestStatusFile(t *testing.T) {
 		}
 	}
 	const golden = `{
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "head": "0123456789abcdef0123456789abcdef01234567",
   "diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "passed": true,
+  "exempt": [
+    "approval_missing"
+  ],
   "verifiedAt": "2026-09-22T10:00:00Z"
 }
 `
@@ -171,8 +176,23 @@ func TestStatusFile(t *testing.T) {
 		t.Errorf("status file: %v\n%s\nwant:\n%s", err, data, golden)
 	}
 	want.SchemaVersion = StatusVersion
-	if got, err := ReadStatus(root); err != nil || got != want {
+	if got, err := ReadStatus(root); err != nil || !sameStatus(got, want) {
 		t.Errorf("ReadStatus() = %+v, %v; want %+v", got, err, want)
+	}
+
+	// An exemption this build does not grant is not one it may trust: the
+	// status counts as unreadable, so the hook keeps the agent working.
+	bad := want
+	bad.Exempt = []string{ExemptApprovalMissing, "tamper"}
+	if err := WriteStatus(root, bad); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadStatus(root); !errors.Is(err, ErrNoStatus) {
+		t.Errorf("ReadStatus() of a status exempting tamper: error %v, want ErrNoStatus", err)
+	}
+
+	if err := WriteStatus(root, want); err != nil {
+		t.Fatal(err)
 	}
 
 	// Only a regular file is read: opening a FIFO would hang.
@@ -193,4 +213,10 @@ func TestStatusFile(t *testing.T) {
 			t.Errorf("ReadStatus() of a %s: error %v, want ErrNoStatus", name, err)
 		}
 	}
+}
+
+// sameStatus compares two statuses, whose Exempt slice rules out ==.
+func sameStatus(a, b Status) bool {
+	return a.SchemaVersion == b.SchemaVersion && a.Key == b.Key && a.Passed == b.Passed &&
+		a.VerifiedAt.Equal(b.VerifiedAt) && slices.Equal(a.Exempt, b.Exempt)
 }

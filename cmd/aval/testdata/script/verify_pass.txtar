@@ -1,7 +1,11 @@
-# aval verify gathers the evidence for base..head, applies the gate's rules to
-# it, writes the bundle and the status the agent hooks read, and prints the
-# report. Here the range is one commit that only touches dx paths and no
-# OpenSpec change, so the pull request is tier 0 and every rule is satisfied.
+# aval verify gathers the evidence for a range, applies the gate's rules to it,
+# writes the bundle and the status the agent hooks read, and prints the report.
+# Here the range is one commit that only touches dx paths and no OpenSpec change,
+# so the pull request is tier 0 and every rule is satisfied.
+#
+# The range has two bases (ADR-0005 §1): the trust base is the tip of the default
+# branch, where the policy comes from, and the change base is its merge base with
+# the head, where the range starts. Both are in the report and in the bundle.
 #
 # It also pins the shape of --json: the envelope of ADR-0003 with the evidence
 # bundle of ADR-0004 as its data.
@@ -32,6 +36,8 @@ stdout '^✓ aval: pass · tier 0 · enforce$'
 stdout '^None: every rule the gate applies is satisfied\.$'
 stdout '^ORD-F01$'
 stdout '^  bound tests: TestRefund/ORD-F01_refunds_once$'
+# The policy came from the tip of the default branch, so the gate enforces.
+stdout 'trust base [0-9a-f]+ · change base [0-9a-f]+ \(main\)'
 ! stderr .
 
 # The bundle goes where the workflow and the hooks look for it, git ignores the
@@ -44,19 +50,27 @@ exec aval verify --json
 stdout '"command": "verify"'
 stdout '"ok": true'
 stdout '"errors": \[\]'
-stdout '"schemaVersion": 2'
+stdout '"schemaVersion": 3'
 stdout '"mode": "enforce"'
 stdout '"tier": 0'
 stdout '"result": "pass"'
 stdout '"reasons": \[\]'
+stdout '"trustBase": "[0-9a-f]{40}"'
+stdout '"changeBase": "[0-9a-f]{40}"'
+stdout '"baseRef": "main"'
 # verify makes no network call, so the reviews it did not read are named rather
 # than left as an empty list that would read as nobody having approved.
 stdout '^ +"approvals"$'
 ! stderr .
 
 # The range is explicit too, with revisions and not only SHAs.
-exec aval verify --plain --base main --head work
+exec aval verify --plain --trust-base main --head work
 stdout '^✓ aval: pass · tier 0 · enforce$'
+
+# An empty range is never a pass: naming the head as the change base is exit 2.
+! exec aval verify --json --change-base work
+stdout '"code": "usage"'
+stdout 'is the head commit: the range is empty'
 
 -- notes.md --
 # Refunds

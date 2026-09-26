@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,19 +19,36 @@ import (
 	"github.com/svallejo-dev/aval/internal/approval"
 	"github.com/svallejo-dev/aval/internal/evidence"
 	"github.com/svallejo-dev/aval/internal/platform/git"
+	"github.com/svallejo-dev/aval/internal/verify"
 )
 
 // event writes a pull_request event payload naming head and baseSHA, and
-// returns its path.
+// returns its path. It carries repository.default_branch, as GitHub's own
+// payloads do: that is where the trust base comes from, and a test whose payload
+// left it out would send the gate to the live API for it.
 func event(t *testing.T, head, baseSHA, baseRef, author string) string {
 	t.Helper()
-	pr := map[string]any{
+	return eventWith(t, head, baseSHA, baseRef, author, "main")
+}
+
+// eventWith is event with the default branch spelled out, or left out when
+// defaultBranch is empty.
+func eventWith(t *testing.T, head, baseSHA, baseRef, author, defaultBranch string) string {
+	t.Helper()
+	payload := map[string]any{
+		"action": "synchronize",
 		"number": 7,
-		"head":   map[string]any{"sha": head},
-		"base":   map[string]any{"sha": baseSHA, "ref": baseRef},
-		"user":   map[string]any{"login": author},
+		"pull_request": map[string]any{
+			"number": 7,
+			"head":   map[string]any{"sha": head},
+			"base":   map[string]any{"sha": baseSHA, "ref": baseRef},
+			"user":   map[string]any{"login": author},
+		},
 	}
-	data, err := json.Marshal(map[string]any{"action": "synchronize", "number": 7, "pull_request": pr})
+	if defaultBranch != "" {
+		payload["repository"] = map[string]any{"default_branch": defaultBranch}
+	}
+	data, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,27 +160,64 @@ func TestRunGateRefusals(t *testing.T) {
 	}
 }
 
-// TestEventBaseRefs checks that the base comes from the merge base with the
-// base branch's tip, never from the tip itself (ADR-0005 §1).
+// TestEventBaseRefs checks that the change base comes from the merge base with
+// the target branch's tip, never from the tip itself (ADR-0005 §1), and that a
+// base commit the checkout does not have is fetched rather than refused.
 func TestEventBaseRefs(t *testing.T) {
 	t.Parallel()
-	tip := strings.Repeat("c", 40)
-	got, err := eventBaseRefs(&actions.PullRequest{BaseBranchSHA: tip, BaseRef: "release/1.x"})
-	if err != nil {
-		t.Fatalf("eventBaseRefs: %v", err)
-	}
-	want := []string{tip, "refs/remotes/origin/release/1.x", "release/1.x"}
-	if !slices.Equal(got, want) {
-		t.Errorf("eventBaseRefs = %q, want %q", got, want)
-	}
-	if _, err := eventBaseRefs(&actions.PullRequest{}); err == nil {
-		t.Error("eventBaseRefs without a base = nil error, want a usage error")
-	}
+
+	t.Run("the tip is a candidate to take a merge base with", func(t *testing.T) {
+		t.Parallel()
+		r := newGitRepo(t)
+		_, _ = r.history()
+		tip := r.git("rev-parse", "main")
+		_, g, err := openRepo(t.Context(), r.dir)
+		if err != nil {
+			t.Fatalf("openRepo: %v", err)
+		}
+		got, err := eventBaseRefs(t.Context(), g, &actions.PullRequest{BaseBranchSHA: tip, BaseRef: "release/1.x"})
+		if err != nil {
+			t.Fatalf("eventBaseRefs: %v", err)
+		}
+		want := []string{tip, "refs/remotes/origin/release/1.x", "release/1.x"}
+		if !slices.Equal(got, want) {
+			t.Errorf("eventBaseRefs = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("a payload with no base at all is a usage error", func(t *testing.T) {
+		t.Parallel()
+		r := newGitRepo(t)
+		r.history()
+		_, g, err := openRepo(t.Context(), r.dir)
+		if err != nil {
+			t.Fatalf("openRepo: %v", err)
+		}
+		_, err = eventBaseRefs(t.Context(), g, &actions.PullRequest{})
+		assertExitCode(t, err, ExitUsage, "names no base branch")
+	})
+
+	t.Run("a base commit this checkout does not have is fetched, and refused when it cannot be", func(t *testing.T) {
+		t.Parallel()
+		r := newGitRepo(t)
+		r.history()
+		_, g, err := openRepo(t.Context(), r.dir)
+		if err != nil {
+			t.Fatalf("openRepo: %v", err)
+		}
+		// No origin remote, so the fetch cannot succeed: a fork's base commit
+		// that aval cannot obtain must stop the gate, not fall through to a
+		// range measured against something else.
+		absent := strings.Repeat("a", 40)
+		_, err = eventBaseRefs(t.Context(), g, &actions.PullRequest{BaseBranchSHA: absent, BaseRef: "main"})
+		assertExitCode(t, err, ExitUsage, "could not be fetched")
+	})
 }
 
-// TestGateUsesTheMergeBase checks the whole resolution inside Actions: the base
+// TestGateUsesTheMergeBase checks the whole resolution inside Actions: the target
 // branch moved on after the pull request was cut, and the range still starts at
-// the merge base, not at the branch's tip.
+// the merge base, not at the branch's tip, while the trust base is the tip of the
+// default branch.
 func TestGateUsesTheMergeBase(t *testing.T) {
 	t.Parallel()
 	r := newGitRepo(t)
@@ -175,19 +230,22 @@ func TestGateUsesTheMergeBase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openRepo: %v", err)
 	}
-	refs, err := eventBaseRefs(&actions.PullRequest{BaseBranchSHA: tip, BaseRef: "main"})
+	refs, err := eventBaseRefs(t.Context(), g, &actions.PullRequest{BaseBranchSHA: tip, BaseRef: "main"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	base, gotHead, err := resolveRange(t.Context(), g, rangeFlags{}, refs)
+	got, err := resolveRange(t.Context(), g, rangeFlags{}, trustRefs(t.Context(), g, "main"), refs)
 	if err != nil {
 		t.Fatalf("resolveRange: %v", err)
 	}
-	if base != mergeBaseSHA {
-		t.Errorf("base = %s, want the merge base %s (the branch tip is %s)", base, mergeBaseSHA, tip)
+	if got.change != mergeBaseSHA {
+		t.Errorf("change base = %s, want the merge base %s (the branch tip is %s)", got.change, mergeBaseSHA, tip)
 	}
-	if gotHead != head {
-		t.Errorf("head = %s, want %s", gotHead, head)
+	if got.trust != tip {
+		t.Errorf("trust base = %s, want the tip of the default branch %s", got.trust, tip)
+	}
+	if got.head != head {
+		t.Errorf("head = %s, want %s", got.head, head)
 	}
 }
 
@@ -273,18 +331,28 @@ type user struct {
 // fakeGitHub answers the two endpoints the gate reads, and counts the calls so
 // a test can check that a reviewer's access is asked for once.
 type fakeGitHub struct {
-	reviews []review
-	access  map[string]map[string]string // login → {role_name, permission}
-	status  int                          // when not 0, every call fails with it
-	calls   int
+	reviews       []review
+	access        map[string]map[string]string // login → {role_name, permission}
+	defaultBranch string
+	status        int    // when not 0, every call fails with it
+	failOn        string // when set, only paths containing it fail, with status or 500
+	calls         int
 }
 
 func (f *fakeGitHub) handler(t *testing.T) http.Handler {
 	t.Helper()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.calls++
-		if f.status != 0 {
-			w.WriteHeader(f.status)
+		failing := f.status != 0 && f.failOn == ""
+		if f.failOn != "" && strings.Contains(r.URL.Path, f.failOn) {
+			failing = true
+		}
+		if failing {
+			code := f.status
+			if code == 0 {
+				code = http.StatusInternalServerError
+			}
+			w.WriteHeader(code)
 			_, _ = w.Write([]byte(`{"message":"the API is having a bad minute"}`))
 			return
 		}
@@ -304,6 +372,8 @@ func (f *fakeGitHub) handler(t *testing.T) http.Handler {
 				return
 			}
 			_ = json.NewEncoder(w).Encode(a)
+		case r.URL.Path == "/repos/svallejo-dev/shop":
+			_ = json.NewEncoder(w).Encode(map[string]string{"default_branch": f.defaultBranch})
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -567,4 +637,239 @@ func testCmd() (*cobra.Command, *bytes.Buffer, *bytes.Buffer) {
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stderr)
 	return cmd, &stdout, &stderr
+}
+
+// verifiable is a repository aval can actually gather evidence for: a Go module
+// with a policy on the default branch, one obligation and a test that passes.
+func (r *gitRepo) verifiable(t *testing.T, tierDefault int) {
+	t.Helper()
+	r.commit("chore: adopt aval", map[string]string{
+		"go.mod": "module example.com/shop\n\ngo 1.22\n",
+		"aval.yaml": fmt.Sprintf("version: 1\ncontext: ORD\nmode: enforce\ntierDefault: %d\n"+
+			"openspec:\n  version: 1.13.1\npaths:\n  dx:\n    - docs/**\n  feat:\n    - refund/**\n", tierDefault),
+		"openspec/specs/refunds/spec.md": "# refunds Specification\n\n## Requirements\n\n" +
+			"### Requirement: ORD-F01 Refund is idempotent\nThe system SHALL process a refund at most once per key.\n\n" +
+			"#### Scenario: Duplicate key\n- **WHEN** a refund arrives with a processed key\n- **THEN** the first result is returned\n",
+		"refund/refund.go": "package refund\n\n// Once reports whether a refund may go through.\nfunc Once(seen bool) bool { return !seen }\n",
+		"refund/refund_test.go": "package refund\n\nimport \"testing\"\n\nfunc TestRefund(t *testing.T) {\n" +
+			"\tt.Run(\"ORD-F01 refunds once\", func(t *testing.T) {\n\t\tif !Once(false) {\n\t\t\tt.Fatal(\"the first refund must go through\")\n\t\t}\n\t})\n}\n",
+	})
+}
+
+// goEnv keeps the developer's workspace, flags, toolchain and proxy out of the
+// go test runs the gathered evidence needs.
+func goEnv(t *testing.T) {
+	t.Helper()
+	for k, v := range map[string]string{"GOWORK": "off", "GOFLAGS": "-mod=readonly", "GOTOOLCHAIN": "local", "GOPROXY": "off"} {
+		t.Setenv(k, v)
+	}
+}
+
+// readBundle reads the bundle runGate or runVerify left in the repository.
+func readBundle(t *testing.T, root, head string) evidence.Bundle {
+	t.Helper()
+	f, err := os.Open(filepath.Join(root, filepath.FromSlash(verify.EvidencePath(head)))) //nolint:gosec // a path aval itself wrote
+	if err != nil {
+		t.Fatalf("open the bundle: %v", err)
+	}
+	defer f.Close()
+	b, err := evidence.Parse(f)
+	if err != nil {
+		t.Fatalf("parse the bundle: %v", err)
+	}
+	return b
+}
+
+// TestRunGateInActions is the whole command, not a piece of it: the range it
+// actually gathered evidence for has to be the merge base and the tip of the
+// default branch, and the bundle on disk is what says so. An isolated test of
+// the resolver cannot catch a runGate that resolves correctly and then passes
+// the wrong SHA on.
+//
+// It also pins the degradation: with no token there are no approvals, the bundle
+// says so and the warning reaches stderr.
+//
+// Not parallel: it sets the go environment the evidence run inherits.
+func TestRunGateInActions(t *testing.T) {
+	goEnv(t)
+	r := newGitRepo(t)
+	r.verifiable(t, 1)
+	mergeBaseSHA := r.git("rev-parse", "HEAD")
+	r.git("checkout", "--quiet", "-b", "work")
+	head := r.commit("docs: notes", map[string]string{"docs/notes.md": "# notes\n"})
+
+	// The default branch moves on after the branch was cut, which is the case
+	// that tells the two bases apart: the tip is the trust base, the merge base
+	// is where the range starts.
+	r.git("checkout", "--quiet", "main")
+	tip := r.commit("docs: main moved on", map[string]string{"docs/other.md": "# other\n"})
+	r.git("checkout", "--quiet", "work")
+
+	vars := actionsEnv(t, event(t, head, tip, "main", "agent"), map[string]string{actions.EnvToken: ""})
+	cmd, stdout, stderr := testCmd()
+	err := runGate(t.Context(), cmd, &globalFlags{plain: true}, rangeFlags{dir: r.dir}, gateOptions{getenv: env(vars)})
+	if err != nil {
+		t.Fatalf("runGate: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+
+	b := readBundle(t, r.dir, head)
+	if b.ChangeBase != mergeBaseSHA {
+		t.Errorf("bundle changeBase = %s, want the merge base %s", b.ChangeBase, mergeBaseSHA)
+	}
+	if b.TrustBase != tip {
+		t.Errorf("bundle trustBase = %s, want the tip of the default branch %s", b.TrustBase, tip)
+	}
+	if b.BaseRef != "main" {
+		t.Errorf("bundle baseRef = %q, want main", b.BaseRef)
+	}
+	if b.Head != head {
+		t.Errorf("bundle head = %s, want %s", b.Head, head)
+	}
+	// The policy came from the trust base, so the gate enforces rather than
+	// observing: a range whose policy went missing would carry no_base_policy.
+	if b.Mode != "enforce" {
+		t.Errorf("bundle mode = %q, want enforce: the policy comes from the trust base", b.Mode)
+	}
+	if !slices.Contains(b.NotCollected, notCollectedApprovals) {
+		t.Errorf("notCollected = %q, want it to record that no review was judged", b.NotCollected)
+	}
+	if got := stderr.String(); !strings.Contains(got, "no approvals were judged") || !strings.Contains(got, actions.EnvToken) {
+		t.Errorf("stderr = %q, want the degradation warning naming the token variable", got)
+	}
+}
+
+// TestRunGateRefusesTheRangeFlags checks that a workflow cannot name the range.
+// It is refused for the whole of GITHUB_ACTIONS, not only for a pull request
+// event: a workflow the pull request wrote could otherwise run on push and pick
+// its own trust base.
+func TestRunGateRefusesTheRangeFlags(t *testing.T) {
+	t.Parallel()
+	r := newGitRepo(t)
+	base, _ := r.history()
+	for name, f := range map[string]rangeFlags{
+		"trust base":  {trustBase: base},
+		"change base": {changeBase: base},
+		"head":        {head: base},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f.dir = r.dir
+			cmd, _, _ := testCmd()
+			// A push event: not one the gate runs on, so nothing but the flags
+			// can be what refuses it.
+			vars := map[string]string{actions.EnvActions: "true", actions.EnvEventName: "push"}
+			err := runGate(t.Context(), cmd, &globalFlags{plain: true}, f, gateOptions{getenv: env(vars)})
+			assertExitCode(t, err, ExitUsage, "not allowed when "+actions.EnvActions+" is set")
+		})
+	}
+}
+
+// TestDefaultBranchFallsBackToTheAPI checks the order ADR-0005 §1 fixes: the
+// payload first, then the API, then nothing, which leaves the resolver to the
+// remote's own refs. An API that refuses is not a failure — it is one fallback
+// short of the next one.
+func TestDefaultBranchFallsBackToTheAPI(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		payloadBranch string
+		api           fakeGitHub
+		noToken       bool
+		want          string
+		wantCalls     int
+	}{
+		{
+			name:          "the payload answers, so the API is never asked",
+			payloadBranch: "trunk",
+			api:           fakeGitHub{defaultBranch: "should-not-be-read"},
+			want:          "trunk",
+		},
+		{
+			name: "without the payload the API answers",
+			api:  fakeGitHub{defaultBranch: "trunk"},
+			want: "trunk", wantCalls: 1,
+		},
+		{
+			name:    "without a token there is nobody to ask",
+			noToken: true,
+			want:    "",
+		},
+		{
+			name: "an API that refuses leaves the remote's refs to decide",
+			api:  fakeGitHub{status: http.StatusInternalServerError},
+			want: "", wantCalls: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			srv := httptest.NewServer(tt.api.handler(t))
+			t.Cleanup(srv.Close)
+			hc := &http.Client{Timeout: 10 * time.Second}
+			t.Cleanup(hc.CloseIdleConnections)
+
+			head, base := strings.Repeat("1", 40), strings.Repeat("2", 40)
+			over := map[string]string{actions.EnvAPIURL: srv.URL}
+			if tt.noToken {
+				over[actions.EnvToken] = ""
+			}
+			path := eventWith(t, head, base, "release/1.x", "agent", tt.payloadBranch)
+			ac := actions.Detect(env(actionsEnv(t, path, over)))
+			if got := defaultBranch(t.Context(), ac, hc); got != tt.want {
+				t.Errorf("defaultBranch = %q, want %q", got, tt.want)
+			}
+			if tt.api.calls != tt.wantCalls {
+				t.Errorf("the gate made %d API calls, want %d", tt.api.calls, tt.wantCalls)
+			}
+		})
+	}
+}
+
+// TestReviewApprovalsDegradesOnAPermissionFailure covers the call the reviews
+// listing hides: the permission endpoint. Swallowing its failure would turn every
+// approval into "not a code owner", which is a rejection the bundle would report
+// as the reviewer's fault instead of as evidence aval never gathered.
+func TestReviewApprovalsDegradesOnAPermissionFailure(t *testing.T) {
+	t.Parallel()
+	r := newGitRepo(t)
+	base := r.commit("chore: base", map[string]string{
+		"aval.yaml":  "version: 1\n",
+		"CODEOWNERS": "/aval.yaml @alice\n",
+	})
+	head := r.commit("feat: work", map[string]string{"b.txt": "b\n"})
+	api := fakeGitHub{
+		reviews: []review{{
+			ID: 1, User: user{"alice"}, State: "APPROVED", CommitID: head,
+			SubmittedAt: time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC),
+		}},
+		access: map[string]map[string]string{"alice": {"role_name": "write", "permission": "write"}},
+		failOn: "/collaborators/",
+	}
+	srv := httptest.NewServer(api.handler(t))
+	t.Cleanup(srv.Close)
+	hc := &http.Client{Timeout: 10 * time.Second}
+	t.Cleanup(hc.CloseIdleConnections)
+
+	ac := actions.Detect(env(actionsEnv(t, event(t, head, base, "main", "agent"),
+		map[string]string{actions.EnvAPIURL: srv.URL})))
+	_, g, err := openRepo(t.Context(), r.dir)
+	if err != nil {
+		t.Fatalf("openRepo: %v", err)
+	}
+	got := reviewApprovals(t.Context(), ac, g, base, head, hc)
+	if got.skipped == "" {
+		t.Fatalf("skipped = %q, want the permission failure recorded", got.skipped)
+	}
+	if !strings.Contains(got.skipped, "500") {
+		t.Errorf("skipped = %q, want it to name the status the API answered with", got.skipped)
+	}
+	if len(got.approvals) != 0 {
+		t.Errorf("approvals = %+v, want none: a permission aval could not read is not a rejection", got.approvals)
+	}
+	// The reviews were listed before the permission call failed, so the gate
+	// reached the endpoint it degraded on rather than stopping earlier.
+	if api.calls != 2 {
+		t.Errorf("the gate made %d API calls, want 2 (reviews, then the permission that failed)", api.calls)
+	}
 }

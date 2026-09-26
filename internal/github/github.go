@@ -119,6 +119,22 @@ func (c *Client) Permission(ctx context.Context, owner, repo, user string) (appr
 	return approval.Access{Role: body.RoleName, Permission: body.Permission}, nil
 }
 
+// DefaultBranch returns the repository's default branch, without refs/heads/.
+// It is where the gate takes its trust base from when the event payload does
+// not name it (ADR-0005 §1). An empty answer means GitHub reported no branch,
+// which is not an error: the caller falls back to the remote's own refs.
+func (c *Client) DefaultBranch(ctx context.Context, owner, repo string) (string, error) {
+	var body struct {
+		DefaultBranch string `json:"default_branch"`
+	}
+	_, err := c.get(ctx, c.endpoint(fmt.Sprintf("/repos/%s/%s",
+		url.PathEscape(owner), url.PathEscape(repo))), &body)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimPrefix(body.DefaultBranch, "refs/heads/"), nil
+}
+
 func (c *Client) endpoint(path string) string {
 	return strings.TrimSuffix(cmp.Or(c.BaseURL, DefaultBaseURL), "/") + path
 }

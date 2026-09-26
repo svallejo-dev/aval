@@ -18,27 +18,44 @@ import (
 // SchemaVersion is the bundle schema version this build writes and reads.
 // Any change to the shape of the bundle bumps it (ADR-0004): the schema is
 // closed, so a reader never accepts fields it does not understand. Version 2
-// replaced the label-based override with PR reviews bound to the head commit
-// (ADR-0005).
-const SchemaVersion = 2
+// replaced the label-based override with PR reviews bound to the head commit,
+// and version 3 split the single base into TrustBase and ChangeBase, because
+// the two answer different questions and only one of them is trustworthy
+// (ADR-0005 §1).
+const SchemaVersion = 3
 
-// Bundle is the evidence for one change: a base..head range of a repository.
+// Bundle is the evidence for one change: a changeBase..head range of a
+// repository, judged under the policy of trustBase.
 type Bundle struct {
-	SchemaVersion int          `json:"schemaVersion"`
-	Repo          string       `json:"repo"`
-	Base          string       `json:"base"`
-	Head          string       `json:"head"`
-	AvalVersion   string       `json:"avalVersion"`
-	GeneratedAt   time.Time    `json:"generatedAt"`
-	Mode          string       `json:"mode"`
-	Tier          int          `json:"tier"`
-	Changes       []string     `json:"changes"`
-	Obligations   []Obligation `json:"obligations"`
-	Checks        []Check      `json:"checks"`
-	Scope         []Commit     `json:"scope"`
-	Tamper        []Finding    `json:"tamper"`
-	Approvals     []Approval   `json:"approvals"`
-	Verdict       Verdict      `json:"verdict"`
+	SchemaVersion int    `json:"schemaVersion"`
+	Repo          string `json:"repo"`
+	// TrustBase is the tip of the repository's default branch, where everything
+	// that is policy or trust was read from: the root aval.yaml, CODEOWNERS,
+	// the baseline and the lint configuration. It is the half of the range
+	// nobody who opens a pull request gets to choose.
+	TrustBase string `json:"trustBase"`
+	// ChangeBase is the merge base of the head with the branch the pull request
+	// targets, and everything about what the pull request did was measured from
+	// it: the diff, the scope, the fail-before overlay and the lint ratchet.
+	// Whoever cut the branch chose it, so nothing read from it is trusted.
+	ChangeBase string `json:"changeBase"`
+	// BaseRef names where the change base came from: the branch the pull
+	// request targets, or the revision --change-base resolved from. It is a
+	// label, for a reader deciding whether the range is the one they meant, and
+	// nothing is decided on it.
+	BaseRef     string       `json:"baseRef"`
+	Head        string       `json:"head"`
+	AvalVersion string       `json:"avalVersion"`
+	GeneratedAt time.Time    `json:"generatedAt"`
+	Mode        string       `json:"mode"`
+	Tier        int          `json:"tier"`
+	Changes     []string     `json:"changes"`
+	Obligations []Obligation `json:"obligations"`
+	Checks      []Check      `json:"checks"`
+	Scope       []Commit     `json:"scope"`
+	Tamper      []Finding    `json:"tamper"`
+	Approvals   []Approval   `json:"approvals"`
+	Verdict     Verdict      `json:"verdict"`
 	// NotCollected lists evidence the gates doc describes but v0 does not
 	// gather yet, e.g. "mutation", "rollback", "slo".
 	NotCollected []string `json:"notCollected"`
