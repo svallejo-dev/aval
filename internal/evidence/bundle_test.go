@@ -208,7 +208,10 @@ func TestWorse(t *testing.T) {
 		}
 	}
 
-	// The cases internal/verify checked before the ranking moved here.
+	// The cases internal/verify checked before the ranking moved here, plus
+	// the tie: two unranked statuses rank the same, and a tie keeps a, so
+	// Worse is not symmetric among them. Either answer fails closed, but
+	// which one comes back is a decision and not an accident.
 	for _, tt := range []struct{ a, b, want Status }{
 		{Pass, Fail, Fail},
 		{Fail, Pass, Fail},
@@ -216,6 +219,8 @@ func TestWorse(t *testing.T) {
 		{Skipped, NotRun, NotRun},
 		{"", Pass, ""},
 		{Pass, "", ""},
+		{"", NotApply, ""},
+		{NotApply, "", NotApply},
 	} {
 		if got := Worse(tt.a, tt.b); got != tt.want {
 			t.Errorf("Worse(%q, %q) = %q, want %q", tt.a, tt.b, got, tt.want)

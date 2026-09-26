@@ -27,15 +27,20 @@ type Selection struct {
 //
 // Every alternative is a whole path, prefix repeated, and that is not
 // redundancy: go test reads a top-level "|" as an alternation of independent
-// patterns and splits each one on "/" by itself (testing.splitRegexp, which
-// builds an alternationMatch and treats "|" inside "()" or "[]" as literal).
-// So alternatives of different depths are fine —
-// ^TestX$/^ORD-F01([_#]|$)|^TestX$/^Sub$/^ORD-F01([_#]|$) selects both — and
-// factoring the shared prefix out would break them: in ^TestX$/^a$|^b$ the
-// second alternative is one level deep and gets matched against the top-level
-// test's own name, so the test named b is never selected at all, and an
-// obligation nothing selects has no measured status.
-// TestRunsSelectFixtureTests pins both halves of that against a real go test.
+// patterns and splits each one on "/" by itself. So alternatives of different
+// depths are fine — ^TestX$/^ORD-F01([_#]|$)|^TestX$/^Sub$/^ORD-F01([_#]|$)
+// selects both — and factoring the shared prefix out would break them: in
+// ^TestX$/^a$|^b$ the second alternative is one level deep and gets matched
+// against the top-level test's own name, so the test named b is never
+// selected at all, and an obligation nothing selects has no measured status.
+//
+// None of that is documented. `go help testflag` describes only the split on
+// "/", and the code that does the rest — splitRegexp and alternationMatch in
+// $GOROOT/src/testing/match.go, which also leaves a "|" inside "()" or "[]"
+// literal, as ([_#]|$) needs — is unexported and promises nothing. So it is
+// not a contract to read but behavior to check: TestRunsSelectFixtureTests
+// runs both halves of it against a real go test, which is where a toolchain
+// that changes its mind will show up.
 func Runs(id obligation.ID, names []string) []Selection {
 	var runs []Selection
 	byTop := make(map[string][]string, len(names))
