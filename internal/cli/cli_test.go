@@ -9,10 +9,18 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+	"go.uber.org/goleak"
 
 	"github.com/svallejo-dev/aval/internal/envelope"
 	"github.com/svallejo-dev/aval/internal/ui"
 )
+
+// TestMain checks that no test of the command layer leaves a goroutine behind:
+// the fake GitHub API of the gate's tests runs a server and an HTTP client, and
+// a connection nobody closed would leak one goroutine per case.
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 func TestExecute(t *testing.T) {
 	t.Parallel()
