@@ -181,8 +181,14 @@ func (ts *testState) event(e event) {
 			ts.attrs = append(ts.attrs, e.Value)
 		}
 	case "pass", "fail", "skip":
+		// The first run to end sets the status; with -count > 1 the later ones
+		// can only worsen it.
+		s := endStatus[e.Action]
+		if ts.ended > 0 {
+			s = evidence.Worse(ts.status, s)
+		}
 		ts.ended++
-		ts.status = worse(ts.status, endStatus[e.Action])
+		ts.status = s
 		if ts.status == evidence.Pass {
 			ts.out.release()
 		}
@@ -200,8 +206,11 @@ func (p *parser) report() Report {
 		clean := true
 		for _, ts := range ps.testOrder {
 			status := ts.status
-			if status == "" || ts.started > ts.ended {
-				status = worse(status, evidence.NotRun)
+			switch {
+			case status == "": // no run of it ended
+				status = evidence.NotRun
+			case ts.started > ts.ended: // one of its runs did not
+				status = evidence.Worse(status, evidence.NotRun)
 			}
 			clean = clean && (status == evidence.Pass || status == evidence.Skipped)
 			r.Tests = append(r.Tests, TestOutcome{

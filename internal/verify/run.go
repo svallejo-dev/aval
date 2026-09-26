@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"maps"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -183,18 +182,18 @@ func (c *collector) regressions(ctx context.Context, obs []*state) error {
 		if !s.isolated {
 			continue
 		}
-		for _, r := range runsOf(s.id, s.ob.Tests) {
+		for _, r := range gotest.Runs(s.id, s.ob.Tests) {
 			o := gotest.Options{
-				Packages: s.pkgs, Run: r.pattern, Count: 1,
+				Packages: s.pkgs, Run: r.Pattern, Count: 1,
 				Timeout: c.o.TestTimeout, Env: c.o.Env, Environ: c.testEnv(),
 			}
 			start := time.Now()
 			rep, err := gotest.Run(ctx, c.ev.Root, o)
 			if err != nil {
-				return fmt.Errorf("verify: run %s at head for %s: %w", r.test, s.id, err)
+				return fmt.Errorf("verify: run %s at head for %s: %w", r.Test, s.id, err)
 			}
-			c.check("regression "+s.id.String()+" "+r.test, command(o), rep.ExitCode, time.Since(start), reportStatus(rep))
-			s.ob.After = worse(s.ob.After, rep.Status(s.id, s.pkgs...))
+			c.check("regression "+s.id.String()+" "+r.Test, command(o), rep.ExitCode, time.Since(start), reportStatus(rep))
+			s.ob.After = evidence.Worse(s.ob.After, rep.Status(s.id, s.pkgs...))
 		}
 	}
 	return nil
@@ -240,78 +239,6 @@ func namesOf(owners []gotest.TestOutcome) (tests, pkgs []string) {
 		}
 	}
 	return tests, pkgs
-}
-
-// isolatedRun is one process of ADR-0005 §2.3: the tests of one obligation
-// under one top-level test.
-type isolatedRun struct {
-	test    string // the top-level test
-	pattern string // the -run pattern that selects the obligation's tests under it
-}
-
-// runsOf groups the test names of an obligation by their top-level test and
-// builds each one's -run pattern. It mirrors what overlay plans for the base
-// runs, which is not exported.
-func runsOf(id obligation.ID, names []string) []isolatedRun {
-	var runs []isolatedRun
-	byTop := make(map[string][]string, len(names))
-	for _, name := range names {
-		top, _, _ := strings.Cut(name, "/")
-		if _, ok := byTop[top]; !ok {
-			runs = append(runs, isolatedRun{test: top})
-		}
-		byTop[top] = append(byTop[top], name)
-	}
-	for i, r := range runs {
-		var alts []string
-		for _, name := range byTop[r.test] {
-			if alt := selector(id, name); !slices.Contains(alts, alt) {
-				alts = append(alts, alt)
-			}
-		}
-		runs[i].pattern = strings.Join(alts, "|")
-	}
-	return runs
-}
-
-// selector selects name down to the outermost level that carries id, each
-// level quoted and anchored, and matches the duplicate and "_title" suffixes
-// go test adds: ^TestSuite$/^TestX$/^ORD-F01([_#]|$).
-func selector(id obligation.ID, name string) string {
-	var levels []string
-	for level := range strings.SplitSeq(name, "/") {
-		if got, ok := obligation.FromTestSegment(level); ok && got == id {
-			return strings.Join(append(levels, "^"+regexp.QuoteMeta(id.String())+"([_#]|$)"), "/")
-		}
-		levels = append(levels, "^"+regexp.QuoteMeta(level)+"$")
-	}
-	return strings.Join(levels, "/")
-}
-
-// rank orders statuses from best to worst. A package that did not build ran
-// none of its tests.
-var rank = map[evidence.Status]int{
-	evidence.Pass:      1,
-	evidence.Skipped:   2,
-	evidence.NotRun:    3,
-	evidence.Fail:      4,
-	evidence.BuildFail: 5,
-}
-
-// worse returns the worse of a and b. A status aval does not know, the empty
-// one included, ranks worst: it fails closed, never as a pass.
-func worse(a, b evidence.Status) evidence.Status {
-	if rankOf(b) > rankOf(a) {
-		return b
-	}
-	return a
-}
-
-func rankOf(s evidence.Status) int {
-	if r, ok := rank[s]; ok {
-		return r
-	}
-	return len(rank) + 1
 }
 
 // reportStatus is what one go test run did as a whole: build_fail when a

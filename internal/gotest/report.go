@@ -112,9 +112,9 @@ func (r Report) Obligations() map[obligation.ID][]TestOutcome {
 }
 
 // Status is the outcome of obligation id: the worst Status among every test
-// bound to it, owners and inheriting subtests alike, ranked
-// fail > not_run > skipped > pass. So a skipped table case marks the
-// obligation skipped even though go test passes its parent.
+// bound to it, owners and inheriting subtests alike, ranked by
+// evidence.Worse. So a skipped table case marks the obligation skipped even
+// though go test passes its parent.
 //
 // With no bound test the ID did not run: selecting a missing ID passes with
 // "no tests to run", and that is NotRun, never Pass. pkgs names the packages
@@ -128,9 +128,14 @@ func (r Report) Obligations() map[obligation.ID][]TestOutcome {
 func (r Report) Status(id obligation.ID, pkgs ...string) evidence.Status {
 	var status evidence.Status
 	for _, t := range r.Tests {
-		if slices.ContainsFunc(t.Bindings, func(b Binding) bool { return b.ID == id }) {
-			status = worse(status, t.Status)
+		if !slices.ContainsFunc(t.Bindings, func(b Binding) bool { return b.ID == id }) {
+			continue
 		}
+		if status == "" { // the first bound test sets it, the rest can only worsen it
+			status = t.Status
+			continue
+		}
+		status = evidence.Worse(status, t.Status)
 	}
 	if status != "" {
 		return status
@@ -141,20 +146,4 @@ func (r Report) Status(id obligation.ID, pkgs ...string) evidence.Status {
 		}
 	}
 	return evidence.NotRun
-}
-
-// severity ranks test statuses for worse; unknown statuses rank lowest.
-var severity = map[evidence.Status]int{
-	evidence.Pass:    1,
-	evidence.Skipped: 2,
-	evidence.NotRun:  3,
-	evidence.Fail:    4,
-}
-
-// worse returns the more severe of a and b.
-func worse(a, b evidence.Status) evidence.Status {
-	if severity[b] > severity[a] {
-		return b
-	}
-	return a
 }

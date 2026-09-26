@@ -19,7 +19,7 @@ import (
 // Options configures Run.
 type Options struct {
 	Packages []string // package patterns; empty means "./..."; none may start with "-"
-	Run      string   // -run pattern, e.g. from RunPattern; empty runs every test
+	Run      string   // -run pattern, e.g. from Runs or RunPattern; empty runs every test
 	// Count is -count, passed only when positive. Zero lets go test reuse
 	// cached results, which parse the same; pass 1 to force a fresh run.
 	Count   int
@@ -56,6 +56,11 @@ func (o Options) Args() []string {
 // duplicates ("ORD-F01#01") included: ^TestX$/^ORD-F01([_#]|$). testName is
 // a test function name; a "/" in it would add a level to the pattern. IDs
 // bound deeper or only by attr are not selected.
+//
+// It anchors one level and the ID below it, which is all there is to anchor
+// when a top-level test is named on its own. Given the full test names of a
+// run, use Selector and Runs instead: they anchor every level, so an ID bound
+// under a suite or by an attr is selected as ADR-0005 §2.3 asks.
 func RunPattern(testName string, id obligation.ID) string {
 	return "^" + regexp.QuoteMeta(testName) + "$/^" + regexp.QuoteMeta(id.String()) + "([_#]|$)"
 }

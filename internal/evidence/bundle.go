@@ -57,6 +57,41 @@ const (
 	NotApply  Status = "n/a"
 )
 
+// statusRank orders the outcomes a run can have, from best to worst. A
+// package that did not build ran none of its tests, so build_fail is worse
+// than a test that failed.
+var statusRank = map[Status]int{
+	Pass:      1,
+	Skipped:   2,
+	NotRun:    3,
+	Fail:      4,
+	BuildFail: 5,
+}
+
+// Worse returns the worse of a and b: the outcome that stands when two runs
+// of the same thing disagree, ranked pass < skipped < not_run < fail <
+// build_fail. Ties keep a.
+//
+// A status Worse does not rank is worse than every ranked one: the empty
+// status, NotApply, which says that a check does not apply rather than how it
+// went, and any status a newer bundle brings. An outcome aval does not
+// understand therefore fails closed and can never read as a pass. This is the
+// ranking of the statuses; a caller that wants another order wants a
+// different decision, not a second table.
+func Worse(a, b Status) Status {
+	if statusRankOf(b) > statusRankOf(a) {
+		return b
+	}
+	return a
+}
+
+func statusRankOf(s Status) int {
+	if r, ok := statusRank[s]; ok {
+		return r
+	}
+	return len(statusRank) + 1
+}
+
 // Strength grades how well an obligation's evidence proves it.
 type Strength string
 

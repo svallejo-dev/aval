@@ -1,13 +1,10 @@
 package verify
 
 import (
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path"
-	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -88,7 +85,7 @@ func (c *collector) touched() ([]gate.Change, map[obligation.ID]deltaOf, error) 
 			}
 			deltas[id] = deltaOf{id: id, delta: delta, req: d.Requirement}
 		}
-		pm, err := premortem(c.ev.Root, dir, ids)
+		pm, err := premortem(os.DirFS(c.ev.Root), dir, ids)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -144,55 +141,15 @@ func changeDirs(paths []string) []string {
 	return slices.Compact(dirs)
 }
 
-// itemStart matches the marker of a top-level markdown list item and fence
-// the start or end of a fenced code block, indented by up to three spaces as
-// CommonMark allows.
-var (
-	itemStart = regexp.MustCompile(`^([-*+]|[0-9]{1,9}[.)])[ \t]`)
-	fence     = regexp.MustCompile("^ {0,3}(```|~~~)")
-)
-
-// premortem reads dir/premortem.md under root: whether it exists, how many
-// top-level list items it has outside fenced code blocks, and which of them
-// cite no obligation ID of their own change (ADR-0005 §4).
-func premortem(root, dir string, ids []obligation.ID) (gate.Premortem, error) {
-	name := filepath.Join(root, filepath.FromSlash(dir), "premortem.md")
-	data, err := os.ReadFile(name) //nolint:gosec // a fixed name under the repository root
-	if errors.Is(err, fs.ErrNotExist) {
-		return gate.Premortem{}, nil
-	}
+// premortem is what the change in dir claims could go wrong, in the shape the
+// gate consumes. The markdown is openspec's to read; the shape is the gate's,
+// which openspec cannot name because the gate imports openspec.
+func premortem(fsys fs.FS, dir string, ids []obligation.ID) (gate.Premortem, error) {
+	pm, err := openspec.ReadPremortem(fsys, dir, ids)
 	if err != nil {
 		return gate.Premortem{}, fmt.Errorf("verify: %w", err)
 	}
-	pm := gate.Premortem{Present: true}
-	for _, item := range listItems(string(data)) {
-		pm.Items++
-		if !slices.ContainsFunc(ids, func(id obligation.ID) bool { return strings.Contains(item, id.String()) }) {
-			first, _, _ := strings.Cut(item, "\n")
-			pm.Unmapped = append(pm.Unmapped, strings.TrimSpace(first))
-		}
-	}
-	return pm, nil
-}
-
-// listItems returns the top-level list items of md: the item's own line plus
-// the indented lines that continue it, and nothing inside a fenced code
-// block. A table row is not an item, and neither is a nested item.
-func listItems(md string) []string {
-	var items []string
-	fenced := false
-	for line := range strings.Lines(md) {
-		switch {
-		case fence.MatchString(line):
-			fenced = !fenced
-		case fenced:
-		case itemStart.MatchString(line):
-			items = append(items, line)
-		case len(items) > 0 && strings.TrimSpace(line) != "" && (line[0] == ' ' || line[0] == '\t'):
-			items[len(items)-1] += line
-		}
-	}
-	return items
+	return gate.Premortem{Present: pm.Present, Items: pm.Items, Unmapped: pm.Unmapped}, nil
 }
 
 // newFindings returns the openspec.Check findings at head that the base did
