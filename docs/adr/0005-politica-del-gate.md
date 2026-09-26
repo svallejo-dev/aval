@@ -41,13 +41,25 @@ aval informa además como `tamper` (§4) de cualquier edición de `.github/**`, 
 
 ### 1. Entradas
 
-El gate trabaja sobre un rango `base..head`:
-- **En CI:** `base` es el merge-base del PR con `main` (`fetch-depth: 0`) y `head` es `github.event.pull_request.head.sha`. El checkout usa `ref:` head, no el merge commit.
-- **En local:** `--base` y `--head` (por defecto el merge-base con `origin/main` y `HEAD`).
+El gate trabaja con **dos bases distintas**, y confundirlas es un agujero: el autor del PR elige dónde corta su rama, así que el merge-base es influenciable. Cortando de un commit anterior a la adopción de aval, el merge-base no tiene `aval.yaml` y el gate concluiría que no hay política, sin editar nada y sin disparar `tamper`.
+
+| Base | Qué es | Para qué |
+|---|---|---|
+| **Base de confianza** | El tip de la rama base: `github.event.pull_request.base.sha` en CI; en local, el destino de `origin/HEAD`, luego `origin/main`, luego `main`. Está protegida por el ruleset | Todo lo que es política o confianza: `aval.yaml` (modo, `tierDefault`, `paths`, versión de OpenSpec), `CODEOWNERS`, `.aval/baseline.json`, `.golangci.yml`, y el tier de un change que ya exista ahí |
+| **Base del cambio** | El merge-base de head con la base de confianza | Todo lo que describe qué hizo **este** PR: diff, changes, scope, declaraciones para `testsource`, las specs con las que se restan los hallazgos preexistentes, la superposición de la falla-antes y `--new-from-merge-base` |
+
+Usar la base del cambio para lo segundo es lo correcto: con el tip, los cambios de otras personas se atribuirían a este PR. Usar la base de confianza para lo primero es lo correcto: con el merge-base, el autor elige su propia política.
+
+- **head** es `github.event.pull_request.head.sha`, y el checkout usa `ref:` head, no el merge commit. Dentro de Actions con un PR en el evento, `--base` y `--head` se rechazan (exit 2): el evento manda.
+- **Rango degenerado:** si el merge-base no se puede calcular, o coincide con head, exit 2 nombrando lo que se intentó. Nunca un `pass` silencioso.
+- **`no_base_policy` mira la base de confianza:** si ahí hay un `aval.yaml` raíz, no se dispara, sea lo que sea la base del cambio.
+- **El tier de un change** es el máximo entre el que declara head, el que tiene en la base del cambio y el que tiene en la base de confianza. Cortar la rama antes de una subida de tier no la deshace.
+- **En local**, sin evento, `--base` y `--head` sí valen, y por defecto la base de confianza sale de `origin/HEAD`.
 
 **Orden obligatorio:** todo lo que aval **lee** con `git` se lee **antes** de ejecutar cualquier código del PR, porque un test puede reescribir `.git/config` o `.git/info/*`. Incluye:
-- las entradas de la base: política, `CODEOWNERS`, baseline, specs, `.golangci.yml`, `.gitattributes` y declaraciones;
-- las del rango: diff, changes y scope (§3b).
+- de la base de confianza: política, `CODEOWNERS`, baseline y `.golangci.yml`;
+- de la base del cambio: specs, declaraciones y `.gitattributes`;
+- del rango: diff, changes y scope (§3b).
 
 Materializar el árbol de la base (§2.1) no es una lectura más: escribe ficheros y ocurre después de la ejecución de head, por eso se hace desde los objetos y nunca por el checkout de git.
 
@@ -68,7 +80,7 @@ Requiere git ≥ 2.40; con uno más antiguo, exit 3.
 
 | Entrada | De dónde sale |
 |---|---|
-| Política | El `aval.yaml` **raíz del SHA base**. Si no existe, el gate corre en `observe` (`no_base_policy`) |
+| Política | El `aval.yaml` **raíz de la base de confianza**. Si no existe ahí, el gate corre en `observe` (`no_base_policy`) |
 | Changes del PR | Directorios de `openspec/changes/<id>/` o `openspec/changes/archive/<fecha>-<id>/` que toca el diff `base..head` |
 | Tier | **max**(`tierDefault` si hay algún commit `feat` o `mixed` o algún change; el `tier` de cada change en head; el `tier` de ese mismo change en la base si ya existía). Un PR solo `dx`/`seam`/`other` y sin changes es **Tier 0**. El head puede subir el tier, nunca bajarlo |
 | Obligaciones del delta | IDs **ADDED ∪ MODIFIED ∪ REMOVED** de esos changes. Solo las ADDED y MODIFIED (`added`/`modified`) exigen falla-antes; el resto son `unchanged`. RENAMED **no** forma parte del delta: solo cambia el título y conserva el ID, y el test no necesita cambiar |
@@ -179,7 +191,7 @@ Las etiquetas no sirven: no se atan a un commit, y la hora de GitHub que podría
 Una aprobación es **válida** si cumple tres condiciones:
 1. es el **último review que no sea `COMMENTED`** de ese revisor (como hace GitHub), tiene `state: APPROVED` y **`commit_id` igual al SHA head**. Un `CHANGES_REQUESTED` o `DISMISSED` posterior la anula;
 2. su autor es un **CODEOWNER**, por una de dos vías (`GET /repos/{o}/{r}/collaborators/{user}/permission`):
-   - listado individualmente en el `CODEOWNERS` de la base para el `aval.yaml` raíz —de las tres ubicaciones que reconoce GitHub gana la primera que exista: `.github/CODEOWNERS`, la raíz, `docs/CODEOWNERS`— **y** con permiso de escritura (`permission` ∈ {`write`, `admin`}; `maintain` se reporta como `write`). Es lo que exige GitHub para asignar un code owner, y evita que alguien registre el login de una cuenta renombrada o borrada que siga en el fichero. Un 404, `read` o `none` significa que no es owner;
+   - listado individualmente en el `CODEOWNERS` de la **base de confianza** (§1) para el `aval.yaml` raíz —de las tres ubicaciones que reconoce GitHub gana la primera que exista: `.github/CODEOWNERS`, la raíz, `docs/CODEOWNERS`— **y** con permiso de escritura (`permission` ∈ {`write`, `admin`}; `maintain` se reporta como `write`). Es lo que exige GitHub para asignar un code owner, y evita que alguien registre el login de una cuenta renombrada o borrada que siga en el fichero. Un 404, `read` o `none` significa que no es owner;
    - o con `role_name` ∈ {`admin`, `maintain`}. Aquí `permission` no sirve, porque reporta `maintain` como `write`;
 3. GitHub ya impide que el autor del PR apruebe su propio PR.
 
@@ -209,6 +221,7 @@ Hay dos tipos:
 
 ### 7. Evidencia, baseline y resumen
 
+- **El estado para hooks exime `approval_missing`:** un agente no puede aprobar su propio PR, y si el estado lo exigiera, el hook de Stop lo bloquearía para siempre. Así que el estado es `passed` cuando el único motivo que bloquea es ese. Los códigos de salida de §6 no cambian: `aval verify` sigue saliendo con 1 en `enforce`, para que una comprobación previa al push no mienta.
 - **`aval verify`** escribe el bundle en `.aval/evidence/<head>.json` y el estado para hooks en `.aval/cache/verify-status.json` (formato de `internal/hook`). La clave es `HEAD` más un hash de `git diff HEAD` **y de los ficheros sin seguimiento** (ruta y contenido), salvo los de `.aval/cache/` y `.aval/evidence/`, donde `verify` escribe después de calcular la clave. Sin estado, el hook de Stop solo deja terminar si el árbol está limpio y HEAD ya está en una rama remota; un commit local sin verificar no escapa. Así, un fichero nuevo tras `verify` invalida el estado.
 - **`aval gate` ejecuta la verificación en el mismo proceso y nunca reutiliza un bundle del disco,** tampoco en local: `CheckHead` solo compara un SHA público, así que reutilizarlo sería confiar en un fichero, veredicto incluido. Recalcular cuesta poco.
 - **La configuración de lint de la base se materializa en la raíz del repo** antes de la ejecución, con los bytes leídos en la fase de git: golangci-lint ancla las rutas de su config en el directorio donde está, así que desde un temporal las exclusiones por ruta no encajarían. Es la única escritura del gate fuera de `.aval/`, y se deshace antes de cerrar —se borra, o se restauran los bytes previos si ya existía—, también cuando la ejecución falla. No la ven `tamper`, scope ni `testsource`, que se calculan desde git, y como el estado para hooks se escribe después de deshacerla, tampoco entra en su clave.
