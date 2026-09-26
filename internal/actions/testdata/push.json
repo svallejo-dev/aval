@@ -1,0 +1,33 @@
+{
+  "ref": "refs/heads/main",
+  "before": "1405df66cbe219b0bf6355bc3d60361a8376b6b4",
+  "after": "febdd4dee1aef790a73c332ca77638e89c515ede",
+  "created": false,
+  "deleted": false,
+  "forced": false,
+  "commits": [
+    {
+      "id": "febdd4dee1aef790a73c332ca77638e89c515ede",
+      "message": "feat(gate): decidir"
+    }
+  ],
+  "head_commit": {
+    "id": "febdd4dee1aef790a73c332ca77638e89c515ede"
+  },
+  "repository": {
+    "id": 987654321,
+    "full_name": "svallejo-dev/aval",
+    "private": true,
+    "owner": {
+      "login": "svallejo-dev"
+    },
+    "default_branch": "main"
+  },
+  "pusher": {
+    "name": "svallejo"
+  },
+  "sender": {
+    "login": "agente-bot",
+    "id": 4242
+  }
+}
