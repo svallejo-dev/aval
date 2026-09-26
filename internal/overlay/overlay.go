@@ -278,15 +278,15 @@ func (w *Tree) Run(ctx context.Context, targets []Target, opts RunOptions) (Resu
 		var merged gotest.Report
 		for _, run := range t.runs {
 			o := gotest.Options{
-				Packages: t.Packages, Run: run.pattern, Count: 1,
+				Packages: t.Packages, Run: run.Pattern, Count: 1,
 				Timeout: opts.Timeout, Env: opts.Env, Environ: env,
 			}
 			start := time.Now()
 			rep, err := gotest.Run(ctx, w.moduleDir, o)
 			if err != nil {
-				return Result{}, toolMissing(fmt.Errorf("overlay: run %s at the base for %s: %w", run.test, t.ID, err))
+				return Result{}, toolMissing(fmt.Errorf("overlay: run %s at the base for %s: %w", run.Test, t.ID, err))
 			}
-			res.Runs = append(res.Runs, BaseRun{ID: t.ID, Test: run.test, Options: o, Report: rep, Duration: time.Since(start)})
+			res.Runs = append(res.Runs, BaseRun{ID: t.ID, Test: run.Test, Options: o, Report: rep, Duration: time.Since(start)})
 			merged.Packages = append(merged.Packages, rep.Packages...)
 			merged.Tests = append(merged.Tests, rep.Tests...)
 		}

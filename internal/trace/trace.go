@@ -100,8 +100,8 @@ type Row struct {
 	Status           Status `json:"status"`
 	Tests            []Test `json:"tests"` // by file and line
 	// Runtime is the worst outcome of the ID at run time: of each
-	// declaration and of any other test bound to the ID, build_fail ranking
-	// worst. Empty when the tests did not run.
+	// declaration and of any other test bound to the ID, ranked by
+	// evidence.Worse. Empty when the tests did not run.
 	Runtime evidence.Status `json:"runtime,omitempty"`
 }
 
@@ -251,7 +251,7 @@ func newRow(def definition, decls []testsource.Declaration, rt *Runtime) Row {
 		t := Test{File: d.File, Line: d.Line, Test: d.Test, Name: d.Name, Kind: d.Kind, Skips: d.Skips}
 		if rt != nil {
 			t.Runtime = rt.status(d)
-			row.Runtime = worst(row.Runtime, t.Runtime)
+			row.Runtime = evidence.Worse(row.Runtime, t.Runtime)
 		}
 		row.Tests = append(row.Tests, t)
 	}
@@ -281,24 +281,6 @@ func policyOf(k obligation.Kind) Policy {
 		return Warn
 	}
 	return Block
-}
-
-// rank orders outcomes from best to worst. A package that did not build ran
-// none of its tests, so build_fail is worse than a test that failed.
-var rank = map[evidence.Status]int{
-	evidence.Pass:      1,
-	evidence.Skipped:   2,
-	evidence.NotRun:    3,
-	evidence.Fail:      4,
-	evidence.BuildFail: 5,
-}
-
-// worst returns the worse of a and b; an empty or unknown status ranks lowest.
-func worst(a, b evidence.Status) evidence.Status {
-	if rank[b] > rank[a] {
-		return b
-	}
-	return a
 }
 
 // status is the worst outcome of the tests d ran as: those of its package

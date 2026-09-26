@@ -28,7 +28,7 @@ const (
 // concurrent runs never see a half-written install. Any mismatch fails
 // closed with ErrToolFailed, including an existing install that does not
 // hold the pinned package.
-func (v validator) install(ctx context.Context, version string) (string, error) {
+func (v cliTool) install(ctx context.Context, version string) (string, error) {
 	dir := filepath.Join(v.cacheDir, version)
 	if _, err := os.Stat(dir); err == nil {
 		return installed(dir, version)

@@ -142,26 +142,48 @@ func (r Report) Findings() []Finding {
 // validated repoRoot itself: otherwise it may have picked a parent
 // directory or a configured store, and Validate fails.
 func Validate(ctx context.Context, repoRoot, version string) (Report, error) {
-	v, err := newValidator()
+	v, err := newCLITool()
 	if err != nil {
 		return Report{}, err
 	}
 	return v.validate(ctx, repoRoot, version)
 }
 
-// validator installs and runs OpenSpec. Its fields are the seams tests replace.
-type validator struct {
+// Validator is the seam a caller of OpenSpec validation holds instead of
+// calling Validate itself. Its zero value is the real thing, so a caller that
+// wants the pinned CLI needs no wiring, and a test sets Run to a fake instead
+// of hiding a seam of its own — which is what left the real path unexercised
+// while nothing outside this package could fake Validate.
+type Validator struct {
+	// Run validates the repository at repoRoot with OpenSpec at version, as
+	// Validate does. Nil means Validate.
+	Run func(ctx context.Context, repoRoot, version string) (Report, error)
+}
+
+// Validate validates repoRoot with v.Run, or with the package's Validate when
+// v.Run is nil: the unqualified call below is that function, not this method,
+// so a zero Validator installs and runs the pinned OpenSpec CLI.
+func (v Validator) Validate(ctx context.Context, repoRoot, version string) (Report, error) {
+	if v.Run == nil {
+		return Validate(ctx, repoRoot, version)
+	}
+	return v.Run(ctx, repoRoot, version)
+}
+
+// cliTool installs and runs the pinned OpenSpec CLI. Its fields are the seams
+// the package's own tests replace; Validator is the seam other packages get.
+type cliTool struct {
 	run      runner
 	cacheDir string   // one directory per installed OpenSpec version
 	environ  []string // the environment children inherit, before cleanEnv
 }
 
-func newValidator() (validator, error) {
+func newCLITool() (cliTool, error) {
 	cache, err := os.UserCacheDir()
 	if err != nil {
-		return validator{}, fmt.Errorf("%w: %w", ErrToolFailed, err)
+		return cliTool{}, fmt.Errorf("%w: %w", ErrToolFailed, err)
 	}
-	return validator{
+	return cliTool{
 		run:      execRunner{waitDelay: defaultWaitDelay},
 		cacheDir: filepath.Join(cache, "aval", "openspec"),
 		environ:  os.Environ(),
@@ -181,7 +203,7 @@ type output struct {
 	code           int
 }
 
-func (v validator) validate(ctx context.Context, repoRoot, version string) (Report, error) {
+func (v cliTool) validate(ctx context.Context, repoRoot, version string) (Report, error) {
 	if !exactVersion.MatchString(version) {
 		return Report{}, fmt.Errorf("openspec: version %q must be exact, like 1.13.1", version)
 	}
@@ -211,7 +233,7 @@ func (v validator) validate(ctx context.Context, repoRoot, version string) (Repo
 }
 
 // openspec runs the installed OpenSpec CLI with args in dir.
-func (v validator) openspec(ctx context.Context, dir, version string, args ...string) (output, error) {
+func (v cliTool) openspec(ctx context.Context, dir, version string, args ...string) (output, error) {
 	cli, err := v.install(ctx, version)
 	if err != nil {
 		return output{}, err

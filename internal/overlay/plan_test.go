@@ -47,34 +47,8 @@ func TestStrength(t *testing.T) {
 	}
 }
 
-func TestPattern(t *testing.T) {
-	t.Parallel()
-	f01 := id(t, "ORD-F01")
-	tests := []struct {
-		name  string
-		names []string
-		want  string
-	}{
-		{"as gotest selects it", []string{"TestOrder/ORD-F01_rejects"}, gotest.RunPattern("TestOrder", f01)},
-		{"duplicates once", []string{"TestOrder/ORD-F01_x", "TestOrder/ORD-F01_x#01", "TestOrder/ORD-F01"}, `^TestOrder$/^ORD-F01([_#]|$)`},
-		{
-			"deeper levels, suites and fake levels from a / in a name",
-			[]string{"TestSuite/TestX/ORD-F01_x", "TestSuite/happy_path/ORD-F01_in/out"},
-			`^TestSuite$/^TestX$/^ORD-F01([_#]|$)|^TestSuite$/^happy_path$/^ORD-F01([_#]|$)`,
-		},
-		{
-			"bound by attr: the exact name, quoted",
-			[]string{"TestOrder/dup_(sku)#01", "TestOrder/ORD-F02_carries_another_ID"},
-			`^TestOrder$/^dup_\(sku\)#01$|^TestOrder$/^ORD-F02_carries_another_ID$`,
-		},
-	}
-	for _, tt := range tests {
-		if got := pattern(f01, tt.names); got != tt.want {
-			t.Errorf("%s: pattern = %q, want %q", tt.name, got, tt.want)
-		}
-	}
-}
-
+// TestNewPlan checks the runs each target gets. The patterns themselves are
+// gotest.Runs's, checked in internal/gotest.
 func TestNewPlan(t *testing.T) {
 	t.Parallel()
 	f01, f02 := id(t, "ORD-F01"), id(t, "ORD-F02")
@@ -85,9 +59,13 @@ func TestNewPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := [][]plannedRun{
-		{{"TestA", `^TestA$/^ORD-F01([_#]|$)`}, {"TestB", `^TestB$/^x$/^ORD-F01([_#]|$)`}},
-		{{"TestA", `^TestA$/^ORD-F02([_#]|$)`}}, // a run of its own: siblings stay apart
+	want := [][]gotest.Selection{
+		{
+			{Test: "TestA", Pattern: `^TestA$/^ORD-F01([_#]|$)`},
+			{Test: "TestB", Pattern: `^TestB$/^x$/^ORD-F01([_#]|$)`},
+		},
+		// A run of its own: siblings stay apart.
+		{{Test: "TestA", Pattern: `^TestA$/^ORD-F02([_#]|$)`}},
 	}
 	if len(plan) != 2 || !reflect.DeepEqual(plan[0].runs, want[0]) || !reflect.DeepEqual(plan[1].runs, want[1]) {
 		t.Errorf("plan = %+v, want runs %+v", plan, want)

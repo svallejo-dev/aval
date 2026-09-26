@@ -119,7 +119,7 @@ func TestLive(t *testing.T) {
 	t.Run("a fresh install ignores .npmrc and npm_config_ variables", func(t *testing.T) {
 		fsys := maps.Clone(baseline)
 		fsys[".npmrc"] = &fstest.MapFile{Data: []byte("registry=http://127.0.0.1:9/\n")}
-		v := validator{
+		v := cliTool{
 			run:      execRunner{waitDelay: defaultWaitDelay},
 			cacheDir: t.TempDir(), // nothing installed yet
 			environ:  append(os.Environ(), "npm_config_registry=http://127.0.0.1:9/", "NPM_CONFIG_DRY_RUN=true"),
@@ -204,7 +204,7 @@ func writeRepo(t *testing.T, fsys fstest.MapFS) string {
 // cached install, and returns its stdout.
 func openspecCLI(t *testing.T, dir string, args ...string) []byte {
 	t.Helper()
-	v, err := newValidator()
+	v, err := newCLITool()
 	if err != nil {
 		t.Fatal(err)
 	}

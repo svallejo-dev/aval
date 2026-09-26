@@ -172,6 +172,62 @@ func mustSchema(t *testing.T, what string, b Bundle) {
 	}
 }
 
+// TestWorse pins the one ranking of the statuses: pass < skipped < not_run <
+// fail < build_fail, with every pair checked in both orders so that neither
+// "first wins" nor "last wins" passes. Like TestEveryConstantIsInSchema, the
+// statuses are written out: a new one belongs in one of these lists, ranked
+// or deliberately left unranked.
+func TestWorse(t *testing.T) {
+	t.Parallel()
+
+	ranked := []Status{Pass, Skipped, NotRun, Fail, BuildFail}
+	for i, a := range ranked {
+		for j, b := range ranked {
+			want := a
+			if j > i {
+				want = b
+			}
+			if got := Worse(a, b); got != want {
+				t.Errorf("Worse(%q, %q) = %q, want %q", a, b, got, want)
+			}
+		}
+	}
+
+	// An unranked status fails closed, whichever side it is on: n/a is not the
+	// outcome of a run, the empty status is no outcome at all, and a status a
+	// newer bundle brings is one this build cannot judge. None of them may
+	// read as the best of the two.
+	for _, unknown := range []Status{"", NotApply, Status("greenish")} {
+		for _, s := range ranked {
+			if got := Worse(s, unknown); got != unknown {
+				t.Errorf("Worse(%q, %q) = %q, want the unranked %q", s, unknown, got, unknown)
+			}
+			if got := Worse(unknown, s); got != unknown {
+				t.Errorf("Worse(%q, %q) = %q, want the unranked %q", unknown, s, got, unknown)
+			}
+		}
+	}
+
+	// The cases internal/verify checked before the ranking moved here, plus
+	// the tie: two unranked statuses rank the same, and a tie keeps a, so
+	// Worse is not symmetric among them. Either answer fails closed, but
+	// which one comes back is a decision and not an accident.
+	for _, tt := range []struct{ a, b, want Status }{
+		{Pass, Fail, Fail},
+		{Fail, Pass, Fail},
+		{Fail, BuildFail, BuildFail},
+		{Skipped, NotRun, NotRun},
+		{"", Pass, ""},
+		{Pass, "", ""},
+		{"", NotApply, ""},
+		{NotApply, "", NotApply},
+	} {
+		if got := Worse(tt.a, tt.b); got != tt.want {
+			t.Errorf("Worse(%q, %q) = %q, want %q", tt.a, tt.b, got, tt.want)
+		}
+	}
+}
+
 func TestValidate(t *testing.T) {
 	t.Parallel()
 

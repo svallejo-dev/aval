@@ -127,10 +127,10 @@ type Options struct {
 	// $RUNNER_TEMP when it is set, which GitHub Actions empties after every
 	// job, else the operating system's temporary directory.
 	TempDir string
-
-	// validate is openspec.Validate, replaced in tests so that they never
-	// install the OpenSpec CLI.
-	validate func(ctx context.Context, repoRoot, version string) (openspec.Report, error)
+	// Validator validates the OpenSpec tree. Its zero value is
+	// openspec.Validate, which installs and runs the pinned OpenSpec CLI; a
+	// caller that must not do that gives it a Run of its own.
+	Validator openspec.Validator
 }
 
 // Evidence is what Collect gathered: what the gate decides on, and what it
@@ -491,12 +491,8 @@ func (c *collector) validateSpecs(ctx context.Context) error {
 		c.ev.notCollected = append(c.ev.notCollected, notValidated)
 		return nil
 	}
-	validate := openspec.Validate
-	if c.o.validate != nil {
-		validate = c.o.validate
-	}
 	start := time.Now()
-	report, err := validate(ctx, c.ev.Root, p.OpenSpec.Version)
+	report, err := c.o.Validator.Validate(ctx, c.ev.Root, p.OpenSpec.Version)
 	if err != nil {
 		return fmt.Errorf("verify: %w", err)
 	}

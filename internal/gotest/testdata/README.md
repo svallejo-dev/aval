@@ -24,7 +24,9 @@ lives under `testdata/`, so `./...`, `go mod tidy` and `make verify` skip it.
 rest from inside `fixturemod/` with
 `go vet $(go list ./... | grep -v -e buildfail -e overlay/b -e overlay/d)`.
 `hang/` is not captured: aval's cancellation test runs it and cancels the run
-while its test sleeps.
+while its test sleeps. Neither is `selection/`: `TestRunsSelectFixtureTests`
+runs it live, once whole and once per `-run` pattern `gotest.Runs` builds, so
+what it pins is go test's own selection and not a recorded stream.
 
 ## Regenerating
 

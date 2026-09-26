@@ -185,11 +185,19 @@ The system SHALL start every order unused.
 #### Scenario: A new order
 - **WHEN** an order is new
 - **THEN** it is unused
+
+### Requirement: ORD-F11 Shipping is charged once
+The system SHALL charge shipping once per shipment.
+
+#### Scenario: One shipment
+- **WHEN** an order has one shipment
+- **THEN** shipping is charged once
 `
 
-// changeSpec adds the obligations of the pull request: one that fails at the
-// base, one the behavior already satisfied there, and the four shapes of
-// fail-before evidence ADR-0005 §2 grades.
+// changeSpec is the delta of the pull request: obligations it adds — one that
+// fails at the base, one the behavior already satisfied there, and the four
+// shapes of fail-before evidence ADR-0005 §2 grades — and one it modifies,
+// which asks for fail-before just the same.
 const changeSpec = `## ADDED Requirements
 
 ### Requirement: ORD-F02 Refund lowers the total
@@ -240,6 +248,19 @@ The system SHALL answer 42 beside the submodule.
 #### Scenario: Asking next door
 - **WHEN** the package beside the submodule is asked
 - **THEN** it answers 42
+
+## MODIFIED Requirements
+
+### Requirement: ORD-F11 Shipping is charged once
+The system SHALL charge shipping once per shipment, and never again for a refund.
+
+#### Scenario: One shipment
+- **WHEN** an order has one shipment
+- **THEN** shipping is charged once
+
+#### Scenario: A refund of that shipment
+- **WHEN** the order is refunded
+- **THEN** shipping is not charged again
 `
 
 // baseFiles is the fixture repository at the base. Its .gitattributes marks
@@ -337,6 +358,22 @@ func TestGroup(t *testing.T) {
 		// broken does not compile at the base, and head does not add it: a
 		// build failure that names it is no evidence at all.
 		"broken/broken.go": "package broken\n\n// Answer does not compile at the base.\nfunc Answer() int { return \"42\" }\n",
+		// ORD-F11's package: the obligation the pull request MODIFIES, whose
+		// behavior the base gets wrong.
+		"shipping/shipping.go": `package shipping
+
+// Order accumulates the shipping charges of an order.
+type Order struct{ charges int }
+
+// Ship charges shipping for one shipment.
+func (o *Order) Ship() { o.charges++ }
+
+// Refund charges shipping again. The base gets this wrong.
+func (o *Order) Refund() { o.charges++ }
+
+// Charges is how many times shipping was charged.
+func (o *Order) Charges() int { return o.charges }
+`,
 	}
 }
 
@@ -493,6 +530,44 @@ func TestSubs(t *testing.T) {
 	})
 }
 `,
+		// The MODIFIED obligation: head charges no shipping for a refund, and
+		// two subtests of one Test own ORD-F11, so §2.3 gives them one run.
+		"shipping/shipping.go": `package shipping
+
+// Order accumulates the shipping charges of an order.
+type Order struct{ charges int }
+
+// Ship charges shipping for one shipment.
+func (o *Order) Ship() { o.charges++ }
+
+// Refund charges nothing: a refund is not a shipment.
+func (o *Order) Refund() {}
+
+// Charges is how many times shipping was charged.
+func (o *Order) Charges() int { return o.charges }
+`,
+		"shipping/shipping_test.go": `package shipping
+
+import "testing"
+
+func TestCharges(t *testing.T) {
+	t.Run("ORD-F11 charges one shipment once", func(t *testing.T) {
+		var o Order
+		o.Ship()
+		if got := o.Charges(); got != 1 {
+			t.Fatalf("got %d, want 1", got)
+		}
+	})
+	t.Run("ORD-F11 does not charge a refund", func(t *testing.T) {
+		var o Order
+		o.Ship()
+		o.Refund()
+		if got := o.Charges(); got != 1 {
+			t.Fatalf("got %d, want 1", got)
+		}
+	})
+}
+`,
 		"flaky/flaky_test.go": `package flaky
 
 import "testing"
@@ -606,7 +681,7 @@ func TestCollect(t *testing.T) {
 
 	ev, err := Collect(t.Context(), Options{
 		Dir: r.dir, Base: base, Head: head, Repo: "svallejo-dev/svc", AvalVersion: "test",
-		Env: append(slices.Clone(goEnv), "AVAL_TEST_TMP="+tmp), TempDir: tmp, validate: okValidate,
+		Env: append(slices.Clone(goEnv), "AVAL_TEST_TMP="+tmp), TempDir: tmp, Validator: openspec.Validator{Run: okValidate},
 	})
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
@@ -665,6 +740,9 @@ func TestCollect(t *testing.T) {
 		// reason, but the base tree could not hold the submodule beside it, so
 		// overlay caps the evidence and names the path.
 		"ORD-F10": {evidence.Added, evidence.Fail, evidence.Pass, evidence.Weak, false, "subs/sub"},
+		// Modified, not added: a MODIFIED obligation asks for fail-before too,
+		// and head's fix does not travel to the base either.
+		"ORD-F11": {evidence.Modified, evidence.Fail, evidence.Pass, evidence.Strong, false, ""},
 		// Outside the delta: no fail-before, and §3 re-ran it on its own.
 		"ORD-F01": {evidence.Unchanged, evidence.NotApply, evidence.Pass, evidence.None, false, ""},
 		// Outside the delta and now skipped: the gate blocks on after.
@@ -790,7 +868,7 @@ func TestCollectTier0(t *testing.T) {
 
 	ev, err := Collect(t.Context(), Options{
 		Dir: r.dir, Base: base, Head: head, Repo: "svallejo-dev/svc",
-		Env: goEnv, TempDir: tmp, validate: okValidate,
+		Env: goEnv, TempDir: tmp, Validator: openspec.Validator{Run: okValidate},
 	})
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
@@ -875,7 +953,7 @@ func TestCollectSpecFindings(t *testing.T) {
 	tmp := t.TempDir()
 
 	ev, err := Collect(t.Context(), Options{
-		Dir: r.dir, Base: base, Head: head, Env: goEnv, TempDir: tmp, validate: okValidate,
+		Dir: r.dir, Base: base, Head: head, Env: goEnv, TempDir: tmp, Validator: openspec.Validator{Run: okValidate},
 	})
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
@@ -928,7 +1006,7 @@ func TestCollectDeletedChange(t *testing.T) {
 	tmp := t.TempDir()
 
 	ev, err := Collect(t.Context(), Options{
-		Dir: r.dir, Base: base, Head: head, Env: goEnv, TempDir: tmp, validate: okValidate,
+		Dir: r.dir, Base: base, Head: head, Env: goEnv, TempDir: tmp, Validator: openspec.Validator{Run: okValidate},
 	})
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
@@ -974,7 +1052,7 @@ func TestCollectLintRatchet(t *testing.T) {
 	tmp := t.TempDir()
 
 	ev, err := Collect(t.Context(), Options{
-		Dir: r.dir, Base: base, Head: head, Env: goEnv, TempDir: tmp, validate: okValidate,
+		Dir: r.dir, Base: base, Head: head, Env: goEnv, TempDir: tmp, Validator: openspec.Validator{Run: okValidate},
 	})
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
@@ -1001,6 +1079,69 @@ func TestCollectLintRatchet(t *testing.T) {
 	}
 }
 
+// TestCollectLintPathRules checks what writing the base configuration inside
+// the repository buys (writeBaseLint): golangci-lint resolves a
+// configuration's own path rules against the directory the file is in, so a
+// copy outside the repository would void every exclusion the base has and
+// count issues the base excludes. The base here excludes one package and not
+// the other, both with the same new issue: only the anchored path tells them
+// apart.
+func TestCollectLintPathRules(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a git repository and runs golangci-lint")
+	}
+	if _, err := exec.LookPath(lintTool); err != nil {
+		t.Skipf("%s is not on PATH: %v", lintTool, err)
+	}
+	const baseConfig = `version: "2"
+linters:
+  default: none
+  enable:
+    - errcheck
+  exclusions:
+    rules:
+      - path: ^excluded/
+        linters:
+          - errcheck
+`
+	// The same unchecked error in two packages, one of them excluded.
+	unchecked := func(pkg string) string {
+		return "package " + pkg + `
+
+import (
+	"fmt"
+	"io"
+)
+
+// Write writes s to w without checking the error.
+func Write(w io.Writer, s string) { fmt.Fprintln(w, s) }
+`
+	}
+	r := newRepo(t)
+	files := cleanBase()
+	files[lintConfig] = baseConfig
+	base := r.commit("base", files)
+	head := r.commit("head", map[string]string{
+		"excluded/excluded.go": unchecked("excluded"),
+		"counted/counted.go":   unchecked("counted"),
+	})
+	tmp := t.TempDir()
+
+	ev, err := Collect(t.Context(), Options{
+		Dir: r.dir, Base: base, Head: head, Env: goEnv, TempDir: tmp,
+		Validator: openspec.Validator{Run: okValidate},
+	})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	assertClean(t, r, tmp)
+	// One new issue, counted/counted.go's. From anywhere but the repository
+	// root, ^excluded/ matches neither path and both would count.
+	if want := (gate.Lint{BaseConfig: true, Ran: true, NewIssues: 1}); ev.Input.Lint != want {
+		t.Errorf("Lint = %+v, want %+v: the base's path rules must resolve at the repository root", ev.Input.Lint, want)
+	}
+}
+
 // TestCollectNoBasePolicy checks the adoption pull request: with no policy at
 // the base there is no pinned OpenSpec version to validate with, and the
 // bundle says the validation is missing instead of letting its absence read as
@@ -1023,7 +1164,7 @@ func TestCollectNoBasePolicy(t *testing.T) {
 	tmp := t.TempDir()
 
 	ev, err := Collect(t.Context(), Options{
-		Dir: r.dir, Base: base, Head: head, Env: goEnv, TempDir: tmp, validate: okValidate,
+		Dir: r.dir, Base: base, Head: head, Env: goEnv, TempDir: tmp, Validator: openspec.Validator{Run: okValidate},
 	})
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
@@ -1180,25 +1321,8 @@ func TestRatchetToolMissing(t *testing.T) {
 	}
 }
 
-func TestWorse(t *testing.T) {
-	t.Parallel()
-	for _, tt := range []struct {
-		a, b, want evidence.Status
-	}{
-		{evidence.Pass, evidence.Fail, evidence.Fail},
-		{evidence.Fail, evidence.Pass, evidence.Fail},
-		{evidence.Fail, evidence.BuildFail, evidence.BuildFail},
-		{evidence.Skipped, evidence.NotRun, evidence.NotRun},
-		// A status aval does not know must never read as a pass.
-		{"", evidence.Pass, ""},
-		{evidence.Pass, "", ""},
-	} {
-		if got := worse(tt.a, tt.b); got != tt.want {
-			t.Errorf("worse(%q, %q) = %q, want %q", tt.a, tt.b, got, tt.want)
-		}
-	}
-}
-
+// TestPremortem checks that what openspec reads reaches the gate whole. The
+// reading itself is openspec.ReadPremortem's, checked in internal/openspec.
 func TestPremortem(t *testing.T) {
 	t.Parallel()
 	const md = "# Premortem\n\n" +
@@ -1216,7 +1340,7 @@ func TestPremortem(t *testing.T) {
 		t.Fatal(err)
 	}
 	ids := []string{"ORD-F01", "ORD-F02"}
-	pm, err := premortem(dir, "change", parseIDs(t, ids))
+	pm, err := premortem(os.DirFS(dir), "change", parseIDs(t, ids))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1224,7 +1348,7 @@ func TestPremortem(t *testing.T) {
 	if !reflect.DeepEqual(pm, want) {
 		t.Errorf("premortem = %+v, want %+v", pm, want)
 	}
-	if pm, err := premortem(dir, "nowhere", nil); err != nil || pm.Present || pm.Items != 0 {
+	if pm, err := premortem(os.DirFS(dir), "nowhere", nil); err != nil || pm.Present || pm.Items != 0 {
 		t.Errorf("premortem without a file = %+v, %v; want it absent", pm, err)
 	}
 }
@@ -1242,18 +1366,5 @@ func TestChangeDirs(t *testing.T) {
 	want := []string{"openspec/changes/add-x", "openspec/changes/archive/2026-01-01-add-y"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("changeDirs = %q, want %q", got, want)
-	}
-}
-
-func TestRunsOf(t *testing.T) {
-	t.Parallel()
-	id := parseIDs(t, []string{"ORD-F01"})[0]
-	got := runsOf(id, []string{"TestSuite/TestX/ORD-F01_one", "TestSuite/TestX/ORD-F01_one#01", "TestOther/ORD-F01"})
-	want := []isolatedRun{
-		{test: "TestSuite", pattern: `^TestSuite$/^TestX$/^ORD-F01([_#]|$)`},
-		{test: "TestOther", pattern: `^TestOther$/^ORD-F01([_#]|$)`},
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("runsOf = %+v, want %+v", got, want)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -173,7 +174,7 @@ func TestValidate(t *testing.T) {
 			run := cmp.Or(tt.run, &fakeRunner{})
 			run.pkgJSON = pinnedPackage
 			cache := t.TempDir()
-			v := validator{run: run, cacheDir: cache, environ: testEnviron}
+			v := cliTool{run: run, cacheDir: cache, environ: testEnviron}
 			got, err := v.validate(context.Background(), cmp.Or(tt.root, root), cmp.Or(tt.version, "1.13.1"))
 
 			for _, target := range tt.is {
@@ -265,7 +266,7 @@ func TestInstall(t *testing.T) {
 				}
 			}
 			run := &fakeRunner{pkgJSON: tt.pkgJSON, npmOut: tt.npmOut, out: output{stdout: passing}}
-			v := validator{run: run, cacheDir: cache, environ: testEnviron}
+			v := cliTool{run: run, cacheDir: cache, environ: testEnviron}
 			_, err := v.validate(context.Background(), root, "1.13.1")
 			if tt.msg == "" {
 				if err != nil {
@@ -301,7 +302,7 @@ func TestInstall(t *testing.T) {
 		t.Parallel()
 		cache := t.TempDir()
 		run := &fakeRunner{pkgJSON: pinnedPackage, out: output{stdout: passing}}
-		v := validator{run: run, cacheDir: cache, environ: testEnviron}
+		v := cliTool{run: run, cacheDir: cache, environ: testEnviron}
 		errs := make(chan error, 8)
 		for range 8 {
 			go func() {
@@ -472,5 +473,40 @@ func TestCapped(t *testing.T) {
 	}
 	if c.buf.String() != "abcde" || !c.truncated {
 		t.Errorf("kept %q, truncated %v", c.buf.String(), c.truncated)
+	}
+}
+
+// TestValidatorSeam checks the seam other packages hold: a Run of their own is
+// what runs, its report and its error come back untouched, and a zero
+// Validator is Validate itself — the real path, which a caller's private seam
+// could never reach.
+func TestValidatorSeam(t *testing.T) {
+	t.Parallel()
+
+	want := Report{Root: "/repo", Items: []Item{{ID: "add-refunds", Type: "change", Valid: true}}}
+	var gotRoot, gotVersion string
+	fake := Validator{Run: func(_ context.Context, root, version string) (Report, error) {
+		gotRoot, gotVersion = root, version
+		return want, nil
+	}}
+	got, err := fake.Validate(t.Context(), "/repo", "1.13.1")
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("Validate through Run = %+v, %v; want %+v", got, err, want)
+	}
+	if gotRoot != "/repo" || gotVersion != "1.13.1" {
+		t.Errorf("Run got (%q, %q), want (%q, %q)", gotRoot, gotVersion, "/repo", "1.13.1")
+	}
+
+	boom := errors.New("boom")
+	failing := Validator{Run: func(context.Context, string, string) (Report, error) { return Report{}, boom }}
+	if _, err := failing.Validate(t.Context(), "/repo", "1.13.1"); !errors.Is(err, boom) {
+		t.Errorf("Validate through a failing Run = %v, want %v", err, boom)
+	}
+
+	// The zero value runs Validate: an inexact version is refused before
+	// anything is installed, so this reaches the real path without node or npm.
+	_, err = Validator{}.Validate(t.Context(), t.TempDir(), "1.13")
+	if err == nil || !strings.Contains(err.Error(), "must be exact") {
+		t.Errorf("zero Validator with an inexact version = %v, want Validate's own refusal", err)
 	}
 }

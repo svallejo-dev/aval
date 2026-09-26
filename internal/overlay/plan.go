@@ -3,22 +3,19 @@ package overlay
 import (
 	"fmt"
 	"go/token"
-	"regexp"
 	"slices"
 	"strings"
 
+	"github.com/svallejo-dev/aval/internal/gotest"
 	"github.com/svallejo-dev/aval/internal/obligation"
 )
 
-// plannedTarget is a validated target and its runs.
+// plannedTarget is a validated target and its runs: one go test process per
+// top-level test of Tests, in order of first appearance, selecting the
+// target's tests under it and nothing else (gotest.Runs, ADR-0005 §2.3).
 type plannedTarget struct {
 	Target
-	runs []plannedRun // one per top-level test of Tests, in order of first appearance
-}
-
-type plannedRun struct {
-	test    string // the top-level test
-	pattern string // the -run pattern that selects the target's tests under it
+	runs []gotest.Selection
 }
 
 func newPlan(targets []Target) ([]plannedTarget, error) {
@@ -32,18 +29,7 @@ func newPlan(targets []Target) ([]plannedTarget, error) {
 			return nil, fmt.Errorf("%w: %s appears twice", ErrInvalidTarget, t.ID)
 		}
 		seen[t.ID] = true
-		var tops []string
-		names := make(map[string][]string)
-		for _, name := range t.Tests {
-			top, _, _ := strings.Cut(name, "/")
-			tops = appendNew(tops, top)
-			names[top] = appendNew(names[top], name)
-		}
-		pt := plannedTarget{Target: t}
-		for _, top := range tops {
-			pt.runs = append(pt.runs, plannedRun{test: top, pattern: pattern(t.ID, names[top])})
-		}
-		plan = append(plan, pt)
+		plan = append(plan, plannedTarget{Target: t, runs: gotest.Runs(t.ID, t.Tests)})
 	}
 	return plan, nil
 }
@@ -72,40 +58,4 @@ func (t Target) validate() error {
 		}
 	}
 	return nil
-}
-
-// pattern returns the -run pattern that selects the tests named, which own
-// id, what runs under them, and nothing else: one alternative per name,
-// each level quoted and anchored. The level that carries id matches it with
-// any "_..." or "#NN" suffix, so duplicates run too:
-// ^TestSuite$/^TestX$/^ORD-F01([_#]|$). A test bound only by an aval.req
-// attr is selected by its exact name.
-func pattern(id obligation.ID, names []string) string {
-	var alts []string
-	for _, name := range names {
-		alts = appendNew(alts, selector(id, name))
-	}
-	return strings.Join(alts, "|")
-}
-
-// selector selects name down to its outermost level that carries id.
-func selector(id obligation.ID, name string) string {
-	var levels []string
-	for level := range strings.SplitSeq(name, "/") {
-		if got, ok := obligation.FromTestSegment(level); ok && got == id {
-			return strings.Join(append(levels, "^"+regexp.QuoteMeta(id.String())+"([_#]|$)"), "/")
-		}
-		levels = append(levels, "^"+regexp.QuoteMeta(level)+"$")
-	}
-	return strings.Join(levels, "/")
-}
-
-// appendNew appends the values of vs that s does not hold yet.
-func appendNew[T comparable](s []T, vs ...T) []T {
-	for _, v := range vs {
-		if !slices.Contains(s, v) {
-			s = append(s, v)
-		}
-	}
-	return s
 }
