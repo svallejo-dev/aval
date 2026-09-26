@@ -11,21 +11,37 @@ import (
 	"time"
 )
 
-// TestLatency runs the built aval 50 times per event in this repository and
-// in a small one, and holds the p95 to ADR-0003's 50 ms. A loaded machine,
-// such as one running the other packages' tests, can push one round over, so
-// the majority of up to three rounds decides: two rounds within the budget
-// pass, two over it fail, and a split takes a third. Shared CI runners are
-// too noisy even for that, so under CI it only catches gross regressions
-// (250 ms): run `go test -run TestLatency -v ./internal/hook` locally.
+// EnvLatency asks for the latency measurement. Without it TestLatency skips.
+const EnvLatency = "AVAL_LATENCY"
+
+// TestLatency runs the built aval 50 times per event and holds the p95 to
+// ADR-0003's 50 ms.
+//
+// It only runs with AVAL_LATENCY=1, because a timing budget cannot be measured
+// while twenty other packages fight for the CPU: under `go test -race ./...` it
+// is the machine that is being measured, and it failed about one cold run in
+// five, on the fixture case, at 54 to 68 ms. `make latency` runs it alone,
+// serially and without -race, and CI runs that as a step of its own, so the
+// budget is still enforced on every pull request — just not against noise.
+//
+// The cases over this repository keep a gross-regression budget: what they cost
+// is dominated by hashing whatever the working tree happens to hold
+// (hook.CurrentKey: the diff against HEAD plus every untracked file), so their
+// number is not comparable between checkouts. The real budget is the fixture's,
+// whose contents are fixed.
+//
+// Even alone, a machine can push one round over, so the majority of up to three
+// rounds decides: two rounds within the budget pass, two over it fail, and a
+// split takes a third.
 func TestLatency(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds aval and runs it 200 times or more")
 	}
-	budget := 50 * time.Millisecond
-	if os.Getenv("CI") != "" {
-		budget = 250 * time.Millisecond
+	if os.Getenv(EnvLatency) == "" {
+		t.Skip("timing is not measurable beside the other packages' tests: run `make latency`, " +
+			"or set " + EnvLatency + "=1 to run it here")
 	}
+	fixture, gross := 50*time.Millisecond, 500*time.Millisecond
 	// .exe runs everywhere, and Windows needs it.
 	bin := filepath.Join(t.TempDir(), "aval.exe")
 	if out, err := exec.Command("go", "build", "-o", bin, "../../cmd/aval").CombinedOutput(); err != nil { //nolint:gosec // bin is a temporary path
@@ -45,11 +61,14 @@ func TestLatency(t *testing.T) {
 		repo, dir, stdin string
 		event            Event
 		want             string // in the answer, to prove the whole path ran
+		// budget is fixture for the fixture repository, whose size is fixed, and
+		// gross for this one, whose working tree the measurement depends on.
+		budget time.Duration
 	}{
-		{"this repo", this, edit(filepath.Join(this, "internal", "obligation", "obligation_test.go")), PostToolUse, ""},
-		{"this repo", this, stop, Stop, ""},
-		{"small repo", small, edit(filepath.Join(small, "refund", "refund_test.go")), PostToolUse, "ORD-F01, ORD-F03"},
-		{"small repo", small, stop, Stop, `"decision":"block"`},
+		{"this repo", this, edit(filepath.Join(this, "internal", "obligation", "obligation_test.go")), PostToolUse, "", gross},
+		{"this repo", this, stop, Stop, "", gross},
+		{"small repo", small, edit(filepath.Join(small, "refund", "refund_test.go")), PostToolUse, "ORD-F01, ORD-F03", fixture},
+		{"small repo", small, stop, Stop, `"decision":"block"`, fixture},
 	}
 	for _, tt := range tests {
 		var p95s []time.Duration
@@ -61,14 +80,14 @@ func TestLatency(t *testing.T) {
 				t.Fatalf("%s: aval hook %s wrote %q, want %q in it", tt.repo, tt.event, out, tt.want)
 			}
 			p95s = append(p95s, p95)
-			if p95 <= budget {
+			if p95 <= tt.budget {
 				within++
 			} else {
 				over++
 			}
 		}
 		if over == 2 {
-			t.Errorf("%s: aval hook %s: p95 %v in %d rounds, over the %v budget in two", tt.repo, tt.event, p95s, len(p95s), budget)
+			t.Errorf("%s: aval hook %s: p95 %v in %d rounds, over the %v budget in two", tt.repo, tt.event, p95s, len(p95s), tt.budget)
 		}
 	}
 }

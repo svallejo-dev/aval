@@ -166,7 +166,9 @@ func title(b evidence.Bundle, v verdict) []block {
 	}}
 	lead := frag{
 		strong("repo"), fixed(" "), code(b.Repo),
-		fixed(" · "), strong("base"), fixed(" "), code(short(b.Base)),
+		fixed(" · "), strong("trust base"), fixed(" "), code(short(b.TrustBase)),
+		fixed(" · "), strong("change base"), fixed(" "), code(short(b.ChangeBase)),
+		fixed(" ("), label(b.BaseRef), fixed(")"),
 		fixed(" → "), strong("head"), fixed(" "), code(short(b.Head)),
 		fixed(" · "), strong("aval"), fixed(" "), code(b.AvalVersion),
 		fixed(" · "), strong("generated"), fixed(" "), code(b.GeneratedAt.UTC().Format(time.RFC3339)),
@@ -453,17 +455,19 @@ func notCollectedBlocks(items []string) []block {
 }
 
 // reproduceBlocks gives the exact commands that produce this verdict again,
-// with both SHAs, because a reviewer who cannot reproduce a block has to take
-// the gate's word for it (ADR-0005 §1: --base and --head).
+// with all three SHAs, because a reviewer who cannot reproduce a block has to
+// take the gate's word for it. Both bases are named: the same head judged
+// against another policy is another verdict (ADR-0005 §1).
 func reproduceBlocks(b evidence.Bundle) []block {
 	return []block{
 		heading{2, frag{fixed("Reproduce")}},
 		commands{[]frag{
-			{fixed("base="), code(b.Base)},
+			{fixed("trust="), code(b.TrustBase)},
+			{fixed("change="), code(b.ChangeBase)},
 			{fixed("head="), code(b.Head)},
 			{fixed(`git fetch origin && git checkout "$head"`)},
-			{fixed(`aval verify --base "$base" --head "$head"`)},
-			{fixed(`aval gate --base "$base" --head "$head"`)},
+			{fixed(`aval verify --trust-base "$trust" --change-base "$change" --head "$head"`)},
+			{fixed(`aval gate --trust-base "$trust" --change-base "$change" --head "$head"`)},
 		}},
 	}
 }

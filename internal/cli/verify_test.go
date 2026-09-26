@@ -1,10 +1,8 @@
 package cli
 
 import (
-	"errors"
-	"strings"
+	"slices"
 	"testing"
-	"time"
 
 	"github.com/svallejo-dev/aval/internal/evidence"
 	"github.com/svallejo-dev/aval/internal/gate"
@@ -27,9 +25,10 @@ func reasons(codes ...string) evidence.Verdict {
 	return v
 }
 
-// TestVerifyExitCode pins ADR-0005 §6 as verify applies it, exception included:
-// a block whose only blocking reason is approval_missing exits 0, because
-// verify reads no reviews and an agent cannot obtain one.
+// TestVerifyExitCode pins ADR-0005 §6 as both commands apply it, with no
+// exception: a block in enforce mode is exit 1 even when the only thing blocking
+// is the approval verify never reads. The exemption is the hook status's, not the
+// exit code's, so a human running verify before pushing still sees a failure.
 func TestVerifyExitCode(t *testing.T) {
 	t.Parallel()
 
@@ -41,24 +40,12 @@ func TestVerifyExitCode(t *testing.T) {
 	}{
 		{name: "nothing to report", mode: manifest.Enforce, want: ExitOK},
 		{name: "only warnings", mode: manifest.Enforce, codes: []string{gate.CodeSeamTouched, gate.CodeWeakEvidence}, want: ExitOK},
-		{name: "a block an agent can act on", mode: manifest.Enforce, codes: []string{gate.CodeUnverified}, want: ExitFailed},
+		{name: "a block", mode: manifest.Enforce, codes: []string{gate.CodeUnverified}, want: ExitFailed},
 		{name: "observe never fails", mode: manifest.Observe, codes: []string{gate.CodeUnverified}, want: ExitOK},
 		{
-			name:  "approval_missing alone does not fail: no agent can resolve it",
+			name:  "approval_missing alone still fails in enforce mode",
 			mode:  manifest.Enforce,
 			codes: []string{gate.CodeApprovalMissing},
-			want:  ExitOK,
-		},
-		{
-			name:  "approval_missing with warnings still does not fail",
-			mode:  manifest.Enforce,
-			codes: []string{gate.CodeApprovalMissing, gate.CodeAssumption, gate.CodeNoBasePolicy},
-			want:  ExitOK,
-		},
-		{
-			name:  "approval_missing beside a block an agent can act on fails",
-			mode:  manifest.Enforce,
-			codes: []string{gate.CodeApprovalMissing, gate.CodeAfterNotPassing},
 			want:  ExitFailed,
 		},
 		{
@@ -71,87 +58,40 @@ func TestVerifyExitCode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			b := evidence.Bundle{Mode: string(tt.mode), Verdict: reasons(tt.codes...)}
-			if got := verifyExitCode(b); got != tt.want {
-				t.Errorf("verifyExitCode(%s, %q) = %d, want %d", tt.mode, tt.codes, got, tt.want)
+			if got := gate.ExitCode(tt.mode, reasons(tt.codes...)); got != tt.want {
+				t.Errorf("ExitCode(%s, %q) = %d, want %d", tt.mode, tt.codes, got, tt.want)
 			}
 		})
 	}
 }
 
-// TestBlocksAgentIgnoresTheResult checks that blocksAgent reads the reasons and
-// not only the result: an override lowers the result to a warn, and the gate's
-// own exit code handles that, so verify must not report a failure there.
-func TestBlocksAgentIgnoresTheResult(t *testing.T) {
+// TestExemptCodesMatchTheGate holds internal/hook's exempt list to internal/gate's
+// codes. hook cannot import gate — gate reaches openspec, yaml and a JSON Schema
+// compiler, and a hook has 50 ms (ADR-0003) — so this is the only thing keeping
+// the two from drifting.
+//
+// It checks the whole list, not only that one pair of constants is equal: every
+// code hook would honour has to be one the gate actually blocks on, or the
+// exemption would excuse something that was never holding the agent back, and a
+// code the gate does not know would be exempted on a typo.
+func TestExemptCodesMatchTheGate(t *testing.T) {
 	t.Parallel()
-	overridden := reasons(gate.CodeUnverified)
-	overridden.Result = evidence.ResultWarn
-	if blocksAgent(overridden) {
-		t.Error("blocksAgent = true for an overridden verdict, want false: the result is a warn")
+	codes := hook.ExemptCodes()
+	// ADR-0005 §7: exactly one code, and this is it. Adding another needs an ADR
+	// and another status version, so the list is spelled out here too.
+	want := []string{gate.CodeApprovalMissing}
+	if !slices.Equal(codes, want) {
+		t.Fatalf("hook.ExemptCodes() = %q, want %q", codes, want)
 	}
-}
-
-func TestPassForAgent(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name       string
-		verdict    evidence.Verdict
-		passed     bool // the status Save wrote
-		wantPassed bool
-	}{
-		{
-			name:       "a block on a missing approval alone is relaxed",
-			verdict:    reasons(gate.CodeApprovalMissing),
-			wantPassed: true,
-		},
-		{
-			name:    "a block an agent can act on is left alone",
-			verdict: reasons(gate.CodeApprovalMissing, gate.CodeUnverified),
-		},
-		{
-			name:       "a warn is left alone",
-			verdict:    reasons(gate.CodeSeamTouched),
-			passed:     true,
-			wantPassed: true,
-		},
+	for _, code := range codes {
+		if gate.Effect(code) != evidence.ResultBlock {
+			t.Errorf("hook exempts %q, which the gate treats as %s: exempting something that does not block excuses nothing",
+				code, gate.Effect(code))
+		}
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			root := t.TempDir()
-			key := hook.Key{Head: strings.Repeat("a", 40), Diff: strings.Repeat("b", 64)}
-			at := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
-			if err := hook.WriteStatus(root, hook.Status{Key: key, Passed: tt.passed, VerifiedAt: at}); err != nil {
-				t.Fatal(err)
-			}
-			if err := passForAgent(root, tt.verdict); err != nil {
-				t.Fatalf("passForAgent: %v", err)
-			}
-			got, err := hook.ReadStatus(root)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got.Passed != tt.wantPassed {
-				t.Errorf("passed = %v, want %v", got.Passed, tt.wantPassed)
-			}
-			// The key and the time must survive: they describe the working tree
-			// as it was before anything ran (ADR-0005 §7).
-			if got.Key != key || !got.VerifiedAt.Equal(at) {
-				t.Errorf("status = %+v, want key %+v and verifiedAt %s untouched", got, key, at)
-			}
-		})
-	}
-}
-
-// TestPassForAgentWithoutStatus checks that a missing status is an error rather
-// than a silent pass: the hook would otherwise keep blocking with no way to
-// find out why.
-func TestPassForAgentWithoutStatus(t *testing.T) {
-	t.Parallel()
-	err := passForAgent(t.TempDir(), reasons(gate.CodeApprovalMissing))
-	if err == nil || !errors.Is(err, hook.ErrNoStatus) {
-		t.Errorf("passForAgent without a status = %v, want an error wrapping ErrNoStatus", err)
+	if hook.ExemptApprovalMissing != gate.CodeApprovalMissing {
+		t.Errorf("hook.ExemptApprovalMissing = %q, gate.CodeApprovalMissing = %q; they must be the same code",
+			hook.ExemptApprovalMissing, gate.CodeApprovalMissing)
 	}
 }
 
@@ -166,5 +106,25 @@ func TestTextLines(t *testing.T) {
 		if len(l) != 1 || l[0].Text != want[i] {
 			t.Errorf("line %d = %+v, want the single span %q", i, l, want[i])
 		}
+	}
+}
+
+// TestRunVerifyRefusesTheRangeFlagsInActions pins the guard on the verify side.
+// The bundle verify writes is the artifact the workflow uploads, so a workflow
+// that could name its own trust base here could upload a verdict reached under a
+// policy it chose (ADR-0005 §1).
+func TestRunVerifyRefusesTheRangeFlagsInActions(t *testing.T) {
+	t.Parallel()
+	r := newGitRepo(t)
+	base, _ := r.history()
+	cmd, _, _ := testCmd()
+	vars := map[string]string{"GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "push"}
+	err := runVerify(t.Context(), cmd, &globalFlags{plain: true},
+		rangeFlags{dir: r.dir, trustBase: base}, env(vars))
+	assertExitCode(t, err, ExitUsage, "not allowed when GITHUB_ACTIONS is set")
+
+	// Outside Actions the same invocation is the supported one.
+	if err := refuseRangeFlags(false, rangeFlags{trustBase: base}); err != nil {
+		t.Errorf("outside Actions: %v, want no refusal", err)
 	}
 }

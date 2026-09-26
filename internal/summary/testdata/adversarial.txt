@@ -1,7 +1,7 @@
 ✗ aval: block · tier 1 · enforce
 ================================
 
-repo svallejo-dev/<script>alert("xss")</script><img src=x onerror=alert(1)> · base 111111111111 → head 222222222222 · aval v0.1.0 red · generated 2026-09-24T12:00:00Z
+repo svallejo-dev/<script>alert("xss")</script><img src=x onerror=alert(1)> · trust base 111111111111 · change base 444444444444 (release/**bold** [link](http://…) → head 222222222222 · aval v0.1.0 red · generated 2026-09-24T12:00:00Z
 
 changes add-col | umn || more | cells, **bold** [link](http://evil.example) `code` ~~strike~~ _em_ #heading
 
@@ -78,8 +78,9 @@ mutation col | umn || more | cells, <script>alert("xss")</script><img src=x oner
 Reproduce
 ---------
 
-  base=1111111111111111111111111111111111111111
+  trust=1111111111111111111111111111111111111111
+  change=4444444444444444444444444444444444444444
   head=2222222222222222222222222222222222222222
   git fetch origin && git checkout "$head"
-  aval verify --base "$base" --head "$head"
-  aval gate --base "$base" --head "$head"
+  aval verify --trust-base "$trust" --change-base "$change" --head "$head"
+  aval gate --trust-base "$trust" --change-base "$change" --head "$head"

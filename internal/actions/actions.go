@@ -131,6 +131,10 @@ const (
 	// GapStepSummary means GITHUB_STEP_SUMMARY is absent: there is nowhere to
 	// write the summary of §7.
 	GapStepSummary GapKind = "step_summary"
+	// GapDefaultBranch means the payload does not say which branch is the
+	// repository's default one, so the gate cannot take its trust base from the
+	// event and has to ask the API or fall back to the remote's refs.
+	GapDefaultBranch GapKind = "default_branch"
 )
 
 // Gap is one missing or rejected piece of context, with the reason. Err is
@@ -206,6 +210,16 @@ type Context struct {
 	// Action is the payload's "action": opened, synchronize, reopened,
 	// ready_for_review or submitted. Empty when the payload has none.
 	Action string
+
+	// DefaultBranch is repository.default_branch of the event payload, without
+	// refs/heads/: the branch whose tip is the gate's trust base (ADR-0005 §1).
+	// Empty when the payload carries none or names one aval will not use, and
+	// then the caller falls back to the API or to the remote's own refs.
+	//
+	// It is the default branch and not pull_request.base.ref: a pull request may
+	// target any branch, and a stacked one targets a branch its author pushes
+	// to, so taking the policy from there would let the author write it.
+	DefaultBranch string
 
 	// StepSummaryPath is the file GITHUB_STEP_SUMMARY names, where
 	// WriteStepSummary appends the gate's summary (ADR-0005 §7).
@@ -344,7 +358,7 @@ func (c Context) String() string {
 			pr.Number, cmp.Or(pr.HeadSHA, "-"), cmp.Or(pr.BaseBranchSHA, "-"),
 			cmp.Or(pr.BaseRef, "-"), cmp.Or(pr.Author, "-"), pr.Draft)
 	}
-	fmt.Fprintf(&b, " token:%s", cmp.Or(c.TokenSource, "none"))
+	fmt.Fprintf(&b, " default:%s token:%s", cmp.Or(c.DefaultBranch, "-"), cmp.Or(c.TokenSource, "none"))
 	if len(c.Gaps) > 0 {
 		kinds := make([]string, 0, len(c.Gaps))
 		for _, g := range c.Gaps {
@@ -397,7 +411,10 @@ type eventPayload struct {
 	Action string `json:"action"`
 	// Number is the top-level number a pull_request event also carries; it
 	// backs up pull_request.number.
-	Number      int64 `json:"number"`
+	Number     int64 `json:"number"`
+	Repository *struct {
+		DefaultBranch string `json:"default_branch"`
+	} `json:"repository"`
 	PullRequest *struct {
 		Number int64 `json:"number"`
 		Draft  bool  `json:"draft"`
@@ -490,7 +507,23 @@ func (c *Context) loadEvent(path string, maxBytes int64) {
 			c.Action = p.Action
 		}
 	}
+	c.setDefaultBranch(p)
 	c.setPullRequest(p)
+}
+
+// setDefaultBranch takes repository.default_branch from the payload. A branch
+// name aval would not use is the same as none: the caller falls back rather
+// than resolving something the payload chose the shape of.
+func (c *Context) setDefaultBranch(p eventPayload) {
+	if p.Repository == nil || p.Repository.DefaultBranch == "" {
+		c.gap(GapDefaultBranch, errors.New("the payload carries no repository.default_branch"))
+		return
+	}
+	if err := checkRef(p.Repository.DefaultBranch); err != nil {
+		c.gap(GapDefaultBranch, fmt.Errorf("repository.default_branch: %w", err))
+		return
+	}
+	c.DefaultBranch = strings.TrimPrefix(p.Repository.DefaultBranch, "refs/heads/")
 }
 
 // setPullRequest takes the pull request from the payload, and only from the

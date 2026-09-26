@@ -60,7 +60,7 @@ func (c *collector) touched() ([]gate.Change, map[obligation.ID]deltaOf, error) 
 				continue
 			}
 			seen[base.ID] = true
-			changes = append(changes, gate.Change{ID: base.ID, BaseTier: tierOf(base.Manifest)})
+			changes = append(changes, gate.Change{ID: base.ID, BaseTier: c.baseTier(base.ID, base.Manifest)})
 			continue
 		}
 		if seen[ch.ID] {
@@ -90,7 +90,8 @@ func (c *collector) touched() ([]gate.Change, map[obligation.ID]deltaOf, error) 
 			return nil, nil, err
 		}
 		changes = append(changes, gate.Change{
-			ID: ch.ID, Tier: tierOf(ch.Manifest), BaseTier: tierOf(basesByID[ch.ID].Manifest), Premortem: pm,
+			ID: ch.ID, Tier: tierOf(ch.Manifest),
+			BaseTier: c.baseTier(ch.ID, basesByID[ch.ID].Manifest), Premortem: pm,
 		})
 	}
 	return changes, deltas, nil
@@ -105,6 +106,23 @@ func deltaOp(op openspec.Op) evidence.Delta {
 		return evidence.Modified
 	}
 	return evidence.Unchanged
+}
+
+// baseTier is the tier a change already carried: the higher of what the merge
+// base and the default branch give it. Both, because cutting the branch before
+// the change was raised to tier 2 would otherwise lower it back, and the head
+// may raise a tier, never lower it (ADR-0005 §1).
+func (c *collector) baseTier(id string, atChangeBase *manifest.Change) manifest.Tier {
+	t := tierOf(atChangeBase)
+	if c.trustSpecs == nil {
+		return t
+	}
+	for _, ch := range c.trustSpecs.Changes {
+		if ch.ID == id {
+			t = max(t, tierOf(ch.Manifest))
+		}
+	}
+	return t
 }
 
 // tierOf is the tier of a change manifest, 0 when there is none: a change
@@ -152,27 +170,38 @@ func premortem(fsys fs.FS, dir string, ids []obligation.ID) (gate.Premortem, err
 	return gate.Premortem{Present: pm.Present, Items: pm.Items, Unmapped: pm.Unmapped}, nil
 }
 
-// newFindings returns the openspec.Check findings at head that the base did
-// not have, matched by rule, path and message with the line number left out
+// newFindings returns the openspec.Check findings at head that BOTH bases
+// already had, matched by rule, path and message with the line number left out
 // (ADR-0005 §4). The path of a change this pull request archived is
-// normalized to the active path it had at the base, in the message as well as
-// in the path itself, so that moving a change does not turn its findings into
+// normalized to the active path it had at the merge base, in the message as well
+// as in the path itself, so that moving a change does not turn its findings into
 // new ones.
+//
+// Both bases, because either one alone can be made to excuse a finding. A
+// finding only the merge base has was chosen by whoever cut the branch, who
+// could cut from a commit that already carried it; a finding only the default
+// branch has is somebody else's, and not yet in this range. Only a finding that
+// stands at both ends was not put there by this pull request.
 func (c *collector) newFindings() []openspec.Finding {
 	head := c.headSpecs.Check(openspec.CheckOptions{Base: c.baseSpecs})
-	if c.baseSpecs == nil {
+	if c.baseSpecs == nil || c.trustSpecs == nil {
 		return head
 	}
-	moved := c.archivedHere()
-	// A count, not a set: two identical findings at head where the base had
-	// one is one new finding, and the pull request answers for it.
-	was := make(map[[3]string]int)
-	for _, f := range c.baseSpecs.Check(openspec.CheckOptions{}) {
-		was[findingKey(f, nil)]++
+	// A count, not a set: two identical findings at head where a base had one
+	// is one new finding, and the pull request answers for it. What excuses a
+	// finding is the lower of the two bases' counts — nothing either base does
+	// not have is excused.
+	atChange := c.findingCounts(c.baseSpecs)
+	atTrust := c.findingCounts(c.trustSpecs)
+	was := make(map[[3]string]int, len(atChange))
+	for k, n := range atChange {
+		if m := atTrust[k]; m > 0 {
+			was[k] = min(n, m)
+		}
 	}
 	out := []openspec.Finding{}
 	for _, f := range head {
-		if k := findingKey(f, moved); was[k] > 0 {
+		if k := findingKey(f, nil); was[k] > 0 {
 			was[k]--
 			continue
 		}
@@ -181,29 +210,44 @@ func (c *collector) newFindings() []openspec.Finding {
 	return out
 }
 
-// archivedHere maps the directory of every change this pull request archived
-// to the active directory it has at the base.
-func (c *collector) archivedHere() map[string]string {
-	atBase := make(map[string]string, len(c.baseSpecs.Changes))
-	dirs := make(map[string]bool, len(c.baseSpecs.Changes))
-	for _, ch := range c.baseSpecs.Changes {
+// findingCounts counts one base's own findings by key, with the directory of
+// every change this pull request archived rewritten to the active directory that
+// base has it under: each base is compared against the paths it knows, so moving
+// a change turns no finding of it into a new one (ADR-0005 §4).
+func (c *collector) findingCounts(specs *openspec.Repo) map[[3]string]int {
+	moved := c.archivedHere(specs)
+	out := make(map[[3]string]int)
+	for _, f := range specs.Check(openspec.CheckOptions{}) {
+		out[findingKey(f, moved)]++
+	}
+	return out
+}
+
+// archivedHere maps the active directory a change has in specs to the archived
+// directory this pull request moved it to, so that the base's own findings are
+// keyed the way head spells them.
+func (c *collector) archivedHere(specs *openspec.Repo) map[string]string {
+	active := make(map[string]string, len(specs.Changes))
+	dirs := make(map[string]bool, len(specs.Changes))
+	for _, ch := range specs.Changes {
 		dirs[ch.Dir] = true
 		if !ch.Archived {
-			atBase[ch.ID] = ch.Dir
+			active[ch.ID] = ch.Dir
 		}
 	}
 	moved := map[string]string{}
 	for _, ch := range c.headSpecs.Changes {
-		if base, ok := atBase[ch.ID]; ch.Archived && !dirs[ch.Dir] && ok {
-			moved[ch.Dir] = base
+		if from, ok := active[ch.ID]; ch.Archived && !dirs[ch.Dir] && ok {
+			moved[from] = ch.Dir
 		}
 	}
 	return moved
 }
 
 // findingKey identifies a finding for the base-to-head comparison: its rule,
-// path and message, with the directories of moved rewritten to the paths the
-// base knows and the line number left out.
+// path and message, with the directories of moved rewritten and the line number
+// left out. A base's findings are keyed with the map archivedHere built for that
+// base, so they land on the paths head spells; head's own need no rewriting.
 func findingKey(f openspec.Finding, moved map[string]string) [3]string {
 	p, msg := f.Path, f.Message
 	for from, to := range moved {

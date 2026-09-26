@@ -4,16 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/svallejo-dev/aval/internal/actions"
 	"github.com/svallejo-dev/aval/internal/envelope"
 	"github.com/svallejo-dev/aval/internal/evidence"
 	"github.com/svallejo-dev/aval/internal/gate"
 	"github.com/svallejo-dev/aval/internal/hook"
-	"github.com/svallejo-dev/aval/internal/manifest"
 	"github.com/svallejo-dev/aval/internal/summary"
 	"github.com/svallejo-dev/aval/internal/ui"
 	"github.com/svallejo-dev/aval/internal/verify"
@@ -26,47 +26,91 @@ import (
 // approved, and "aval did not look" would read as "nobody approved".
 const notCollectedApprovals = "approvals"
 
-const verifyLong = `verify gathers the evidence for the range base..head, applies the gate's rules
-to it and writes the bundle to .aval/evidence/<head>.json, together with the
-status the agent hooks read (ADR-0005 §7).
+const verifyLong = `verify gathers the evidence for a range, applies the gate's rules to it and
+writes the bundle to .aval/evidence/<head>.json, together with the status the
+agent hooks read (ADR-0005 §7).
 
-It makes no network call, so it judges no approval: the bundle records
+A range has two bases and they are not the same commit. The TRUST BASE is the
+tip of the default branch, and the policy, CODEOWNERS, the baseline and the lint
+configuration all come from there, because nobody who opens a pull request gets
+to choose it. The CHANGE BASE is where the range starts — the merge base of the
+head with the branch the pull request targets — and everything about what the
+pull request did is measured from there, because measuring against a branch tip
+would attribute other people's commits to it.
+
+An empty range is never a pass: a change base that does not resolve, or that is
+the head itself, is exit 2.
+
+verify makes no network call, so it judges no approval: the bundle records
 approvals as not collected, and a tier-3 change therefore always carries
-approval_missing. That is the one reason an agent cannot do anything about, and
-a Stop hook that treated it as a failure would keep the agent working for ever.
-So verify fails only for a block an agent can act on: when nothing but
-approval_missing blocks, it exits 0 and leaves the hook status passed. Every
-other code is ADR-0005 §6: 0 in observe mode, 1 for a block in enforce mode, 2
-for an invalid invocation and 3 for a missing tool.`
+approval_missing. The exit code is ADR-0005 §6 unchanged — 0 in observe mode, 1
+for a block in enforce mode, 2 for an invalid invocation, 3 for a missing tool —
+but the status the agent hooks read says passed when approval_missing is the only
+thing blocking, because an agent cannot obtain one and a Stop hook that waited
+for it would never let the agent finish. Only that one reason is exempt.`
 
 func newVerifyCmd(g *globalFlags) *cobra.Command {
 	var f rangeFlags
+	getenv := os.Getenv
 	cmd := &cobra.Command{
 		Use:   "verify",
-		Short: "Gather the evidence for base..head and write the bundle",
+		Short: "Gather the evidence for a range and write the bundle",
 		Long:  verifyLong,
 		Args:  cobra.NoArgs,
 		RunE: runE(func(cmd *cobra.Command, _ []string) error {
-			return runVerify(cmd.Context(), cmd, g, f)
+			return runVerify(cmd.Context(), cmd, g, f, getenv)
 		}),
 	}
 	f.bind(cmd)
 	return cmd
 }
 
-func runVerify(ctx context.Context, cmd *cobra.Command, g *globalFlags, f rangeFlags) error {
+func runVerify(ctx context.Context, cmd *cobra.Command, g *globalFlags, f rangeFlags, getenv func(string) string) error {
+	// verify writes the same bundle to .aval/evidence/<head>.json that the
+	// workflow uploads, so inside Actions it resolves the range exactly as the
+	// gate does: the same flags refused, the same default branch, the same base
+	// commit from the event and the same head check. Anything less and a run here
+	// would judge a range the gate would have refused (ADR-0005 §1).
+	//
+	// The one difference is that verify makes no network call, so it takes the
+	// default branch from the payload alone. Inside Actions, a payload that does
+	// not name one is exit 2, never a fall-through to a local branch.
+	//
+	// It reads ac.PullRequest directly and does not call eventPullRequest, so
+	// ADR-0005 §8's event allowlist does not refuse the run the way it refuses the
+	// gate's. That is deliberate, and it grants nothing:
+	//
+	//   - actions.Detect already applies the allowlist before it ever populates
+	//     PullRequest, so on an event §8 does not allow — pull_request_target,
+	//     workflow_run — ac.PullRequest is nil. The event can therefore only
+	//     narrow what verify judges, never widen it: with no pull request there is
+	//     no base commit from the payload and no head to check against, so the
+	//     range falls to the default branch and HEAD.
+	//   - the policy still comes from the tip of the named default branch, which
+	//     is the only thing that decides a verdict, and which no event chooses.
+	//
+	// What the allowlist protects is the gate's verdict, which a required check
+	// consumes. verify publishes no check; refusing it outside a pull request
+	// event would only make it unusable where it is legitimately useful, and the
+	// bundle it writes names the bases it actually used. Do not "fix" this into a
+	// call to eventPullRequest: that would refuse runs for no gain and put the two
+	// commands back on separate paths, which is the hole resolveActionsRange
+	// exists to close.
+	ac := actions.Detect(getenv)
 	root, gr, err := openRepo(ctx, f.dir)
 	if err != nil {
 		return err
 	}
-	base, head, err := resolveRange(ctx, gr, f, defaultBaseRefs)
+	r, err := resolveActionsRange(ctx, gr, f, ac.InActions, ac.DefaultBranch, ac.PullRequest)
 	if err != nil {
 		return err
 	}
 	ev, b, err := collect(ctx, verify.Options{
 		Dir:         root,
-		Base:        base,
-		Head:        head,
+		TrustBase:   r.trust,
+		Base:        r.change,
+		BaseRef:     r.ref,
+		Head:        r.head,
 		Repo:        originRepo(ctx, gr),
 		AvalVersion: readVersion().Version,
 	})
@@ -74,13 +118,12 @@ func runVerify(ctx context.Context, cmd *cobra.Command, g *globalFlags, f rangeF
 		return err
 	}
 	b.NotCollected = append(b.NotCollected, notCollectedApprovals)
-	if err := ev.Save(b); err != nil {
+	// The verdict is the gate's and the status is the agent's: the only reason
+	// the agent is excused from is the approval it cannot obtain (ADR-0005 §7).
+	if err := ev.Save(b, verify.WithAgentExempt(hook.ExemptApprovalMissing)); err != nil {
 		return fmt.Errorf("save the evidence: %w", err)
 	}
-	if err := passForAgent(ev.Root, b.Verdict); err != nil {
-		return err
-	}
-	return report(cmd, g, "verify", b, verifyExitCode(b))
+	return report(cmd, g, "verify", b, gate.ExitCode(ev.Input.Mode(), b.Verdict))
 }
 
 // collect gathers the evidence for o's range, decides on it and assembles the
@@ -136,48 +179,4 @@ func textLines(s string) []ui.Line {
 		lines = append(lines, ui.Line{{Text: line}})
 	}
 	return lines
-}
-
-// verifyExitCode is ADR-0005 §6 with one deliberate exception, the one stated
-// in verifyLong: observe never fails and enforce fails on a block, except that
-// a block whose only blocking reason is approval_missing exits 0, because
-// verify does not read reviews and an agent cannot obtain one.
-func verifyExitCode(b evidence.Bundle) int {
-	if b.Mode == string(manifest.Observe) || !blocksAgent(b.Verdict) {
-		return ExitOK
-	}
-	return ExitFailed
-}
-
-// blocksAgent reports whether the verdict blocks for something other than a
-// missing approval (ADR-0005 §4, approval_missing). It reads the reasons rather
-// than the result, so an override that softened the result to a warn still
-// leaves the blocking reasons visible to the agent.
-func blocksAgent(v evidence.Verdict) bool {
-	return v.Result == evidence.ResultBlock && slices.ContainsFunc(v.Reasons, func(r evidence.Reason) bool {
-		return r.Code != gate.CodeApprovalMissing && gate.Effect(r.Code) == evidence.ResultBlock
-	})
-}
-
-// passForAgent relaxes the hook status Save just wrote when the only thing that
-// blocks is a missing approval: the Stop hook reads it to decide whether the
-// agent may finish, and an approval is what the agent cannot get (ADR-0005 §5).
-//
-// It reads the status back instead of writing a fresh one so that the key stays
-// the one Save stored it under, which describes the working tree as it was
-// before anything ran (§7). The bundle keeps the real verdict; only this
-// advisory file changes.
-func passForAgent(root string, v evidence.Verdict) error {
-	if v.Result != evidence.ResultBlock || blocksAgent(v) {
-		return nil
-	}
-	s, err := hook.ReadStatus(root)
-	if err != nil {
-		return fmt.Errorf("read the verify status back: %w", err)
-	}
-	s.Passed = true
-	if err := hook.WriteStatus(root, s); err != nil {
-		return fmt.Errorf("relax the verify status: %w", err)
-	}
-	return nil
 }
