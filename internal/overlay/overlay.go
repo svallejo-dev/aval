@@ -1,12 +1,26 @@
-// Package overlay gathers fail-before evidence (ADR-0005 §2): it checks the
-// base of a change out in a temporary git worktree, lays the change's test
-// files over it and runs there the tests that own each obligation at head,
-// in one go test process per obligation and top-level test, so that a
-// sibling's bug at the base cannot change another obligation's status.
+// Package overlay gathers fail-before evidence (ADR-0005 §2): it writes the
+// base of a change into a temporary directory, lays the change's test files
+// over it and runs there the tests that own each obligation at head, in one
+// go test process per obligation and top-level test, so that a sibling's bug
+// at the base cannot change another obligation's status.
 //
-// Prepare builds the worktree from git objects alone, and must run before
-// any of head's tests: those could rewrite the working tree and .git. Only
-// Run needs what the run at head found, the full names of the owners.
+// Prepare runs after the whole run at head, which is where the owners' names
+// come from, and therefore after the change's own code. So it never asks git
+// to check anything out: git's checkout path applies core.autocrlf, core.eol
+// and the filters that .git/info/attributes picks, none of which
+// --attr-source covers, and a test at head can write all of those. Prepare
+// reads the trees with git ls-tree and the contents with git cat-file
+// instead, which return the objects as they are, and writes the files
+// itself.
+//
+// The directory is a repository of its own, detached at the base commit,
+// which borrows the caller's objects: a test that shells out to git finds
+// the base's history there, and does not fail for want of a repository,
+// which would forge fail-before evidence. Nothing is ever checked out into
+// it.
+//
+// What the tree cannot hold is a submodule's gitlink or a symlink that
+// leaves it; Tree.Skipped lists those.
 //
 // Only *_test.go files and files under testdata/ travel from head. A test
 // that reads data kept anywhere else fails at the base whether or not the
@@ -24,11 +38,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
-	"slices"
 	"time"
 
 	"github.com/svallejo-dev/aval/internal/evidence"
@@ -57,7 +71,7 @@ type Target struct {
 
 // PrepareOptions configures Prepare.
 type PrepareOptions struct {
-	// TempDir holds the worktree. Empty means $RUNNER_TEMP when set, which
+	// TempDir holds the temporary tree. Empty means $RUNNER_TEMP when set, which
 	// GitHub Actions empties after every job, else os.TempDir().
 	TempDir string
 }
@@ -68,17 +82,23 @@ type RunOptions struct {
 	Env     []string      // KEY=VALUE pairs added to go test's environment
 }
 
-// Worktree is the base of a change with head's test files laid over it.
-// It is not safe for concurrent use.
-type Worktree struct {
+// Tree is the base of a change, in a temporary directory, with head's test
+// files laid over it. It is not safe for concurrent use.
+type Tree struct {
 	Base, Head string // the full commit SHAs
 	// Copied lists the files laid over the base from head and Removed the
 	// ones head deleted, repository-relative with "/" separators.
 	Copied, Removed []string
+	// Skipped lists, sorted, what the base tree holds and the directory
+	// cannot: the gitlinks of submodules, and symlinks that point out of the
+	// tree, which a test at the base could follow outside it. A test that
+	// needs one of them fails at the base for a reason of its own, so Run
+	// caps at weak, as it does with Result.Uncopied, the strength of an
+	// obligation whose packages hold one, and says so in its Note.
+	Skipped []string
 
-	common    repo            // the repository's common directory, where Close runs git
-	tmp       string          // the temporary directory that holds the worktree
-	moduleDir string          // where go test runs: the worktree's counterpart of dir
+	tmp       string          // the temporary directory that holds the tree
+	moduleDir string          // where go test runs: the tree's counterpart of dir
 	module    string          // the module path in head's go.mod
 	root      string          // the module's directory in the repository, "" at the top
 	others    []string        // non-Go files head adds or modifies outside testdata/
@@ -127,11 +147,10 @@ var (
 	// is older than 2.40; git's errors wrap git.ErrToolMissing too. Callers
 	// map it to exit code 3.
 	ErrToolMissing = errors.New("overlay: git 2.40 or later and go are required")
-	// ErrCleanup is wrapped when the worktree or its temporary directory
-	// could not be removed.
-	ErrCleanup = errors.New("overlay: worktree not removed")
+	// ErrCleanup is wrapped when the temporary directory could not be removed.
+	ErrCleanup = errors.New("overlay: temporary tree not removed")
 	// ErrClosed is returned by Run after Close.
-	ErrClosed = errors.New("overlay: worktree closed")
+	ErrClosed = errors.New("overlay: tree closed")
 )
 
 // Strength grades a base status as fail-before evidence by ADR-0005 §2's
@@ -153,35 +172,31 @@ func Strength(before, after evidence.Status, characterization bool) evidence.Str
 	return evidence.None
 }
 
-// Prepare checks base out in a temporary worktree of the repository dir is
-// in, deletes the test files and testdata head deleted, and copies over it
-// from head's objects the added and modified *_test.go files and testdata/
-// files. It reads everything else it needs from git now, so the caller may
-// run head's tests afterwards. dir is the root of the Go module; base
-// should be the merge-base of the change.
+// Prepare writes base's tree into a temporary directory, without the test
+// files and testdata head deleted and with head's added and modified
+// *_test.go and testdata/ files over it, and makes that directory a
+// repository detached at base. Both trees and every file come from git's
+// objects, never from a checkout or the working tree, so a change's own .git
+// or working tree cannot alter what the base is. dir is the root of the Go
+// module; base should be the merge-base of the change.
 //
 // Test files and testdata travel from the whole diff, not only from the
 // targets' packages: other packages' test files never build into the runs,
 // and a test may read testdata shared across packages.
 //
-// The caller must Close the Worktree, which works even once dir is gone.
-// When Prepare fails, nothing is left to close. Git steps that write the
-// worktree run to completion even if ctx ends, so git never leaves one
-// half-written.
-func Prepare(ctx context.Context, dir, base, head string, opts PrepareOptions) (*Worktree, error) {
+// The caller must Close the Tree, which works even once dir is gone. When
+// Prepare fails, nothing is left to close.
+func Prepare(ctx context.Context, dir, base, head string, opts PrepareOptions) (*Tree, error) {
 	w, err := prepare(ctx, newRepo(dir), base, head, opts)
 	return w, toolMissing(err)
 }
 
-func prepare(ctx context.Context, r repo, base, head string, opts PrepareOptions) (*Worktree, error) {
+func prepare(ctx context.Context, r repo, base, head string, opts PrepareOptions) (*Tree, error) {
 	if err := r.CheckVersion(ctx); err != nil {
 		return nil, fmt.Errorf("overlay: %w", err)
 	}
-	common, err := r.commonDir(ctx)
-	if err != nil {
-		return nil, err
-	}
-	w := &Worktree{common: common}
+	w := &Tree{}
+	var err error
 	if w.Base, err = r.commit(ctx, base); err != nil {
 		return nil, err
 	}
@@ -194,11 +209,28 @@ func prepare(ctx context.Context, r repo, base, head string, opts PrepareOptions
 	if w.module, err = r.modulePath(ctx, w.Head, w.root); err != nil {
 		return nil, err
 	}
+	objects, err := r.objectStore(ctx)
+	if err != nil {
+		return nil, err
+	}
 	c, err := r.changes(ctx, w.Base, w.Head)
 	if err != nil {
 		return nil, err
 	}
 	w.Copied, w.Removed, w.others = c.copy, c.remove, c.others
+	baseTree, err := r.entries(ctx, w.Base)
+	if err != nil {
+		return nil, err
+	}
+	headTree, err := r.entries(ctx, w.Head)
+	if err != nil {
+		return nil, err
+	}
+	files, err := merge(baseTree, headTree, w.Copied, w.Removed)
+	if err != nil {
+		return nil, err
+	}
+	w.added = newPackages(baseTree, c.newGo)
 
 	tmpRoot, err := tempRoot(opts.TempDir)
 	if err != nil {
@@ -207,13 +239,19 @@ func prepare(ctx context.Context, r repo, base, head string, opts PrepareOptions
 	if w.tmp, err = os.MkdirTemp(tmpRoot, "aval-overlay-"); err != nil {
 		return nil, fmt.Errorf("overlay: %w", err)
 	}
-	wt := newRepo(filepath.Join(w.tmp, "base"))
-	w.moduleDir = filepath.Join(wt.dir, filepath.FromSlash(w.root))
-	if err := r.addWorktree(ctx, wt.dir, w.Base); err != nil {
-		return nil, errors.Join(err, common.cleanup(w.tmp, wt.dir, false))
+	dir, template := filepath.Join(w.tmp, "base"), filepath.Join(w.tmp, "template")
+	w.moduleDir = filepath.Join(dir, filepath.FromSlash(w.root))
+	// The tree's own root is a directory of the checkout it stands for; the
+	// empty template is aval's, and nothing reads it but git init.
+	for d, mode := range map[string]fs.FileMode{dir: dirPerm, template: 0o700} {
+		if err := os.Mkdir(d, mode); err != nil {
+			return nil, errors.Join(fmt.Errorf("overlay: %w", err), w.Close())
+		}
 	}
-	w.added = newPackages(wt.dir, c.newGo)
-	if err := wt.overlay(ctx, w.Head, w.Copied, w.Removed); err != nil {
+	if w.Skipped, err = r.materialize(ctx, dir, files); err != nil {
+		return nil, errors.Join(err, w.Close())
+	}
+	if err := r.initRepo(ctx, dir, template, w.Base, objects); err != nil {
 		return nil, errors.Join(err, w.Close())
 	}
 	return w, nil
@@ -224,8 +262,8 @@ func prepare(ctx context.Context, r repo, base, head string, opts PrepareOptions
 // caller's repository in the environment, and grades what they show.
 // Failing tests and packages that do not build are results, not errors.
 // When ctx ends, go test is stopped and Run returns ctx's error. Each Run
-// sees whatever earlier runs' tests left in the worktree.
-func (w *Worktree) Run(ctx context.Context, targets []Target, opts RunOptions) (Result, error) {
+// sees whatever earlier runs' tests left in the tree.
+func (w *Tree) Run(ctx context.Context, targets []Target, opts RunOptions) (Result, error) {
 	if w.closed {
 		return Result{}, ErrClosed
 	}
@@ -259,36 +297,45 @@ func (w *Worktree) Run(ctx context.Context, targets []Target, opts RunOptions) (
 	return res, nil
 }
 
-// Close removes the worktree and its temporary directory. It is safe to
-// call more than once; after the first, it does nothing.
-func (w *Worktree) Close() error {
+// Close removes the temporary directory that holds the tree. Nothing in the
+// repository has to be undone: Prepare added no git worktree. Close is safe
+// to call more than once; after the first, it does nothing.
+func (w *Tree) Close() error {
 	if w.closed {
 		return nil
 	}
 	w.closed = true
-	return w.common.cleanup(w.tmp, filepath.Join(w.tmp, "base"), true)
+	if err := os.RemoveAll(w.tmp); err != nil {
+		return fmt.Errorf("%w: %s: %w", ErrCleanup, w.tmp, err)
+	}
+	return nil
 }
 
 // newPackages returns the repository-relative directories of files, the
-// non-test Go files head adds, in which the base worktree wt holds no
-// non-test Go file: head adds those packages.
-func newPackages(wt string, files []string) map[string]bool {
-	added, checked := make(map[string]bool), make(map[string]bool)
+// non-test Go files head adds, in which the base tree holds no non-test Go
+// file: head adds those packages.
+func newPackages(base []treeEntry, files []string) map[string]bool {
+	has := make(map[string]bool)
+	for _, e := range base {
+		if goFile(path.Base(e.path)) {
+			has[dirOf(e.path)] = true
+		}
+	}
+	added := make(map[string]bool)
 	for _, f := range files {
-		dir := path.Dir(f)
-		if dir == "." {
-			dir = ""
-		}
-		if checked[dir] {
-			continue
-		}
-		checked[dir] = true
-		entries, _ := os.ReadDir(filepath.Join(wt, filepath.FromSlash(dir))) // an error means no such directory
-		if !slices.ContainsFunc(entries, func(e os.DirEntry) bool { return goFile(e.Name()) }) {
+		if dir := dirOf(f); !has[dir] {
 			added[dir] = true
 		}
 	}
 	return added
+}
+
+// dirOf returns the directory of a repository-relative path, "" at the top.
+func dirOf(name string) string {
+	if dir := path.Dir(name); dir != "." {
+		return dir
+	}
+	return ""
 }
 
 // toolMissing marks errors that come from a missing git or go, or an old git.
@@ -299,7 +346,7 @@ func toolMissing(err error) error {
 	return err
 }
 
-// tempRoot returns the absolute directory the worktree goes in: dir, else
+// tempRoot returns the absolute directory the tree goes in: dir, else
 // $RUNNER_TEMP, else os.TempDir(). Absolute, because git runs elsewhere.
 func tempRoot(dir string) (string, error) {
 	abs, err := filepath.Abs(cmp.Or(dir, os.Getenv("RUNNER_TEMP"), os.TempDir()))

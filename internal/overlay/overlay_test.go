@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,9 +14,17 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/goleak"
+
 	"github.com/svallejo-dev/aval/internal/evidence"
 	"github.com/svallejo-dev/aval/internal/platform/git"
 )
+
+// TestMain checks that no run at the base, and no cancellation of one,
+// leaves a goroutine of aval's behind.
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 // goEnv keeps the developer's workspace, flags, toolchain and proxy out of
 // the runs in the fixture module.
@@ -73,7 +82,8 @@ func fixtureRepo(t *testing.T, initArgs ...string) (r testRepo, base, head strin
 	return r, commit("base"), commit("head")
 }
 
-// assertClean checks that no worktree and nothing in tmp is left behind.
+// assertClean checks that nothing in tmp, and no git worktree, is left
+// behind: Prepare must add none.
 func assertClean(t *testing.T, r testRepo, tmp string) {
 	t.Helper()
 	if n := strings.Count("\n"+r.git("worktree", "list", "--porcelain"), "\nworktree "); n != 1 {
@@ -262,7 +272,7 @@ func TestPrepareRevisions(t *testing.T) {
 	}
 }
 
-// TestRunEnv checks that RUNNER_TEMP holds the worktree and that a git
+// TestRunEnv checks that RUNNER_TEMP holds the tree and that a git
 // hook's repository variables reach neither aval's git nor the tests at the
 // base: with the repository checked out at the base, the overlay would stage
 // head's tests in its index, and ORD-F11's git add its own file.
@@ -329,8 +339,8 @@ func TestPrepareSHA256(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got, err := os.ReadFile(filepath.Join(w.moduleDir, file)); err != nil || !bytes.Equal(got, want) { //nolint:gosec // the worktree
-			t.Errorf("%s in the worktree = %q, %v; want %s's", file, got, err, tree)
+		if got, err := os.ReadFile(filepath.Join(w.moduleDir, file)); err != nil || !bytes.Equal(got, want) { //nolint:gosec // the tree
+			t.Errorf("%s in the tree = %q, %v; want %s's", file, got, err, tree)
 		}
 	}
 	if len(w.Base) != 64 || w.Base != base {
@@ -342,8 +352,8 @@ func TestPrepareSHA256(t *testing.T) {
 	assertClean(t, r, tmp)
 }
 
-// TestCloseWithoutDir checks that Close removes the worktree once the
-// directory Prepare ran in is gone: git runs in the common directory.
+// TestCloseWithoutDir checks that Close removes the tree once the directory
+// Prepare ran in is gone: it only has a temporary directory to remove.
 func TestCloseWithoutDir(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds a git repository")
@@ -381,39 +391,57 @@ func TestPrepareOldGit(t *testing.T) {
 	}
 }
 
+// writeFiles writes files, named with "/" and relative to dir.
+func writeFiles(t *testing.T, dir string, files map[string]string) {
+	t.Helper()
+	for name, content := range files {
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // planted builds a repository whose base holds the module svc with package
-// a, and whose head adds files, and returns it and both commits. change,
-// when not nil, runs on head's working tree before it is committed.
-func planted(t *testing.T, files map[string]string, change func(testRepo)) (r testRepo, base, head string) {
+// a, and whose head adds files, and returns it and both commits. plant and
+// change, when not nil, run on the working tree just before the base and the
+// head commit, and whatever plant leaves is in both trees.
+func planted(t *testing.T, plant func(testRepo), files map[string]string, change func(testRepo)) (r testRepo, base, head string) {
 	t.Helper()
 	r = testRepo{t: t, dir: t.TempDir()}
 	r.git("init", "--quiet")
-	write := func(files map[string]string) {
-		for name, content := range files {
-			p := filepath.Join(r.dir, filepath.FromSlash(name))
-			if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
-				t.Fatal(err)
-			}
-		}
-		r.git("add", "--all")
+	writeFiles(t, r.dir, map[string]string{"svc/go.mod": "module example.com/svc\n", "svc/a/a.go": "package a\n"})
+	if plant != nil {
+		plant(r)
 	}
-	write(map[string]string{"svc/go.mod": "module example.com/svc\n", "svc/a/a.go": "package a\n"})
+	r.git("add", "--all")
 	r.git("commit", "--quiet", "--message", "base")
 	base = r.git("rev-parse", "HEAD")
-	write(files)
+	writeFiles(t, r.dir, files)
 	if change != nil {
 		change(r)
 	}
+	r.git("add", "--all")
 	r.git("commit", "--quiet", "--message", "head")
 	return r, base, r.git("rev-parse", "HEAD")
 }
 
-// prepareClean runs Prepare in r's svc, hands the Worktree to check and
-// then checks that Close leaves nothing behind.
-func prepareClean(t *testing.T, r testRepo, base, head string, check func(*Worktree)) {
+// readFile reads a file of a fixture or of a materialized tree.
+func readFile(t *testing.T, name string) string {
+	t.Helper()
+	data, err := os.ReadFile(name) //nolint:gosec // a path the test built
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+// prepareClean runs Prepare in r's svc, hands the Tree to check and then
+// checks that Close leaves nothing behind.
+func prepareClean(t *testing.T, r testRepo, base, head string, check func(*Tree)) {
 	t.Helper()
 	tmp := t.TempDir()
 	w, err := Prepare(t.Context(), filepath.Join(r.dir, "svc"), base, head, PrepareOptions{TempDir: tmp})
@@ -435,11 +463,11 @@ func TestPrepareIgnoresHeadAttributes(t *testing.T) {
 		t.Skip("builds a git repository")
 	}
 	t.Parallel()
-	r, base, head := planted(t, map[string]string{
+	r, base, head := planted(t, nil, map[string]string{
 		"svc/a/testdata/.gitattributes": "* ident\n",
 		"svc/a/testdata/f.txt":          "$Id$\n",
 	}, nil)
-	prepareClean(t, r, base, head, func(w *Worktree) {
+	prepareClean(t, r, base, head, func(w *Tree) {
 		got, err := os.ReadFile(filepath.Join(w.moduleDir, "a", "testdata", "f.txt"))
 		if err != nil || string(got) != "$Id$\n" {
 			t.Errorf("f.txt in the worktree = %q, %v; want head's $Id$, unexpanded", got, err)
@@ -457,11 +485,11 @@ func TestPrepareLiteralPathspecs(t *testing.T) {
 		t.Skip("builds a git repository")
 	}
 	t.Parallel()
-	r, base, head := planted(t, map[string]string{
+	r, base, head := planted(t, nil, map[string]string{
 		":!x_test.go": "package x\n",
 		"svc/a/a.go":  "package a // head's fix\n",
 	}, nil)
-	prepareClean(t, r, base, head, func(w *Worktree) {
+	prepareClean(t, r, base, head, func(w *Tree) {
 		if want := []string{":!x_test.go"}; !reflect.DeepEqual(w.Copied, want) {
 			t.Fatalf("Copied = %q, want %q", w.Copied, want)
 		}
@@ -479,7 +507,7 @@ func TestPrepareSeesIgnoredSubmodules(t *testing.T) {
 		t.Skip("builds a git repository")
 	}
 	t.Parallel()
-	r, base, head := planted(t, map[string]string{
+	r, base, head := planted(t, nil, map[string]string{
 		".gitmodules": "[submodule \"sub\"]\n\tpath = svc/a/sub\n\turl = ./sub\n\tignore = all\n",
 	}, func(r testRepo) {
 		// git add --all keeps a gitlink whose directory exists, even empty.
@@ -488,9 +516,240 @@ func TestPrepareSeesIgnoredSubmodules(t *testing.T) {
 		}
 		r.git("update-index", "--add", "--cacheinfo", "160000,"+r.git("rev-parse", "HEAD")+",svc/a/sub")
 	})
-	prepareClean(t, r, base, head, func(w *Worktree) {
+	prepareClean(t, r, base, head, func(w *Tree) {
 		if want := []string{"svc/a/sub"}; !reflect.DeepEqual(w.uncopied([]string{"example.com/svc/a"}), want) {
 			t.Errorf("uncopied = %q, want %q: the gitlink stays behind", w.uncopied([]string{"example.com/svc/a"}), want)
+		}
+	})
+}
+
+// TestPrepareIgnoresCheckoutFilters plants in .git everything git's checkout
+// would apply to what it writes, as a test at head can, checks with plain
+// git that the plants really do mangle the base, and then that the tree
+// holds every file byte for byte. --attr-source does not cover
+// .git/info/attributes, so only staying out of the checkout path does.
+func TestPrepareIgnoresCheckoutFilters(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a git repository")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("the smudge filter is a shell command")
+	}
+	t.Parallel()
+	r, base, head := planted(t, nil, map[string]string{"svc/a/a_test.go": "package a\n"}, nil)
+	r.git("config", "core.autocrlf", "true")
+	r.git("config", "filter.poison.smudge", "sed s/package/POISON/")
+	writeFiles(t, filepath.Join(r.dir, ".git"), map[string]string{"info/attributes": "*.go filter=poison text eol=crlf\n"})
+
+	plain := filepath.Join(t.TempDir(), "wt")
+	r.git("worktree", "add", "--quiet", "--detach", plain, base)
+	if got := readFile(t, filepath.Join(plain, "svc", "a", "a.go")); got != "POISON a\r\n" {
+		t.Fatalf("plain git checkout wrote %q, want the filter and eol=crlf to mangle it", got)
+	}
+	r.git("worktree", "remove", "--force", plain)
+
+	prepareClean(t, r, base, head, func(w *Tree) {
+		for _, name := range []string{"a/a.go", "a/a_test.go"} {
+			if got := readFile(t, filepath.Join(w.moduleDir, filepath.FromSlash(name))); got != "package a\n" {
+				t.Errorf("%s in the tree = %q, want the blob %q", name, got, "package a\n")
+			}
+		}
+	})
+}
+
+// TestPrepareMaterializesModes checks what a directory can hold of a tree:
+// the executable bit, a symlink inside the tree, and what it cannot, a
+// symlink out of it and a submodule's gitlink.
+func TestPrepareMaterializesModes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a git repository")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks and the executable bit need a POSIX file system")
+	}
+	t.Parallel()
+	const gitlink = "0123456789abcdef0123456789abcdef01234567" // no submodule is cloned
+	r, base, head := planted(t, func(r testRepo) {
+		writeFiles(t, r.dir, map[string]string{"svc/a/run.sh": "#!/bin/sh\necho hi\n", "svc/a/testdata/in.txt": "in\n"})
+		if err := os.Chmod(filepath.Join(r.dir, "svc", "a", "run.sh"), 0o700); err != nil { //nolint:gosec // git records 100755 for a file the owner may execute
+			t.Fatal(err)
+		}
+		for name, target := range map[string]string{"svc/a/link.txt": "testdata/in.txt", "svc/a/out.txt": "../../../etc/passwd"} {
+			if err := os.Symlink(target, filepath.Join(r.dir, filepath.FromSlash(name))); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.MkdirAll(filepath.Join(r.dir, "svc", "a", "sub"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		r.git("add", "--all")
+		r.git("update-index", "--add", "--cacheinfo", "160000,"+gitlink+",svc/a/sub")
+	}, map[string]string{"svc/a/a_test.go": "package a\n"}, nil)
+
+	prepareClean(t, r, base, head, func(w *Tree) {
+		// A checkout writes 0666 and 0777 less the umask, so what to expect
+		// is the mode of a file or a directory made the same way.
+		for _, tt := range []struct {
+			name string
+			mode fs.FileMode
+			dir  bool
+		}{
+			{name: "a/a.go", mode: 0o644},
+			{name: "a/run.sh", mode: 0o755},
+			{name: "a", mode: 0o755, dir: true},
+		} {
+			ref := filepath.Join(t.TempDir(), "ref")
+			var err error
+			if tt.dir {
+				err = os.Mkdir(ref, tt.mode)
+			} else {
+				err = os.WriteFile(ref, nil, tt.mode) //nolint:gosec // the mode a checkout writes
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, err := os.Lstat(ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.Lstat(filepath.Join(w.moduleDir, filepath.FromSlash(tt.name)))
+			if err != nil || got.Mode().Perm() != want.Mode().Perm() {
+				t.Errorf("%s is %v, %v; want %v, what a checkout writes", tt.name, got.Mode().Perm(), err, want.Mode().Perm())
+			}
+		}
+		link, err := os.Readlink(filepath.Join(w.moduleDir, "a", "link.txt"))
+		if err != nil || link != "testdata/in.txt" {
+			t.Errorf("link.txt points to %q, %v; want testdata/in.txt", link, err)
+		}
+		if got := readFile(t, filepath.Join(w.moduleDir, "a", "link.txt")); got != "in\n" {
+			t.Errorf("reading through link.txt gave %q, want the file it points to", got)
+		}
+		for _, name := range []string{"a/out.txt", "a/sub"} {
+			if _, err := os.Lstat(filepath.Join(w.moduleDir, filepath.FromSlash(name))); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("%s in the tree: %v, want it left out", name, err)
+			}
+		}
+		if want := []string{"svc/a/out.txt", "svc/a/sub"}; !reflect.DeepEqual(w.Skipped, want) {
+			t.Errorf("Skipped = %q, want %q", w.Skipped, want)
+		}
+	})
+}
+
+// TestPrepareStreamsLargeBlob checks the blob that does not fit in the
+// memory one git cat-file --batch may hold, and travels on its own.
+func TestPrepareStreamsLargeBlob(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a git repository")
+	}
+	t.Parallel()
+	want := bytes.Repeat([]byte("aval\n"), blobBudget/5+1)
+	r, base, head := planted(t, func(r testRepo) {
+		if err := os.WriteFile(filepath.Join(r.dir, "svc", "a", "big.bin"), want, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}, map[string]string{"svc/a/a_test.go": "package a\n"}, nil)
+
+	prepareClean(t, r, base, head, func(w *Tree) {
+		got, err := os.ReadFile(filepath.Join(w.moduleDir, "a", "big.bin")) //nolint:gosec // the tree
+		if err != nil || !bytes.Equal(got, want) {
+			t.Errorf("big.bin = %d bytes, %v; want %d bytes, equal", len(got), err, len(want))
+		}
+	})
+}
+
+// TestPrepareTreeIsRepository checks that the materialized tree is a
+// repository of its own, detached at the base: a test that shells out to git
+// finds the base's history, through the caller's objects, and a clean tree
+// but for what head laid over it. Without one, such a test would fail at the
+// base for want of a repository and forge fail-before evidence.
+func TestPrepareTreeIsRepository(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a git repository")
+	}
+	t.Parallel()
+	r, base, head := planted(t, nil, map[string]string{"svc/a/a_test.go": "package a\n"}, nil)
+	prepareClean(t, r, base, head, func(w *Tree) {
+		tree := testRepo{t: t, dir: w.moduleDir} // as a test at the base would
+		if got := tree.git("rev-parse", "HEAD"); got != base {
+			t.Errorf("rev-parse HEAD = %s, want the base %s", got, base)
+		}
+		if got := tree.git("log", "-1", "--format=%H"); got != base {
+			t.Errorf("log -1 = %s, want the base %s", got, base)
+		}
+		if got := tree.git("show", "--name-only", "--format=%H", "HEAD"); !strings.Contains(got, base) ||
+			!strings.Contains(got, "svc/a/a.go") {
+			t.Errorf("show = %q, want the base commit and its files", got)
+		}
+		if got := tree.git("rev-parse", "--show-toplevel"); got == r.dir {
+			t.Errorf("rev-parse --show-toplevel = %s, want the tree, not the caller's repository", got)
+		}
+		// Only head's test file is new: the rest matches the base's tree.
+		if got := tree.git("status", "--porcelain"); got != "?? svc/a/a_test.go" {
+			t.Errorf("status = %q, want only head's test file", got)
+		}
+		alternates := strings.TrimSpace(readFile(t, filepath.Join(w.tmp, "base", ".git", "objects", "info", "alternates")))
+		caller, err := filepath.EvalSymlinks(r.dir) // git reports the path resolved
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := filepath.Join(caller, ".git", "objects"); !filepath.IsAbs(alternates) || alternates != want {
+			t.Errorf("alternates = %q, want the absolute %q", alternates, want)
+		}
+	})
+}
+
+// TestPrepareFromLinkedWorktree runs Prepare from a linked worktree of the
+// caller's repository, as this repository is itself developed. The objects
+// must come from the common directory: a linked worktree's own git directory
+// holds none, so the tree would have no history and every git call in it
+// would fail, which forges fail-before evidence.
+func TestPrepareFromLinkedWorktree(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a git repository")
+	}
+	t.Parallel()
+	r, base, head := planted(t, nil, map[string]string{"svc/a/a_test.go": "package a\n"}, nil)
+	linked := filepath.Join(t.TempDir(), "linked")
+	r.git("worktree", "add", "--quiet", "--detach", linked, head)
+	from := testRepo{t: t, dir: linked}
+
+	tmp := t.TempDir()
+	w, err := Prepare(t.Context(), filepath.Join(linked, "svc"), base, head, PrepareOptions{TempDir: tmp})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := testRepo{t: t, dir: w.moduleDir}
+	if got := tree.git("rev-parse", "HEAD"); got != base {
+		t.Errorf("rev-parse HEAD in the tree = %s, want the base %s", got, base)
+	}
+	alternates := strings.TrimSpace(readFile(t, filepath.Join(w.tmp, "base", ".git", "objects", "info", "alternates")))
+	if want := from.git("rev-parse", "--path-format=absolute", "--git-common-dir"); alternates != filepath.Join(want, "objects") {
+		t.Errorf("alternates = %q, want the common directory's objects, %q", alternates, filepath.Join(want, "objects"))
+	}
+	if err := w.Close(); err != nil {
+		t.Error(err)
+	}
+	r.git("worktree", "remove", "--force", linked)
+	assertClean(t, r, tmp)
+}
+
+// TestPrepareIgnoresTemplateDir checks that git init plants no template of
+// the developer's in the tree: its hooks would run for every git command a
+// test at the base makes. It changes the environment, so it cannot run in
+// parallel.
+func TestPrepareIgnoresTemplateDir(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a git repository")
+	}
+	template := t.TempDir()
+	writeFiles(t, template, map[string]string{"hooks/post-commit": "#!/bin/sh\nexit 1\n"})
+	t.Setenv("GIT_TEMPLATE_DIR", template)
+	r, base, head := planted(t, nil, map[string]string{"svc/a/a_test.go": "package a\n"}, nil)
+
+	prepareClean(t, r, base, head, func(w *Tree) {
+		hook := filepath.Join(w.tmp, "base", ".git", "hooks", "post-commit")
+		if _, err := os.Lstat(hook); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("the tree holds %s: %v, want no hook from the template", hook, err)
 		}
 	})
 }

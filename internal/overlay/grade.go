@@ -10,19 +10,26 @@ import (
 )
 
 // grade turns what the base's runs of t's tests report into t's evidence
-// (ADR-0005 §2). A failure is weak when head adds or modifies files that
-// did not travel in t's package directories, since the failure may come
-// from their absence. A failed build is weak only when it is t's own test
-// build or a package head adds, and none otherwise: a package the base
-// already has, or a missing module.
-func (w *Worktree) grade(t Target, rep gotest.Report) Obligation {
+// (ADR-0005 §2). A failure is only weak when something in t's package
+// directories could have caused it by itself: files head adds or modifies
+// that did not travel, or paths the base tree could not hold. A failed build
+// is weak only when it is t's own test build or a package head adds, and
+// none otherwise: a package the base already has, or a missing module.
+func (w *Tree) grade(t Target, rep gotest.Report) Obligation {
 	o := Obligation{ID: t.ID, Before: rep.Status(t.ID, t.Packages...), After: t.After}
 	o.Strength = Strength(o.Before, o.After, t.Characterization)
 	switch o.Strength {
 	case evidence.Strong:
+		var notes []string
 		if files := w.uncopied(t.Packages); len(files) > 0 {
+			notes = append(notes, "head-only files: "+strings.Join(files, ", "))
+		}
+		if files := w.inPackages(w.Skipped, t.Packages); len(files) > 0 {
+			notes = append(notes, "paths the base tree cannot hold: "+strings.Join(files, ", "))
+		}
+		if len(notes) > 0 {
 			o.Strength = evidence.Weak
-			o.Note = "base failure may come from head-only files: " + strings.Join(files, ", ")
+			o.Note = "base failure may come from " + strings.Join(notes, "; and from ")
 		}
 	case evidence.Weak:
 		for _, p := range rep.Packages {
@@ -53,25 +60,31 @@ func ownBuild(p gotest.Package) bool {
 
 // uncopied returns the files that head adds or modifies under the
 // directories of pkgs and that did not travel.
-func (w *Worktree) uncopied(pkgs []string) []string {
+func (w *Tree) uncopied(pkgs []string) []string {
+	return w.inPackages(w.others, pkgs)
+}
+
+// inPackages returns the files, repository-relative paths, that live under
+// the directory of one of pkgs, a list of import paths.
+func (w *Tree) inPackages(files, pkgs []string) []string {
 	var dirs []string
 	for _, pkg := range pkgs {
 		if dir, ok := w.dir(pkg); ok {
 			dirs = append(dirs, dir)
 		}
 	}
-	var files []string
-	for _, f := range w.others {
+	var found []string
+	for _, f := range files {
 		if slices.ContainsFunc(dirs, func(dir string) bool { return dir == "" || strings.HasPrefix(f, dir+"/") }) {
-			files = append(files, f)
+			found = append(found, f)
 		}
 	}
-	return files
+	return found
 }
 
 // dir returns the repository-relative directory of pkg, an import path, or
 // false when pkg is outside the module.
-func (w *Worktree) dir(pkg string) (string, bool) {
+func (w *Tree) dir(pkg string) (string, bool) {
 	if pkg == w.module {
 		return w.root, true
 	}
