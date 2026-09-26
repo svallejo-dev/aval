@@ -17,13 +17,25 @@ type Selection struct {
 	Pattern string
 }
 
-// Runs groups names, the full names of the tests that own an obligation in a
-// run at head ("TestSuite/TestX/ORD-F01_…"), by their top-level test, and
+// Runs groups names — the full names of the tests that own an obligation in a
+// run at head, as `go test -json` reports them — by their top-level test, and
 // builds each group's -run pattern: one Selector alternative per name,
 // repeats left out. There is one Selection per (top-level test, id), in the
 // order the top-level tests first appear, and each one is a go test process
 // of its own, so that neither a sibling subtest nor an earlier Test can
 // change the obligation's outcome (ADR-0005 §2.3 and §3).
+//
+// Every alternative is a whole path, prefix repeated, and that is not
+// redundancy: go test reads a top-level "|" as an alternation of independent
+// patterns and splits each one on "/" by itself (testing.splitRegexp, which
+// builds an alternationMatch and treats "|" inside "()" or "[]" as literal).
+// So alternatives of different depths are fine —
+// ^TestX$/^ORD-F01([_#]|$)|^TestX$/^Sub$/^ORD-F01([_#]|$) selects both — and
+// factoring the shared prefix out would break them: in ^TestX$/^a$|^b$ the
+// second alternative is one level deep and gets matched against the top-level
+// test's own name, so the test named b is never selected at all, and an
+// obligation nothing selects has no measured status.
+// TestRunsSelectFixtureTests pins both halves of that against a real go test.
 func Runs(id obligation.ID, names []string) []Selection {
 	var runs []Selection
 	byTop := make(map[string][]string, len(names))
@@ -46,8 +58,8 @@ func Runs(id obligation.ID, names []string) []Selection {
 	return runs
 }
 
-// Selector returns the -run pattern that selects the test fullName names,
-// cut at the outermost level that carries id: every level regexp-escaped and
+// Selector returns the -run pattern that selects the test fullName names, cut
+// at the outermost level that carries id: every level regexp-escaped and
 // anchored, and the level that carries id matched with the "_title" and "#NN"
 // suffixes go test adds, so that a duplicate runs too and a longer ID does
 // not: ^TestSuite$/^TestX$/^ORD-F01([_#]|$) selects ORD-F01, ORD-F01_x and
