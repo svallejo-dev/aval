@@ -19,7 +19,8 @@ import (
 var update = flag.Bool("update", false, "rewrite the golden files in testdata")
 
 const (
-	baseSHA  = "1111111111111111111111111111111111111111"
+	trustSHA = "1111111111111111111111111111111111111111"
+	baseSHA  = "4444444444444444444444444444444444444444"
 	headSHA  = "2222222222222222222222222222222222222222"
 	olderSHA = "3333333333333333333333333333333333333333" // an earlier head of the same pull request
 	seamSHA  = "4444444444444444444444444444444444444444"
@@ -37,7 +38,9 @@ func passBundle() evidence.Bundle {
 	return evidence.Bundle{
 		SchemaVersion: evidence.SchemaVersion,
 		Repo:          "svallejo-dev/aval-sandbox",
-		Base:          baseSHA,
+		TrustBase:     trustSHA,
+		ChangeBase:    baseSHA,
+		BaseRef:       "main",
 		Head:          headSHA,
 		AvalVersion:   "v0.1.0",
 		GeneratedAt:   genAt,
@@ -57,7 +60,9 @@ func blockBundle() evidence.Bundle {
 	return evidence.Bundle{
 		SchemaVersion: evidence.SchemaVersion,
 		Repo:          "svallejo-dev/aval-sandbox",
-		Base:          baseSHA,
+		TrustBase:     trustSHA,
+		ChangeBase:    baseSHA,
+		BaseRef:       "main",
 		Head:          headSHA,
 		AvalVersion:   "v0.1.0",
 		GeneratedAt:   genAt,
@@ -153,13 +158,17 @@ func adversarialBundle() evidence.Bundle {
 	return evidence.Bundle{
 		SchemaVersion: evidence.SchemaVersion,
 		Repo:          "svallejo-dev/" + htmlInjection,
-		Base:          baseSHA,
-		Head:          headSHA,
-		AvalVersion:   "v0.1.0 " + ansiInjection,
-		GeneratedAt:   genAt,
-		Mode:          "enforce",
-		Tier:          1,
-		Changes:       []string{"add-" + pipeInjection, mdInjection},
+		TrustBase:     trustSHA,
+		ChangeBase:    baseSHA,
+		// A branch name is a label a pull request chooses, in the heading where
+		// a human reads the verdict.
+		BaseRef:     "release/" + mdInjection,
+		Head:        headSHA,
+		AvalVersion: "v0.1.0 " + ansiInjection,
+		GeneratedAt: genAt,
+		Mode:        "enforce",
+		Tier:        1,
+		Changes:     []string{"add-" + pipeInjection, mdInjection},
 		Obligations: []evidence.Obligation{
 			{ID: "ORD-F01", Kind: "F", Source: "spec.md#ORD-F01 " + mdInjection, Delta: evidence.Added,
 				Tests:  []string{"TestX/ORD-F01_" + pipeInjection, "TestX/ORD-F01_" + backticks, "TestX/" + long},
@@ -252,7 +261,7 @@ func TestTruncationGolden(t *testing.T) {
 		if !strings.Contains(got, "Cut here") {
 			t.Errorf("%s was cut with no marker:\n%s", name, got)
 		}
-		if !strings.Contains(got, `aval gate --base "$base"`) {
+		if !strings.Contains(got, `aval gate --trust-base "$trust"`) {
 			t.Errorf("%s lost the commands that reproduce the run:\n%s", name, got)
 		}
 	}
@@ -309,7 +318,7 @@ func TestSizeCap(t *testing.T) {
 		if len(got) > maxBytes {
 			t.Errorf("%s of %d obligations is %d bytes, want at most %d", name, n, len(got), maxBytes)
 		}
-		if !strings.Contains(got, `aval gate --base "$base"`) {
+		if !strings.Contains(got, `aval gate --trust-base "$trust"`) {
 			t.Errorf("%s lost the commands that reproduce the run", name)
 		}
 	}

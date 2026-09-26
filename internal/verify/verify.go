@@ -3,6 +3,24 @@
 // assembles the evidence bundle and leaves it where the workflow and the
 // agent hooks look for it. It decides nothing itself (ADR-0005).
 //
+// # Two bases
+//
+// A range has two bases, and conflating them is a hole (ADR-0005 §1).
+//
+// Options.Base is the merge base of the head with the branch the pull request
+// targets, and everything about what the pull request did is measured from it:
+// the diff, the scope, the fail-before overlay, the lint ratchet, the specs
+// whose findings already existed and the declarations tamper compares.
+// Measuring any of that against a branch tip would attribute other people's
+// commits to this pull request.
+//
+// Options.TrustBase is the tip of the repository's default branch, and
+// everything that is policy or trust is read from there: the root aval.yaml,
+// the baseline, the lint configuration and the tier a change already carried.
+// None of that may come from the merge base, which whoever cut the branch
+// chose: cut from before aval was adopted and the policy is simply not there,
+// so the gate would observe and pass everything.
+//
 // # Phases
 //
 // The order of the phases is policy, not an implementation detail
@@ -13,13 +31,12 @@
 //  0. The working tree key the agent hooks compare against
 //     (hook.CurrentKey), taken before verify writes a file of its own, so
 //     that an edit made during the run leaves the status stale (§7).
-//  1. Git only, in parallel. First wave: the base and head commits, the
-//     base tree extracted from git objects to a temporary directory (base
-//     policy, baseline, specs, declarations and .golangci.yml all come from
-//     there), the range diff, head's specs and declarations and the module
-//     path. Second wave, which needs the first: the scope of every commit
-//     (it needs the base policy's globs), the base specs and declarations,
-//     the fail-before worktree (overlay.Prepare) and openspec validation.
+//  1. Git only, in parallel. First wave: the commits, both base trees
+//     extracted from git objects to temporary directories and, from the trust
+//     tree, the policy, the baseline and .golangci.yml; the range diff, head's
+//     specs and declarations and the module path. Second wave, which needs the
+//     first: the scope of every commit (it needs the policy's globs), each
+//     base's specs and declarations, and openspec validation.
 //  2. Head's own code. The full go test run first, because the fail-before
 //     and the isolated regressions select tests by the names it reports
 //     (§2.3), then those runs and the lint ratchet. Nothing here may feed
@@ -74,7 +91,7 @@ var (
 	// The CLI maps it to exit code 3 (ADR-0005 §6).
 	ErrTool = errors.New("verify: a required tool is missing or has the wrong version")
 	// ErrUsage is wrapped by a commit range aval cannot use and by an invalid
-	// base policy or baseline. The CLI maps it to exit code 2.
+	// policy or baseline. The CLI maps it to exit code 2.
 	ErrUsage = errors.New("verify: invalid input")
 )
 
@@ -83,7 +100,7 @@ var (
 const EvidenceDir = ".aval/evidence"
 
 // lintConfig is the golangci-lint configuration the ratchet reads from the
-// base commit, and whose edit is tamper (ADR-0005 §4).
+// trust base, and whose edit is tamper (ADR-0005 §4).
 const lintConfig = ".golangci.yml"
 
 // notCollected is the evidence ADR-0005 describes and v0 does not gather, so
@@ -91,8 +108,8 @@ const lintConfig = ".golangci.yml"
 var notCollected = []string{"mutation", "rollback", "slo"}
 
 // notValidated joins notCollected when the pull request touches openspec/ and
-// the base has no policy to take the pinned OpenSpec version from, so that a
-// skipped openspec validate never reads as a passing one.
+// the trust base has no policy to take the pinned OpenSpec version from, so that
+// a skipped openspec validate never reads as a passing one.
 const notValidated = "openspec_validate"
 
 // Options configures Collect.
@@ -104,8 +121,32 @@ type Options struct {
 	// covers.
 	Dir string
 	// Base is the merge base of the pull request with the target branch and
-	// Head its head commit (ADR-0005 §1).
+	// Head its head commit (ADR-0005 §1). Everything that describes what the
+	// pull request did is measured from Base: the diff, the scope, the
+	// declarations tamper compares, the specs whose findings are subtracted as
+	// pre-existing, the fail-before overlay and the lint ratchet.
 	Base, Head string
+	// TrustBase is the tip of the repository's DEFAULT branch, and everything
+	// that is policy or trust is read from there: the root aval.yaml,
+	// .aval/baseline.json, .golangci.yml and the tier each change already
+	// carried. "" means Base.
+	//
+	// The default branch, and not the branch the pull request targets. A pull
+	// request may target any branch, and a stacked one targets a branch its own
+	// author pushes to: taking the policy from there would let the author write
+	// the policy, the CODEOWNERS and the baseline themselves, in a commit that
+	// is not in this pull request's diff, so nothing would read as tamper.
+	// Merging into a branch that is not the default one cannot reach the default
+	// branch without another pull request, which this same gate judges.
+	//
+	// Base stays right for everything about the pull request itself, because
+	// measuring against the tip of any branch would attribute other people's
+	// commits to it (ADR-0005 §1).
+	TrustBase string
+	// BaseRef names where Base came from — the branch the pull request targets,
+	// or the revision a --change-base resolved from. It goes in the bundle as a
+	// label for whoever reads it; nothing is decided on it.
+	BaseRef string
 	// Approvals are the pull request's reviews, already judged (ADR-0005 §5).
 	// Collect makes no network call: the gate command reads them.
 	Approvals []evidence.Approval
@@ -123,7 +164,7 @@ type Options struct {
 	// Env are KEY=VALUE pairs added to the environment of go test, of the
 	// tests and of golangci-lint.
 	Env []string
-	// TempDir holds the base tree and the fail-before worktree. "" means
+	// TempDir holds the base trees and the fail-before worktree. "" means
 	// $RUNNER_TEMP when it is set, which GitHub Actions empties after every
 	// job, else the operating system's temporary directory.
 	TempDir string
@@ -138,13 +179,16 @@ type Options struct {
 type Evidence struct {
 	// Input is everything the gate knows about the pull request.
 	Input gate.Input
-	// Base and Head are the full SHAs of the range's commits.
-	Base, Head string
+	// Base and Head are the full SHAs of the range's commits, and TrustBase
+	// that of the tip of the repository's default branch (Options).
+	Base, Head, TrustBase string
+	// BaseRef names where Base came from (Options).
+	BaseRef string
 	// Changes are the IDs of the OpenSpec changes the range touches.
 	Changes []string
 	// Checks are the verifier runs, in the order they ran.
 	Checks []evidence.Check
-	// PolicySource says where the base policy came from, or why there is none.
+	// PolicySource says where the policy came from, or why there is none.
 	PolicySource string
 	// Root is the repository root Collect worked from.
 	Root string
@@ -191,7 +235,9 @@ func (e *Evidence) Bundle(verdict evidence.Verdict) evidence.Bundle {
 	return evidence.Bundle{
 		SchemaVersion: evidence.SchemaVersion,
 		Repo:          e.repo,
-		Base:          e.Base,
+		TrustBase:     e.TrustBase,
+		ChangeBase:    e.Base,
+		BaseRef:       e.BaseRef,
 		Head:          e.Head,
 		AvalVersion:   cmp.Or(e.avalVersion, "devel"),
 		GeneratedAt:   e.generatedAt,
@@ -208,11 +254,41 @@ func (e *Evidence) Bundle(verdict evidence.Verdict) evidence.Bundle {
 	}
 }
 
+// SaveOption configures what Save writes beside the bundle.
+type SaveOption func(*saveConfig)
+
+type saveConfig struct{ exempt []string }
+
+// WithAgentExempt names the blocking reason codes the status Save writes may
+// pass in spite of. When every reason that blocks is one of them, the status says
+// passed and lists the ones it used, so that a hook can refuse an exemption this
+// build does not grant (hook.Status.Valid).
+//
+// The verdict and the status answer different questions. The verdict says whether
+// the pull request may merge; the status says whether the agent has work left,
+// and a tier-3 change blocks on an approval no agent can obtain (ADR-0005 §5,
+// §7). A Stop hook reading the verdict alone would hold the agent for ever.
+//
+// Exactly one code belongs here, hook.ExemptApprovalMissing. Everything else,
+// tamper included, is work.
+func WithAgentExempt(codes ...string) SaveOption {
+	return func(c *saveConfig) { c.exempt = codes }
+}
+
 // Save writes b to <root>/.aval/evidence/<head>.json and the status the agent
 // hooks read, keyed by the working tree as it was when Collect started
 // (ADR-0005 §7). It refuses a bundle that does not validate: a bundle nobody
 // can read is worse than none.
-func (e *Evidence) Save(b evidence.Bundle) error {
+//
+// The status says passed when the verdict is not a block, or when every reason
+// that blocks is one WithAgentExempt named. It is written once, whatever the
+// options: a second write would race another process reading it, and a status
+// written for one key and rewritten for another is worse than none.
+func (e *Evidence) Save(b evidence.Bundle, opts ...SaveOption) error {
+	var cfg saveConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 	if err := b.Validate(); err != nil {
 		return fmt.Errorf("verify: %w", err)
 	}
@@ -232,11 +308,37 @@ func (e *Evidence) Save(b evidence.Bundle) error {
 	if err := os.WriteFile(name, append(data, '\n'), 0o600); err != nil {
 		return fmt.Errorf("verify: %w", err)
 	}
-	status := hook.Status{Key: e.key, Passed: b.Verdict.Result != evidence.ResultBlock, VerifiedAt: time.Now().UTC()}
+	passed, exempt := agentStatus(b.Verdict, cfg.exempt)
+	status := hook.Status{Key: e.key, Passed: passed, Exempt: exempt, VerifiedAt: time.Now().UTC()}
 	if err := hook.WriteStatus(e.Root, status); err != nil {
 		return fmt.Errorf("verify: %w", err)
 	}
 	return nil
+}
+
+// agentStatus says whether the status Save writes reports a pass, and which
+// exemptions it used to. A verdict that does not block needs none; one that does
+// passes only when every blocking reason is in exempt, and then the status names
+// the ones that applied, so nothing claims an exemption it did not use.
+func agentStatus(v evidence.Verdict, exempt []string) (bool, []string) {
+	if v.Result != evidence.ResultBlock {
+		return true, nil
+	}
+	var used []string
+	for _, r := range v.Reasons {
+		if gate.Effect(r.Code) != evidence.ResultBlock {
+			continue
+		}
+		if !slices.Contains(exempt, r.Code) {
+			return false, nil
+		}
+		if !slices.Contains(used, r.Code) {
+			used = append(used, r.Code)
+		}
+	}
+	// A block with no blocking reason is not a verdict aval writes; it is not a
+	// pass either.
+	return len(used) > 0, used
 }
 
 // collector holds one collection's state: what each phase read, for the next
@@ -246,14 +348,27 @@ type collector struct {
 	g  *git.Runner // hardened git, in the repository root
 	ev *Evidence
 
-	tmp     string // temporary root of the base tree and the worktree
-	baseDir string // the base tree, extracted from git objects
+	tmp     string // temporary root of the base trees and the worktree
+	baseDir string // the merge base's tree, extracted from git objects
+	// trustDir is the tree of the target branch's tip, and is baseDir itself
+	// when the two bases are the same commit, which is what a branch cut from
+	// the current tip gives.
+	trustDir string
 
-	baseline  baseline.Baseline
-	baseSpecs *openspec.Repo // nil when the base has no openspec/
-	baseDecls []testsource.Declaration
-	// baseLint is the content of the base .golangci.yml, nil when it has
-	// none, and lintFile the copy the ratchet writes inside the repository.
+	baseline baseline.Baseline
+	// baseSpecs is the OpenSpec tree of the merge base, nil when it has none,
+	// and trustSpecs that of the target branch's tip: the first says which
+	// findings already existed, the second which tier a change already carried.
+	baseSpecs  *openspec.Repo
+	trustSpecs *openspec.Repo
+	// baseDecls and trustDecls are the declarations of each base. tamper
+	// compares head against both: a test that the default branch has and the
+	// merge base does not could otherwise come back weakened and read as an
+	// addition (ADR-0005 §4).
+	baseDecls  []testsource.Declaration
+	trustDecls []testsource.Declaration
+	// baseLint is the content of the trust base's .golangci.yml, nil when it
+	// has none, and lintFile the copy the ratchet writes inside the repository.
 	baseLint []byte
 	lintFile string
 
@@ -287,7 +402,8 @@ func newCollector(ctx context.Context, o Options) (*collector, error) {
 		o: o, g: git.New(root),
 		ev: &Evidence{
 			Root: root, Changes: []string{}, Checks: []evidence.Check{},
-			PolicySource: "the base commit has no root aval.yaml",
+			BaseRef:      o.BaseRef,
+			PolicySource: "the tip of the default branch has no root aval.yaml",
 			notCollected: slices.Clone(notCollected),
 			repo:         o.Repo, avalVersion: o.AvalVersion,
 			generatedAt: time.Now().UTC(), key: key,
@@ -300,10 +416,19 @@ func newCollector(ctx context.Context, o Options) (*collector, error) {
 	if c.ev.Head, err = c.commit(ctx, o.Head); err != nil {
 		return nil, err
 	}
+	if c.ev.TrustBase, err = c.commit(ctx, cmp.Or(o.TrustBase, o.Base)); err != nil {
+		return nil, err
+	}
 	if c.tmp, err = os.MkdirTemp(tempRoot(o.TempDir), "aval-verify-"); err != nil {
 		return nil, fmt.Errorf("verify: %w", err)
 	}
 	c.baseDir = filepath.Join(c.tmp, "base-tree")
+	// One tree when the two bases are the same commit, which is what a branch
+	// cut from the current tip of the default branch gives.
+	c.trustDir = c.baseDir
+	if c.ev.TrustBase != c.ev.Base {
+		c.trustDir = filepath.Join(c.tmp, "trust-tree")
+	}
 	return c, nil
 }
 
@@ -348,7 +473,7 @@ func (c *collector) close() error {
 // before any of head's code executes.
 func (c *collector) readGit(ctx context.Context) error {
 	first, ctx1 := c.group(ctx)
-	first.Go(func() error { return c.readBaseTree(ctx1) })
+	first.Go(func() error { return c.readBaseTrees(ctx1) })
 	first.Go(func() error {
 		var err error
 		c.headSpecs, err = loadSpecs(ctx1, os.DirFS(c.ev.Root))
@@ -392,9 +517,24 @@ func (c *collector) readGit(ctx context.Context) error {
 		c.baseDecls, err = scanTests(c.baseDir)
 		return err
 	})
+	if c.trustDir != c.baseDir {
+		second.Go(func() error {
+			var err error
+			c.trustSpecs, err = loadSpecs(ctx2, os.DirFS(c.trustDir))
+			return err
+		})
+		second.Go(func() error {
+			var err error
+			c.trustDecls, err = scanTests(c.trustDir)
+			return err
+		})
+	}
 	second.Go(func() error { return c.validateSpecs(ctx2) })
 	if err := wait(second); err != nil {
 		return err
+	}
+	if c.trustDir == c.baseDir { // one tree, so one read of it
+		c.trustSpecs, c.trustDecls = c.baseSpecs, c.baseDecls
 	}
 
 	// Last, because it needs both trees: which changes the range touches, what
@@ -423,39 +563,55 @@ func wait(g *errgroup.Group) error {
 	return g.Wait() //nolint:wrapcheck // the goroutines wrap their own errors
 }
 
-// readBaseTree extracts the base commit into a temporary directory and reads
-// from it every input the gate takes from the base: the policy, the baseline,
-// the lint configuration, and later the specs and declarations. Reading them
-// from git objects, and now, is what keeps head from changing them.
-func (c *collector) readBaseTree(ctx context.Context) error {
+// readBaseTrees extracts both bases into temporary directories and reads from
+// the trust tree every input that is policy or trust: the policy itself, the
+// baseline and the lint configuration. Reading them from git objects, and now,
+// is what keeps head from changing them; reading them from the default branch
+// is what keeps whoever cut the branch from choosing them.
+//
+// The two extractions are sequential and the second is usually skipped: it only
+// happens when the bases are different commits, and reading a tree is cheap next
+// to the test runs of phase 2.
+func (c *collector) readBaseTrees(ctx context.Context) error {
 	if err := extractTree(ctx, c.g, c.ev.Base, c.baseDir); err != nil {
 		return err
 	}
+	if c.trustDir != c.baseDir {
+		if err := extractTree(ctx, c.g, c.ev.TrustBase, c.trustDir); err != nil {
+			return err
+		}
+	}
+	return c.readTrustFiles()
+}
+
+// readTrustFiles reads the policy, the baseline and the lint configuration from
+// the extracted trust tree.
+func (c *collector) readTrustFiles() error {
 	if c.ev.Input.Policy == nil {
-		data, ok, err := c.baseFile("aval.yaml")
+		data, ok, err := c.treeFile(c.trustDir, "aval.yaml")
 		if err != nil {
 			return err
 		}
 		if ok {
 			m, err := manifest.ParseRepo(bytes.NewReader(data))
 			if err != nil {
-				return fmt.Errorf("%w: aval.yaml at %s: %w", ErrUsage, c.ev.Base, err)
+				return fmt.Errorf("%w: aval.yaml at %s: %w", ErrUsage, c.ev.TrustBase, err)
 			}
-			c.ev.Input.Policy, c.ev.PolicySource = &m, "aval.yaml at "+c.ev.Base
+			c.ev.Input.Policy, c.ev.PolicySource = &m, "aval.yaml at "+c.ev.TrustBase
 		}
 	}
-	data, ok, err := c.baseFile(baseline.Path)
+	data, ok, err := c.treeFile(c.trustDir, baseline.Path)
 	if err != nil {
 		return err
 	}
 	if ok {
 		if c.baseline, err = baseline.Parse(bytes.NewReader(data)); err != nil {
-			return fmt.Errorf("%w: at %s: %w", ErrUsage, c.ev.Base, err)
+			return fmt.Errorf("%w: at %s: %w", ErrUsage, c.ev.TrustBase, err)
 		}
 	}
 	// The bytes, not the path: the temporary tree is still on disk when
 	// head's tests run, and one of them could rewrite the file there.
-	if data, ok, err := c.baseFile(lintConfig); err != nil {
+	if data, ok, err := c.treeFile(c.trustDir, lintConfig); err != nil {
 		return err
 	} else if ok {
 		c.baseLint = data
@@ -463,8 +619,9 @@ func (c *collector) readBaseTree(ctx context.Context) error {
 	return nil
 }
 
-// classify classifies every commit of the range with the base policy's globs.
-// Without a policy no path belongs to a family (ADR-0005 §4, no_base_policy).
+// classify classifies every commit of the range with the policy's globs, from
+// the merge base to the head: the range is what the pull request did. Without a
+// policy no path belongs to a family (ADR-0005 §4, no_base_policy).
 func (c *collector) classify(ctx context.Context) ([]evidence.Commit, error) {
 	var paths manifest.Paths
 	if p := c.ev.Input.Policy; p != nil {
@@ -529,7 +686,7 @@ func (c *collector) tamper() []evidence.Finding {
 	for id := range c.deltas {
 		changed[id] = true
 	}
-	out := testsource.Compare(c.baseDecls, c.headDecls, changed)
+	out := c.declarationTamper(changed)
 	for _, f := range c.changed {
 		kind := evidence.PolicyEdited
 		switch {
@@ -543,6 +700,66 @@ func (c *collector) tamper() []evidence.Finding {
 			continue
 		}
 		out = append(out, evidence.Finding{Kind: kind, Detail: "the pull request edits " + f})
+	}
+	return out
+}
+
+// Which base a declaration finding came from, appended to its detail. The
+// summary shows it, so that a reviewer can tell "somebody else moved this test"
+// from "this pull request weakened it" without a reason code of its own
+// (ADR-0005 §1).
+const (
+	fromBothBases  = " (the declaration differs from both bases)"
+	fromChangeBase = " (the declaration differs from the change base)"
+	// The union is biased towards the false positive on purpose: it costs a
+	// rebase, where the false negative lets a weakened test through.
+	fromTrustBase = " (the declaration differs from the trust base and not from the change base: " +
+		"if another pull request changed this test, rebase rather than ask for an exception)"
+)
+
+// declarationTamper compares head's declarations against both bases and returns
+// the union, each finding saying which base it differs from (ADR-0005 §1).
+//
+// The change base alone is not enough: a declaration the default branch carries
+// and the merge base does not would read as an addition, which Compare does not
+// look at, so a test could come back gutted and pass for new work. The trust base
+// alone is not enough either, because it holds other people's commits.
+func (c *collector) declarationTamper(changed map[obligation.ID]bool) []evidence.Finding {
+	atChange := testsource.Compare(c.baseDecls, c.headDecls, changed)
+	if c.trustDir == c.baseDir {
+		// One tree: the two bases are the same commit, so there is no second
+		// comparison to attribute anything to.
+		return note(atChange, "")
+	}
+	atTrust := testsource.Compare(c.trustDecls, c.headDecls, changed)
+	out := make([]evidence.Finding, 0, len(atChange)+len(atTrust))
+	for _, f := range atChange {
+		where := fromChangeBase
+		if slices.Contains(atTrust, f) {
+			where = fromBothBases
+		}
+		out = append(out, note([]evidence.Finding{f}, where)...)
+	}
+	for _, f := range atTrust {
+		if !slices.Contains(atChange, f) {
+			out = append(out, note([]evidence.Finding{f}, fromTrustBase)...)
+		}
+	}
+	// Ordered, so that two bases never make the bundle depend on which
+	// comparison ran first.
+	slices.SortStableFunc(out, func(x, y evidence.Finding) int {
+		return cmp.Or(strings.Compare(string(x.Kind), string(y.Kind)),
+			strings.Compare(x.ID, y.ID), strings.Compare(x.Detail, y.Detail))
+	})
+	return out
+}
+
+// note appends where to each finding's detail.
+func note(fs []evidence.Finding, where string) []evidence.Finding {
+	out := make([]evidence.Finding, 0, len(fs))
+	for _, f := range fs {
+		f.Detail += where
+		out = append(out, f)
 	}
 	return out
 }
@@ -605,15 +822,15 @@ func (c *collector) headModule() (string, error) {
 	return "", nil
 }
 
-// baseFile reads name from the extracted base tree. A missing file is not an
+// treeFile reads name from one of the extracted trees. A missing file is not an
 // error: a base may have no policy, no baseline and no lint configuration.
-func (c *collector) baseFile(name string) ([]byte, bool, error) {
-	data, err := os.ReadFile(filepath.Join(c.baseDir, filepath.FromSlash(name))) //nolint:gosec // a fixed name in aval's own temporary directory
+func (c *collector) treeFile(dir, name string) ([]byte, bool, error) {
+	data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(name))) //nolint:gosec // a fixed name in aval's own temporary directory
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, false, nil
 	}
 	if err != nil {
-		return nil, false, fmt.Errorf("verify: read %s at %s: %w", name, c.ev.Base, err)
+		return nil, false, fmt.Errorf("verify: read %s from the tree in %s: %w", name, dir, err)
 	}
 	return data, true, nil
 }

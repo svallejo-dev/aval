@@ -1,0 +1,103 @@
+# A tier-1 OpenSpec change that adds an obligation with no test bound to it
+# blocks with unverified (ADR-0005 §4): the change raises the tier to its own,
+# and at tier 1 an added F/N/I obligation has to have a test.
+#
+# The default branch carries no aval.yaml on purpose. A pull request that touches
+# openspec/ makes aval run `openspec validate` with the version the policy pins,
+# and that means installing the OpenSpec CLI from npm, which this script cannot
+# do offline. Without a policy the validation is declared in notCollected
+# instead, and the gate observes, so the verdict still blocks and the exit code
+# is 0 (ADR-0005 §6). The enforce side is verify_status.txtar's.
+
+[!exec:git] skip 'needs git'
+[!exec:go] skip 'needs the go command'
+
+env GIT_CONFIG_NOSYSTEM=1
+env GIT_AUTHOR_NAME=aval
+env GIT_AUTHOR_EMAIL=aval@example.com
+env GIT_COMMITTER_NAME=aval
+env GIT_COMMITTER_EMAIL=aval@example.com
+
+cd repo
+exec git init -q -b main
+exec git add -A
+exec git commit -q -m 'chore: first spec'
+
+exec git checkout -q -b work
+mkdir openspec/changes/add-caps/specs/refunds
+cp $WORK/change-aval.yaml openspec/changes/add-caps/aval.yaml
+cp $WORK/change-spec.md openspec/changes/add-caps/specs/refunds/spec.md
+exec git add -A
+exec git commit -q -m 'feat: propose a cap on refunds'
+
+exec aval verify --plain
+stdout '^✗ aval: block · tier 1 · observe$'
+stdout '^changes add-caps$'
+stdout '^- unverified — an added or modified obligation with no test bound to it$'
+stdout '^  - ORD-N01: added obligation has no bound test$'
+stdout '^- no_base_policy'
+# The obligation the base already had keeps its passing test.
+stdout '^  bound tests: TestRefund/ORD-F01_refunds_once$'
+# Neither the skipped validation nor the reviews nobody read pass for evidence.
+stdout 'openspec_validate, approvals'
+! stderr .
+
+# observe never fails (ADR-0005 §6), so the command exits 0 — and the hook status
+# still says not passed. The two answer different questions: the mode decides
+# whether CI blocks the merge, and the status whether the agent has work left,
+# and a missing test is work left whatever the mode says.
+grep '"passed": false' .aval/cache/verify-status.json
+! grep '"exempt"' .aval/cache/verify-status.json
+
+exec aval verify --json
+stdout '"ok": true'
+stdout '"result": "block"'
+stdout '"code": "unverified"'
+stdout '"id": "ORD-N01"'
+stdout '"delta": "added"'
+stdout '"tier": 1'
+
+-- change-aval.yaml --
+version: 1
+tier: 1
+-- change-spec.md --
+## ADDED Requirements
+
+### Requirement: ORD-N01 Refund never exceeds the total
+The system SHALL NOT refund more than the order total.
+
+#### Scenario: Too much
+- **WHEN** the amount exceeds the total
+- **THEN** the refund is rejected
+-- repo/go.mod --
+module example.com/shop
+
+go 1.22
+-- repo/openspec/specs/refunds/spec.md --
+# refunds Specification
+
+## Requirements
+
+### Requirement: ORD-F01 Refund is idempotent
+The system SHALL process a refund at most once per key.
+
+#### Scenario: Duplicate key
+- **WHEN** a refund arrives with a processed key
+- **THEN** the first result is returned
+-- repo/refund/refund.go --
+package refund
+
+// Once reports whether a refund for a key that was seen may go through.
+func Once(seen bool) bool { return !seen }
+-- repo/refund/refund_test.go --
+package refund
+
+import "testing"
+
+func TestRefund(t *testing.T) {
+	t.Run("ORD-F01 refunds once", func(t *testing.T) {
+		if !Once(false) {
+			t.Fatal("the first refund must go through")
+		}
+	})
+}

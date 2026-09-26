@@ -1,0 +1,142 @@
+# aval gate outside GitHub Actions judges the range its flags name, with no
+# approvals and no step summary, and exits with the code ADR-0005 §6 fixes. It
+# recomputes the evidence every time, so a bundle already on disk is never the
+# verdict (§7).
+#
+# Inside Actions the range is the event's and the flags that name it are refused,
+# for the whole of GITHUB_ACTIONS and not only for a pull request event: a
+# workflow the pull request itself wrote could otherwise run on push and pick its
+# own trust base. It also refuses an event ADR-0005 §8 does not allow and a
+# checkout that is not the commit the event is about — all exit 2.
+
+[!exec:git] skip 'needs git'
+[!exec:go] skip 'needs the go command'
+
+env GIT_CONFIG_NOSYSTEM=1
+env GIT_AUTHOR_NAME=aval
+env GIT_AUTHOR_EMAIL=aval@example.com
+env GIT_COMMITTER_NAME=aval
+env GIT_COMMITTER_EMAIL=aval@example.com
+
+cd repo
+exec git init -q -b main
+exec git add -A
+exec git commit -q -m 'chore: adopt aval'
+exec git checkout -q -b work
+cp $WORK/notes.md docs/notes.md
+exec git add -A
+exec git commit -q -m 'docs: write down the refund rules'
+
+exec aval gate --plain
+stdout '^✓ aval: pass · tier 0 · enforce$'
+stdout '^Reasons$'
+# Outside Actions there is no pull request whose reviews to read, so the absence
+# is in the bundle and nothing is warned about: it is not a degradation.
+stdout 'mutation, rollback, slo, approvals'
+stdout '^None: no review of this pull request was considered\.$'
+! stderr .
+exists .aval/evidence/.gitignore
+
+# Explicit revisions work as well as SHAs.
+exec aval gate --plain --trust-base main --head work
+stdout '^✓ aval: pass · tier 0 · enforce$'
+
+exec aval gate --json
+stdout '"command": "gate"'
+stdout '"ok": true'
+stdout '"result": "pass"'
+
+# An unknown revision is an invalid invocation, never a pass.
+! exec aval gate --json --trust-base nope
+stdout '"code": "usage"'
+stdout '--trust-base \\"nope\\" names no commit'
+! exec aval gate --json --change-base nope
+stdout '--change-base \\"nope\\" names no commit'
+
+# In Actions the workflow may not name the range, whatever the event is.
+env GITHUB_ACTIONS=true
+env GITHUB_EVENT_NAME=push
+! exec aval gate --json --trust-base main
+stdout '"code": "usage"'
+stdout 'not allowed when GITHUB_ACTIONS is set'
+! exec aval gate --json --change-base main
+stdout 'not allowed when GITHUB_ACTIONS is set'
+
+# And only the events of ADR-0005 §8 carry a pull request to judge.
+! exec aval gate --json
+stdout '"code": "usage"'
+stdout 'not on \\"push\\"'
+! stderr .
+
+# A pull_request event whose head is not what the job checked out: the workflow
+# is checking out the merge commit actions/checkout builds by default. The payload
+# names only the base branch and no base.sha, which a script cannot know, so this
+# also exercises the fallback from the commit to the branch name.
+env GITHUB_EVENT_NAME=pull_request
+env GITHUB_EVENT_PATH=$WORK/event.json
+! exec aval gate --json
+stdout '"code": "usage"'
+stdout 'github.event.pull_request.head.sha'
+
+-- notes.md --
+# Refunds
+
+A refund is processed at most once per key.
+-- event.json --
+{
+  "action": "synchronize",
+  "number": 7,
+  "repository": {"default_branch": "main"},
+  "pull_request": {
+    "number": 7,
+    "head": {"sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    "base": {"ref": "main"},
+    "user": {"login": "agent"}
+  }
+}
+-- repo/go.mod --
+module example.com/shop
+
+go 1.22
+-- repo/aval.yaml --
+version: 1
+context: ORD
+mode: enforce
+tierDefault: 1
+openspec:
+  version: 1.13.1
+paths:
+  dx:
+    - docs/**
+  feat:
+    - refund/**
+-- repo/docs/README.md --
+# shop
+-- repo/openspec/specs/refunds/spec.md --
+# refunds Specification
+
+## Requirements
+
+### Requirement: ORD-F01 Refund is idempotent
+The system SHALL process a refund at most once per key.
+
+#### Scenario: Duplicate key
+- **WHEN** a refund arrives with a processed key
+- **THEN** the first result is returned
+-- repo/refund/refund.go --
+package refund
+
+// Once reports whether a refund for a key that was seen may go through.
+func Once(seen bool) bool { return !seen }
+-- repo/refund/refund_test.go --
+package refund
+
+import "testing"
+
+func TestRefund(t *testing.T) {
+	t.Run("ORD-F01 refunds once", func(t *testing.T) {
+		if !Once(false) {
+			t.Fatal("the first refund must go through")
+		}
+	})
+}

@@ -1,7 +1,9 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "repo": "svallejo-dev/aval-sandbox",
-  "base": "1111111111111111111111111111111111111111",
+  "trustBase": "1111111111111111111111111111111111111111",
+  "changeBase": "4444444444444444444444444444444444444444",
+  "baseRef": "main",
   "head": "2222222222222222222222222222222222222222",
   "avalVersion": "v0.0.0-test",
   "generatedAt": "2026-09-21T12:00:00Z",
